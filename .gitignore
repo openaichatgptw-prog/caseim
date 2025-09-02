@@ -1,5 +1,6 @@
 # Ignorar entorno virtual
 .venv/
+myenv/
 
 # Ignorar configuración de Git
 .git/
