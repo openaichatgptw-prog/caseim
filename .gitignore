@@ -1,6 +1,8 @@
 # Ignorar entorno virtual
 .venv/
 myenv/
+# Ignorar Datos
+InOutWebScrap/
 
 # Ignorar configuración de Git
 .git/
