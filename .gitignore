@@ -7,3 +7,4 @@ InOutWebScrap/
 SSMS/config.json
 # Ignorar configuración de Git
 .git/
+.gitignore
