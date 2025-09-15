@@ -5,6 +5,5 @@ myenv/
 InOutWebScrap/
 # Ignorar archivo de credenciales
 SSMS/config.json
-
 # Ignorar configuración de Git
 .git/
