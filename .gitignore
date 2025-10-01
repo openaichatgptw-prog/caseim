@@ -1,0 +1,18 @@
+# Ignorar entornos virtuales
+.venv/
+myenv/
+
+# Ignorar Datos
+InOutWebScrap/
+
+# Ignorar archivo de credenciales
+SSMS/config.json
+
+# Ignorar configuración de Git
+.git/
+
+# Ignorar archivos CSV y Excel
+*.csv
+*.xlsx
+*.txt
+*.json
