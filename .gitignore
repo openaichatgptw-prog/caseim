@@ -5,6 +5,7 @@ myenv/
 # Ignorar Datos
 InOutWebScrap/
 SSMS/lib/
+TEMP/
 
 # Ignorar archivo de credenciales
 SSMS/config.json
