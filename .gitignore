@@ -1,6 +1,8 @@
 # Ignorar entornos virtuales
 .venv/
 myenv/
+ssmsvenv/
+
 
 # Ignorar Datos
 InOutWebScrap/
@@ -18,3 +20,4 @@ SSMS/config.json
 *.xlsx
 *.txt
 *.json
+*.duckdb
