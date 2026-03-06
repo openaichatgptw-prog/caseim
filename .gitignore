@@ -21,3 +21,4 @@ SSMS/config.json
 *.txt
 *.json
 *.duckdb
+*.ini
