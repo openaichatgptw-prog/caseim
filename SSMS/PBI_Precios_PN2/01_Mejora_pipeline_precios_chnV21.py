@@ -18,7 +18,7 @@ Flujo:
 Configuración: config.ini (secciones ARCHIVOS, SALIDA, SQLSERVER, FACTORES)
 ─────────────────────────────────────────────────────────────────────────────
 """
-import configparser, pyodbc, pandas as pd, polars as pl, duckdb
+import configparser, pyodbc, pandas as pd, polars as pl, duckdb, os
 from pathlib import Path
 from datetime import datetime
 
@@ -33,7 +33,7 @@ config.read(BASE_DIR / "config.ini", encoding="utf-8")
 FECHA       = datetime.now().strftime("%Y%m%d")
 EXCEL_PREC  = Path(config["ARCHIVOS"]["excel_precios"])
 EXCEL_DISP  = Path(config["ARCHIVOS"]["excel_disponibilidad"])
-DUCKDB_PATH = BASE_DIR / config["SALIDA"]["duckdb"]
+DUCKDB_PATH = Path(os.getenv("PIPELINE_DUCKDB_PATH", str(BASE_DIR / config["SALIDA"]["duckdb"])))
 CSV_OUT     = BASE_DIR / config["SALIDA"]["csv"]
 EXCEL_OUT   = BASE_DIR / config["SALIDA"]["excel_salida"].replace("{fecha}", FECHA)
 SERVER      = config["SQLSERVER"]["server"]
@@ -48,6 +48,12 @@ CHUNK       = 50_000
 _ANIO_ANTERIOR   = datetime.now().year - 1
 FECHA_PART_DESDE = f"{_ANIO_ANTERIOR}-01-01"
 FECHA_PART_HASTA = datetime.now().strftime("%Y-%m-%d")
+
+
+def optimizar_duckdb(con: duckdb.DuckDBPyConnection, tablas: list[str]) -> None:
+    con.execute("PRAGMA threads = 4")
+    for tabla in tablas:
+        con.execute(f"ANALYZE {tabla}")
 
 
 # ===========================================================================
@@ -411,8 +417,14 @@ def paso1_precios_excel():
         .sort("referencia")
     )
     with duckdb.connect(str(DUCKDB_PATH)) as con:
+        con.execute("PRAGMA threads = 4")
         con.register("tmp", df)
         con.execute("CREATE OR REPLACE TABLE precios_consolidados AS SELECT * FROM tmp")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_precios_consolidados_ref_norm "
+            "ON precios_consolidados(ref_norm)"
+        )
+        optimizar_duckdb(con, ["precios_consolidados"])
 
     df.write_csv(CSV_OUT)
     print(f"  {df.height:,} referencias consolidadas -> {CSV_OUT.name}\n")
@@ -434,6 +446,7 @@ def paso2_sqlserver():
     )
 
     with duckdb.connect(str(DUCKDB_PATH)) as con:
+        con.execute("PRAGMA threads = 4")
         try:
             total   = 0
             primera = True
@@ -475,6 +488,19 @@ def paso2_sqlserver():
                        {norm_sql('Referencia_Alterna')} AS Ref_Alt_Norm
                 FROM tmp_refs
             """)
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_maestro_ref_norm "
+                "ON maestro(Ref_Norm)"
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_referencias_alternas_ref_norm "
+                "ON referencias_alternas(Ref_Norm)"
+            )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_referencias_alternas_ref_alt_norm "
+                "ON referencias_alternas(Ref_Alt_Norm)"
+            )
+            optimizar_duckdb(con, ["maestro", "referencias_alternas"])
 
             d1 = con.execute("""
                 SELECT COUNT(*)            AS total,
@@ -520,6 +546,7 @@ def paso3_cruzar_y_exportar():
     print("Paso 3 — Cruzando precios, calculando ganador y exportando...")
 
     with duckdb.connect(str(DUCKDB_PATH)) as con:
+        con.execute("PRAGMA threads = 4")
 
         con.execute(f"""
         CREATE OR REPLACE TABLE precio_familia AS
@@ -702,6 +729,15 @@ def paso3_cruzar_y_exportar():
         -- JOIN sobre Ref_Norm precalculada — sin recalcular
         LEFT JOIN precio_familia pf ON m.Ref_Norm = pf.Referencia_Principal
         """)
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_precio_familia_ref_principal "
+            "ON precio_familia(Referencia_Principal)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_resultado_ref_norm "
+            "ON resultado_precios_lista(Referencia_Normalizada)"
+        )
+        optimizar_duckdb(con, ["precio_familia", "resultado_precios_lista"])
 
         df_out = con.execute("SELECT * FROM resultado_precios_lista").df()
 

@@ -3,6 +3,7 @@
 # ===========================================================================
 
 import configparser
+import os
 from pathlib import Path
 from datetime import datetime
 import pyodbc
@@ -15,7 +16,19 @@ import duckdb
 # ===========================================================================
 BASE_DIR = Path(__file__).parent
 config   = configparser.ConfigParser()
-config.read(BASE_DIR / "config.ini", encoding="utf-8")
+
+config_candidates = [BASE_DIR / "Config.ini", BASE_DIR / "config.ini"]
+loaded_files = config.read([str(p) for p in config_candidates], encoding="utf-8")
+if not loaded_files:
+    raise FileNotFoundError(
+        f"No se encontro archivo de configuracion en: {config_candidates}"
+    )
+
+if "SALIDA_ORIGEN" not in config:
+    raise KeyError(
+        "Falta la seccion [SALIDA_ORIGEN] en Config.ini/config.ini. "
+        "Se requieren las claves 'excel' y 'csv'."
+    )
 
 FECHA = datetime.now().strftime("%Y%m%d")
 
@@ -24,7 +37,7 @@ DATABASE = config["SQLSERVER"]["database"]
 DB_USER  = config["SQLSERVER"]["db_user"]
 DB_PASS  = config["SQLSERVER"]["db_pass"].strip('"')
 
-DUCKDB_PATH = BASE_DIR / config["SALIDA"]["duckdb"]
+DUCKDB_PATH = Path(os.getenv("PIPELINE_DUCKDB_PATH", str(BASE_DIR / config["SALIDA"]["duckdb"])))
 EXCEL_OUT   = BASE_DIR / config["SALIDA_ORIGEN"]["excel"].replace("{fecha}", FECHA)
 CSV_OUT     = BASE_DIR / config["SALIDA_ORIGEN"]["csv"].replace("{fecha}", FECHA)
 
@@ -307,23 +320,33 @@ ORDER BY pct.Referencia_Principal;
 # ===========================================================================
 # UTILIDADES
 # ===========================================================================
+def _columna_referencia_texto_fijo(nombre: str) -> bool:
+    c = str(nombre).strip().lower().replace(" ", "_")
+    if c in ("referencia_principal", "referencia_alternas"):
+        return True
+    if "referencia_altern" in c or "referencias_altern" in c:
+        return True
+    return False
+
+
 def convertir_chunk(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Convierte todas las columnas a float64 salvo las que son
-    puramente texto (VARCHAR). Esto evita que DuckDB infiera
-    DECIMAL(6,4) al registrar el DataFrame y falle con valores > 99.
+    float64 en numéricos + object mayormente numérico → evita DECIMAL(6,4) en DuckDB
+    que falla con valores como 243.0000 (fuera de rango).
     """
+    df = df.copy()
     for col in df.columns:
-        if df[col].dtype == object:
-            # intentar convertir a numérico; si falla deja como str
-            converted = pd.to_numeric(df[col], errors="coerce")
-            if converted.notna().sum() > 0 and df[col].notna().sum() > 0:
-                ratio = converted.notna().sum() / df[col].notna().sum()
-                if ratio > 0.9:   # si >90% son numéricos, convertir
-                    df[col] = converted
-        else:
-            # columna ya numérica: forzar float64
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            continue
+        if _columna_referencia_texto_fijo(col):
+            continue
+        if pd.api.types.is_numeric_dtype(df[col]):
             df[col] = df[col].astype("float64", errors="ignore")
+        elif df[col].dtype == object:
+            converted = pd.to_numeric(df[col], errors="coerce")
+            nn = int(df[col].notna().sum())
+            if nn > 0 and converted.notna().sum() / nn > 0.9:
+                df[col] = converted.astype("float64")
     return df
 
 
@@ -331,6 +354,12 @@ def optimizar_tipos(df: pd.DataFrame) -> pd.DataFrame:
     for col in df.select_dtypes(include=["int64"]).columns:
         df[col] = pd.to_numeric(df[col], downcast="integer")
     return df
+
+
+def optimizar_duckdb(con: duckdb.DuckDBPyConnection, tablas: list[str]) -> None:
+    con.execute("PRAGMA threads = 4")
+    for tabla in tablas:
+        con.execute(f"ANALYZE {tabla}")
 
 
 # ===========================================================================
@@ -345,6 +374,7 @@ def cargar_origen_en_duckdb():
     )
 
     with duckdb.connect(str(DUCKDB_PATH)) as con:
+        con.execute("PRAGMA threads = 4")
         try:
             print("Ejecutando query de origen / importaciones con cursor pyodbc...")
 
@@ -398,6 +428,11 @@ def cargar_origen_en_duckdb():
             if primera:
                 print("  El SELECT final no devolvió filas.")
             else:
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_origen_import_ref "
+                    "ON origen_importaciones(Referencia_Principal)"
+                )
+                optimizar_duckdb(con, ["origen_importaciones"])
                 print(f"  Tabla origen_importaciones creada ({total:,} filas)")
 
         finally:
@@ -410,6 +445,7 @@ def cargar_origen_en_duckdb():
 # ===========================================================================
 def calcular_en_duckdb():
     with duckdb.connect(str(DUCKDB_PATH)) as con:
+        con.execute("PRAGMA threads = 4")
         print("\nValidando resultado_precios_lista en DuckDB...")
 
         existe = con.execute("""
@@ -536,6 +572,7 @@ def calcular_en_duckdb():
                     p."Precio Europa" AS "Precio Origen Europa"
                 FROM origen_importaciones_norm o
                 LEFT JOIN resultado_precios_lista p
+                    -- Llave única: Ref_Norm (= columna REF en salida) ya normalizada; RPL trae la misma norm en Referencia_Normalizada
                     ON o.Ref_Norm = p.Referencia_Normalizada
             ),
             precios_ajustados AS (
@@ -854,6 +891,15 @@ def calcular_en_duckdb():
             FROM con_porc_var
             ORDER BY REF;
         """)
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_origen_import_norm_ref "
+            "ON origen_importaciones_norm(Ref_Norm)"
+        )
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_origen_tablero_ref "
+            "ON origen_precios_tablero(REF)"
+        )
+        optimizar_duckdb(con, ["origen_importaciones_norm", "origen_precios_tablero"])
 
         print("  Tabla origen_precios_tablero creada")
 

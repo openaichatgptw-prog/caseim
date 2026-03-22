@@ -22,3 +22,5 @@ SSMS/config.json
 *.json
 *.duckdb
 *.ini
+# Plantilla sin secretos (sí se versiona)
+!SSMS/PBI_Precios_PN2/Config.example.ini

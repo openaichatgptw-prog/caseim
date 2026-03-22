@@ -2,6 +2,7 @@
 # SECCION 0 - LIBRERIAS
 # ===========================================================================
 import configparser
+import os
 import pyodbc
 import pandas as pd
 import duckdb
@@ -28,7 +29,7 @@ DATABASE    = config["SQLSERVER"]["database"]
 DB_USER     = config["SQLSERVER"]["db_user"]
 DB_PASS     = config["SQLSERVER"]["db_pass"].strip('"')
 
-DUCKDB_PATH = BASE_DIR / config["SALIDA"]["duckdb"]
+DUCKDB_PATH = Path(os.getenv("PIPELINE_DUCKDB_PATH", str(BASE_DIR / config["SALIDA"]["duckdb"])))
 EXCEL_OUT   = BASE_DIR / config["SALIDA_VENTAS"]["excel"].replace("{fecha}", FECHA)
 CSV_OUT     = BASE_DIR / config["SALIDA_VENTAS"]["csv"].replace("{fecha}", FECHA)
 
@@ -81,6 +82,12 @@ def norm_pd(serie: pd.Series) -> pd.Series:
         .str.strip()
     )
     return s
+
+
+def optimizar_duckdb(con: duckdb.DuckDBPyConnection, tablas: list[str]) -> None:
+    con.execute("PRAGMA threads = 4")
+    for tabla in tablas:
+        con.execute(f"ANALYZE {tabla}")
 
 
 # ===========================================================================
@@ -406,6 +413,7 @@ def extraer_ventas() -> int:
     primera = True
 
     with duckdb.connect(str(DUCKDB_PATH)) as duck:
+        duck.execute("PRAGMA threads = 4")
         try:
             for i, chunk in enumerate(
                 pd.read_sql(
@@ -420,7 +428,8 @@ def extraer_ventas() -> int:
                 if "Referencia" not in chunk.columns:
                     raise KeyError('No se encontró la columna "Referencia" en ventas')
 
-                chunk["Ref_Normalizada"] = norm_pd(chunk["Referencia"])
+                chunk["Referencia"] = norm_pd(chunk["Referencia"]).replace("", pd.NA)
+                chunk["Ref_Normalizada"] = chunk["Referencia"]
 
                 duck.register("ventas_chunk", chunk)
 
@@ -437,6 +446,13 @@ def extraer_ventas() -> int:
 
                 total += len(chunk)
                 print(f"  Chunk {i} cargado: {total:,} filas acumuladas en ventas_raw")
+
+            if not primera:
+                duck.execute(
+                    'CREATE INDEX IF NOT EXISTS idx_ventas_ref_norm '
+                    'ON ventas_raw("Ref_Normalizada")'
+                )
+                optimizar_duckdb(duck, ["ventas_raw"])
 
         finally:
             conn.close()
@@ -462,16 +478,17 @@ def cruzar_con_precio_cnh() -> pd.DataFrame:
 
     print("Cruzando ventas con Precio CNH (DuckDB)...")
 
-    sql_cruce = """
+    sql_cruce = f"""
         SELECT
             v.*,
             ROUND(p."Precio Prorrateo", 2) AS "Precio CNH"
         FROM ventas_raw v
         LEFT JOIN resultado_precios_lista p
-            ON v.Ref_Normalizada = p.Referencia_Normalizada
+            ON {norm_sql('v.Ref_Normalizada')} = {norm_sql('p.Referencia_Normalizada')}
     """
 
     with duckdb.connect(str(DUCKDB_PATH)) as duck:
+        duck.execute("PRAGMA threads = 4")
         df_resultado = duck.execute(sql_cruce).df()
 
     if df_resultado.empty:
