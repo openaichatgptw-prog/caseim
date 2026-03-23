@@ -116,10 +116,22 @@ st.markdown(
     div[data-testid="stMetric"] {
         border: 1px solid var(--ui-border, #25314d);
         border-radius: var(--ui-radius, 10px);
-        padding: 0.28rem 0.45rem;
+        padding: 0.34rem 0.48rem;
         background: var(--ui-surface, #101a31);
         box-shadow: var(--ui-shadow, 0 3px 10px rgba(0, 0, 0, 0.22));
         min-height: auto;
+        position: relative;
+        overflow: hidden;
+    }
+    div[data-testid="stMetric"]::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 2px;
+        background: linear-gradient(90deg, rgba(56, 189, 248, 0.92), rgba(20, 184, 166, 0.8));
+        opacity: 0.95;
     }
     /* Menos “aire” vertical dentro de la tarjeta métrica */
     div[data-testid="stMetric"] > div {
@@ -131,10 +143,18 @@ st.markdown(
         margin-bottom: 0.1rem !important;
     }
     div[data-testid="stMetric"] [data-testid="stMetricValue"] {
-        font-size: 0.98rem !important;
+        font-size: 1.05rem !important;
+        font-weight: 760 !important;
+        color: #f8fafc !important;
+        text-shadow: 0 0 10px rgba(56, 189, 248, 0.14);
     }
     div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
         font-size: 0.72rem !important;
+    }
+    @media (max-width: 680px) {
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+            font-size: 0.97rem !important;
+        }
     }
     /* Fila de KPIs: alinea alturas entre columnas hermanas */
     div[data-testid="column"] > div[data-testid="stVerticalBlock"] {
@@ -549,6 +569,155 @@ st.markdown(
         border: 1px solid rgba(37, 49, 77, 0.65);
         border-radius: 8px;
         background: rgba(12, 20, 38, 0.5);
+    }
+    /* Reporte margen: KPIs en franja densa (1 fila en desktop; reflow en tablet/móvil) */
+    .margen-kpi-strip {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 0.35rem;
+        margin: 0.1rem 0 0.55rem 0;
+        align-items: stretch;
+    }
+    @media (max-width: 1180px) {
+        .margen-kpi-strip {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+    @media (max-width: 520px) {
+        .margen-kpi-strip {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+    .margen-kpi-mini {
+        border: 1px solid var(--ui-border);
+        border-radius: var(--ui-radius);
+        background: var(--ui-surface);
+        box-shadow: var(--ui-shadow);
+        padding: 0.34rem 0.45rem;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 0.18rem;
+        min-height: 3.12rem;
+        position: relative;
+        overflow: hidden;
+    }
+    .margen-kpi-mini::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 2px;
+        background: linear-gradient(90deg, rgba(56, 189, 248, 0.92), rgba(20, 184, 166, 0.8));
+        opacity: 0.95;
+    }
+    .margen-kpi-mini-lbl {
+        font-size: 0.68rem;
+        font-weight: 650;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--ui-muted);
+        line-height: 1.15;
+    }
+    .margen-kpi-mini-val {
+        font-size: 1.02rem;
+        font-weight: 760;
+        color: #f8fafc;
+        line-height: 1.15;
+        word-break: break-word;
+        text-shadow: 0 0 10px rgba(56, 189, 248, 0.14);
+    }
+    @media (max-width: 680px) {
+        .margen-kpi-mini-val {
+            font-size: 0.96rem;
+        }
+    }
+    /* ── Estilo global para TODAS las pestañas (consistencia visual) ── */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 0.38rem;
+        margin-bottom: 0.45rem;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 2rem;
+        border-radius: 10px 10px 0 0;
+        border: 1px solid #25314d;
+        border-bottom: 0;
+        background: rgba(12, 20, 38, 0.7);
+        color: #b8c4d7;
+        padding: 0 0.75rem;
+        font-size: 0.82rem;
+        font-weight: 600;
+    }
+    .stTabs [aria-selected="true"] {
+        background: #101a31;
+        color: #f8fafc;
+        box-shadow: inset 0 -2px 0 0 rgba(56, 189, 248, 0.85);
+    }
+    .stTabs [data-baseweb="tab-highlight"] {
+        background: transparent !important;
+    }
+    .stTabs [data-baseweb="tab-panel"] {
+        border: 1px solid #25314d;
+        border-radius: 0 12px 12px 12px;
+        background: rgba(10, 16, 32, 0.62);
+        padding: 0.75rem 0.8rem 0.65rem 0.8rem;
+    }
+    .stMarkdown h4, .stMarkdown h5 {
+        margin-top: 0.2rem;
+        margin-bottom: 0.32rem;
+        color: #e5e7eb;
+    }
+    [data-testid="stCaptionContainer"] {
+        margin-top: -0.1rem;
+        margin-bottom: 0.35rem;
+    }
+    [data-testid="stCaptionContainer"] p {
+        color: #94a3b8 !important;
+        font-size: 0.81rem !important;
+        line-height: 1.35 !important;
+    }
+    .stSlider {
+        padding-top: 0.08rem;
+    }
+    .stSlider [data-testid="stTickBar"] {
+        margin-top: -0.05rem;
+    }
+    .stSlider [data-baseweb="slider"] > div:first-child {
+        height: 4px;
+    }
+    .stSlider [role="slider"] {
+        border: 1px solid #7dd3fc;
+        box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.15);
+    }
+    div[data-testid="stDataFrame"] {
+        border: 1px solid #25314d;
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: var(--ui-shadow);
+        background: #0e1629;
+    }
+    div[data-testid="stDataFrame"] [role="grid"] {
+        border-radius: 10px;
+    }
+    div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stAlert"]) {
+        margin-top: 0.2rem;
+        margin-bottom: 0.25rem;
+    }
+    hr {
+        border-color: rgba(37, 49, 77, 0.8);
+        margin-top: 0.6rem;
+        margin-bottom: 0.6rem;
+    }
+    @media (max-width: 980px) {
+        .main .block-container {
+            padding-left: 0.8rem;
+            padding-right: 0.8rem;
+        }
+        .stTabs [data-baseweb="tab-panel"] {
+            padding: 0.65rem 0.6rem 0.55rem 0.6rem;
+        }
     }
     </style>
     """,
@@ -2162,6 +2331,35 @@ def _margen_ui_filtros_completos(df_margen: pd.DataFrame, margen_col: str, preci
     return df_filtrado
 
 
+def _margen_html_kpi_strip(
+    *,
+    total_refs: int,
+    inv_s: str,
+    exist_s: str,
+    margen_pct_s: str,
+    margen_dol_s: str,
+    costo_bod_s: str,
+) -> str:
+    """Franja compacta de KPIs del reporte margen (alineada con la estética de Consulta)."""
+    pairs: tuple[tuple[str, str], ...] = (
+        ("Refs", f"{total_refs:,.0f}"),
+        ("Inv", inv_s),
+        ("Exist", exist_s),
+        ("Margen %", margen_pct_s),
+        ("Margen $", margen_dol_s),
+        ("Costo Bodega", costo_bod_s),
+    )
+    cells: list[str] = []
+    for lbl, val in pairs:
+        cells.append(
+            '<div class="margen-kpi-mini">'
+            f'<span class="margen-kpi-mini-lbl">{html.escape(lbl)}</span>'
+            f'<span class="margen-kpi-mini-val">{html.escape(val)}</span>'
+            "</div>"
+        )
+    return f'<div class="margen-kpi-strip">{"".join(cells)}</div>'
+
+
 def _render_tab_margen() -> None:
     if st.session_state.get("_actualizando"):
         st.info("Consultas pausadas mientras termina la actualización. Puedes cambiar entre pestañas libremente.")
@@ -2280,15 +2478,17 @@ def _render_tab_margen() -> None:
                 return f"${v/1_000:,.1f} mil"
             return f"${v:,.0f}"
 
-        # KPIs en 2×3: menos apretados en pantallas medianas y alturas más uniformes.
-        r1a, r1b, r1c = st.columns(3, gap="small")
-        r1a.metric("Refs", f"{total_refs:,.0f}")
-        r1b.metric("Inv", _fmt_short_money(valor_inventario))
-        r1c.metric("Exist", f"{existencia_total:,.0f}")
-        r2a, r2b, r2c = st.columns(3, gap="small")
-        r2a.metric("Margen %", _to_percent_text(margen_total))
-        r2b.metric("Margen $", _fmt_short_money(margen_nominal))
-        r2c.metric("Costo Bodega", _fmt_short_money(costo_prom_bod))
+        st.markdown(
+            _margen_html_kpi_strip(
+                total_refs=total_refs,
+                inv_s=_fmt_short_money(valor_inventario),
+                exist_s=f"{existencia_total:,.0f}",
+                margen_pct_s=_to_percent_text(margen_total),
+                margen_dol_s=_fmt_short_money(margen_nominal),
+                costo_bod_s=_fmt_short_money(costo_prom_bod),
+            ),
+            unsafe_allow_html=True,
+        )
 
         subtabs = st.tabs(["Detalle filtrado", "Segmentación"])
         with subtabs[0]:
