@@ -420,7 +420,7 @@ def _fmt_consulta_money(val: object) -> str:
     if _fmt_consulta_display(val) == "—":
         return "—"
     try:
-        return f"{float(val):,.2f}"
+        return f"${float(val):,.2f}"
     except (TypeError, ValueError):
         return "—"
 
@@ -443,6 +443,12 @@ def _fmt_cop_resumido(v: float | None) -> str:
     if av >= 1_000:
         return f"${v/1_000:,.1f} mil"
     return f"${v:,.0f}"
+
+
+# Precio lista (COP) en widgets: slider admite preset "dollar".
+# number_input: solo printf simple (p. ej. %.2f); «%,» miles no es válido en todas las versiones de Streamlit.
+_FMT_PRECIO_LISTA_SLIDER: Final[str] = "dollar"
+_FMT_PRECIO_LISTA_NUM_INPUT: Final[str] = "%.2f"
 
 
 def _valor_inventario_cop_auditoria(df: pd.DataFrame, lower_map: dict[str, str]) -> float | None:
@@ -1409,7 +1415,7 @@ def _render_tab_consulta() -> None:
     c1.metric("Referencia", str(resumen.get("Referencia_Original", "-")))
     c2.metric(
         "Precio prorrateo",
-        f"{resumen.get('Precio Prorrateo', 0):,.2f}"
+        f"${resumen.get('Precio Prorrateo', 0):,.2f}"
         if resumen.get("Precio Prorrateo") is not None
         else "-",
     )
@@ -1640,29 +1646,32 @@ def _margen_ui_filtros_completos(df_margen: pd.DataFrame, margen_col: str, preci
         _sync_precio_from_inputs()
 
         st.slider(
-            f"{precio_col} (rango)",
+            f"{precio_col} (rango COP)",
             min_value=0.0,
             max_value=max_precio_slider,
             step=1.0,
+            format=_FMT_PRECIO_LISTA_SLIDER,
             key="margen_precio_range",
             on_change=_sync_precio_from_slider,
         )
         p1, p2 = st.columns(2, gap="small")
         with p1:
             st.number_input(
-                f"Desde {precio_col}",
+                f"Desde {precio_col} (COP)",
                 min_value=0.0,
                 max_value=max_precio_slider,
                 step=1.0,
+                format=_FMT_PRECIO_LISTA_NUM_INPUT,
                 key="margen_precio_desde",
                 on_change=_sync_precio_from_inputs,
             )
         with p2:
             st.number_input(
-                f"Hasta {precio_col}",
+                f"Hasta {precio_col} (COP)",
                 min_value=0.0,
                 max_value=max_precio_slider,
                 step=1.0,
+                format=_FMT_PRECIO_LISTA_NUM_INPUT,
                 key="margen_precio_hasta",
                 on_change=_sync_precio_from_inputs,
             )
@@ -2429,25 +2438,28 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
                     min_value=0.0,
                     max_value=max_precio_slider,
                     step=1.0,
+                    format=_FMT_PRECIO_LISTA_SLIDER,
                     key="aud_precio_range",
                     on_change=_sync_aud_precio_from_slider,
                 )
                 p1, p2 = st.columns(2, gap="small")
                 with p1:
                     st.number_input(
-                        f"Desde {precio_lista_col}",
+                        f"Desde {precio_lista_col} (COP)",
                         min_value=0.0,
                         max_value=max_precio_slider,
                         step=1.0,
+                        format=_FMT_PRECIO_LISTA_NUM_INPUT,
                         key="aud_precio_desde",
                         on_change=_sync_aud_precio_from_inputs,
                     )
                 with p2:
                     st.number_input(
-                        f"Hasta {precio_lista_col}",
+                        f"Hasta {precio_lista_col} (COP)",
                         min_value=0.0,
                         max_value=max_precio_slider,
                         step=1.0,
+                        format=_FMT_PRECIO_LISTA_NUM_INPUT,
                         key="aud_precio_hasta",
                         on_change=_sync_aud_precio_from_inputs,
                     )
@@ -3499,6 +3511,7 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
             )
             fig_sc.update_traces(marker=dict(size=5), selector=dict(type="scatter"))
             fig_sc.add_hline(y=0, line_dash="dot", line_color="#ef4444", annotation_text="Margen = 0")
+            fig_sc.update_xaxes(tickformat="$,.0f")
             _plotly_show(fig_sc)
         else:
             st.caption(f"Sin `{precio_col}` para dispersión.")
