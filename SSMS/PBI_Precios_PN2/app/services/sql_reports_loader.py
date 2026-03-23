@@ -190,6 +190,10 @@ def refrescar_bodegas_dim_desde_margen(duckdb_path: Path) -> tuple[bool, str]:
         return False, str(exc)
 
 
+_MAX_PERSIST_RETRIES = 3
+_RETRY_WAIT_SECS = [5, 15, 30]
+
+
 def _persist_query_to_duckdb(
     sql_text: str,
     table_name: str,
@@ -199,22 +203,30 @@ def _persist_query_to_duckdb(
     """
     Carga el resultset completo del SQL en DuckDB (misma lógica que 00_Reportes_SQL.py):
     lectura por chunks desde SQL Server sin tope de filas en el total.
+
+    Incluye reintentos con reconexión ante cortes de red (error 08S01 / 10054).
+    Si falla, la tabla previa en DuckDB se conserva intacta.
     """
-    total = 0
+    import time
+
     conn_str = _build_conn_str()
-    conn_sql = pyodbc.connect(conn_str)
-    try:
-        # Sin BEGIN/COMMIT explícito: en DuckDB, DDL (CREATE OR REPLACE TABLE) dentro de una
-        # transacción abierta puede provocar "Catalog write-write conflict on create".
-        with duckdb.connect(str(duckdb_path)) as duck:
-            cur = conn_sql.cursor()
-            if hasattr(cur, "timeout"):
-                cur.timeout = SQL_TIMEOUT_SEG
-            cur.arraysize = CHUNK_SIZE
-            cur.execute(_sql_server_batch_sin_go(sql_text))
-            duck.execute("PRAGMA threads=4")
-            try:
-                # Algunos scripts SQL tienen múltiples sentencias antes del SELECT final.
+    sql_clean = _sql_server_batch_sin_go(sql_text)
+    staging = f"_staging_{table_name}"
+    last_exc: Exception | None = None
+
+    for attempt in range(1, _MAX_PERSIST_RETRIES + 1):
+        total = 0
+        conn_sql: pyodbc.Connection | None = None
+        try:
+            conn_sql = pyodbc.connect(conn_str)
+            with duckdb.connect(str(duckdb_path)) as duck:
+                cur = conn_sql.cursor()
+                if hasattr(cur, "timeout"):
+                    cur.timeout = SQL_TIMEOUT_SEG
+                cur.arraysize = CHUNK_SIZE
+                cur.execute(sql_clean)
+                duck.execute("PRAGMA threads=4")
+
                 while cur.description is None:
                     if not cur.nextset():
                         raise ValueError(
@@ -239,13 +251,13 @@ def _persist_query_to_duckdb(
 
                     if primera:
                         duck.execute(
-                            f"CREATE OR REPLACE TABLE {table_name} AS "
+                            f"CREATE OR REPLACE TABLE {staging} AS "
                             "SELECT * FROM tmp_chunk"
                         )
                         primera = False
                     else:
                         duck.execute(
-                            f"INSERT INTO {table_name} SELECT * FROM tmp_chunk"
+                            f"INSERT INTO {staging} SELECT * FROM tmp_chunk"
                         )
 
                     duck.unregister("tmp_chunk")
@@ -258,26 +270,62 @@ def _persist_query_to_duckdb(
 
                 if primera:
                     col_defs = ", ".join([f'"{c}" VARCHAR' for c in cols])
-                    duck.execute(f"CREATE OR REPLACE TABLE {table_name} ({col_defs})")
+                    duck.execute(f"CREATE OR REPLACE TABLE {staging} ({col_defs})")
+
+                duck.execute(f"DROP TABLE IF EXISTS {table_name}")
+                duck.execute(f"ALTER TABLE {staging} RENAME TO {table_name}")
+
+            return total
+
+        except Exception as exc:
+            last_exc = exc
+            try:
+                with duckdb.connect(str(duckdb_path)) as duck_clean:
+                    duck_clean.execute(f"DROP TABLE IF EXISTS {staging}")
             except Exception:
+                pass
+
+            is_network = "08S01" in str(exc) or "10054" in str(exc) or "Communication link" in str(exc)
+            if is_network and attempt < _MAX_PERSIST_RETRIES:
+                wait = _RETRY_WAIT_SECS[min(attempt - 1, len(_RETRY_WAIT_SECS) - 1)]
+                if log_callback:
+                    log_callback(
+                        f"  ⚠ Conexión perdida en {table_name} (intento {attempt}/{_MAX_PERSIST_RETRIES}). "
+                        f"Reintentando en {wait}s..."
+                    )
+                time.sleep(wait)
+                continue
+            raise
+        finally:
+            if conn_sql is not None:
                 try:
-                    duck.execute(f"DROP TABLE IF EXISTS {table_name}")
+                    conn_sql.close()
                 except Exception:
                     pass
-                raise
-    finally:
-        conn_sql.close()
 
-    return total
+    raise last_exc  # type: ignore[misc]
+
+
+SQL_001_KEY = "sql_001_margen_siesa"
+SQL_002_KEY = "sql_002_atributos_refs"
+SQL_003_KEY = "sql_003_auditoria"
+
+ALL_SQL_KEYS = [SQL_001_KEY, SQL_002_KEY, SQL_003_KEY]
 
 
 def cargar_reportes_sql_en_duckdb(
     log_callback: Callable[[str], None] | None = None,
     duckdb_path_override: Path | None = None,
     auditoria_bodegas: list[str] | None = None,
+    sql_queries: list[str] | None = None,
 ) -> tuple[bool, str]:
-    # Prioriza SQL embebido en 00_Reportes_SQL.py (sin ejecutar su main),
-    # para evitar dependencias de archivos .sql y saltar bloques no requeridos por la app.
+    """
+    Ejecuta las consultas SQL embebidas seleccionadas.
+
+    ``sql_queries`` filtra cuáles de las 3 consultas se ejecutan
+    (claves: ``SQL_001_KEY``, ``SQL_002_KEY``, ``SQL_003_KEY``).
+    ``None`` o lista vacía = ejecutar todas.
+    """
     pipeline_00 = ROOT_DIR / "00_Reportes_SQL.py"
     if pipeline_00.exists():
         try:
@@ -295,10 +343,13 @@ def cargar_reportes_sql_en_duckdb(
         duckdb_path = duckdb_path_override or (ROOT_DIR / duckdb_name)
 
         sql_embebido = [
-            ("consulta_interna_precio_margen_siesa", "margen_siesa_raw", getattr(module, "SQL_PRECIO_MARGEN_SIESA", None)),
-            ("consulta_interna_atributos_referencias", "atributos_referencias_raw", getattr(module, "SQL_ATRIBUTOS_REFERENCIAS", None)),
-            ("consulta_interna_auditoria", "auditoria_raw", getattr(module, "SQL_AUDITORIA", None)),
+            (SQL_001_KEY, "consulta_interna_precio_margen_siesa", "margen_siesa_raw", getattr(module, "SQL_PRECIO_MARGEN_SIESA", None)),
+            (SQL_002_KEY, "consulta_interna_atributos_referencias", "atributos_referencias_raw", getattr(module, "SQL_ATRIBUTOS_REFERENCIAS", None)),
+            (SQL_003_KEY, "consulta_interna_auditoria", "auditoria_raw", getattr(module, "SQL_AUDITORIA", None)),
         ]
+
+        keys_a_ejecutar = set(sql_queries) if sql_queries else set(ALL_SQL_KEYS)
+
         logs: list[str] = []
         try:
             if auditoria_bodegas is None:
@@ -308,14 +359,19 @@ def cargar_reportes_sql_en_duckdb(
             logs.append("\n### Paso 00 (SQL embebido desde 00_Reportes_SQL.py)")
             if log_callback:
                 log_callback("### Paso 00 (SQL embebido desde 00_Reportes_SQL.py)")
-            for sql_name, table_name, sql_text in sql_embebido:
+            for key, sql_name, table_name, sql_text in sql_embebido:
+                if key not in keys_a_ejecutar:
+                    logs.append(f"\n### Omitido: {sql_name} (no seleccionado)")
+                    if log_callback:
+                        log_callback(f"### Omitido: {sql_name} -> {table_name} (no seleccionado)")
+                    continue
                 if not sql_text:
                     raise ValueError(f"No se encontró SQL embebido para `{sql_name}` en `00_Reportes_SQL.py`.")
                 logs.append(f"\n### Ejecutando SQL embebido: {sql_name} -> {table_name}")
                 if log_callback:
                     log_callback(f"### Ejecutando SQL embebido: {sql_name} -> {table_name}")
                 txt_sql = str(sql_text)
-                if sql_name == "consulta_interna_auditoria":
+                if key == SQL_003_KEY:
                     bods = codigos_bodegas
                     txt_sql = _aplicar_filtro_bodegas_sql_auditoria(txt_sql, bods)
                     if bods and log_callback:

@@ -86,7 +86,7 @@ Archivo `config.json` (no versionar en repos públicos):
 
 Parámetros de conexión definidos en el notebook:
 ```python
-server = "10.75.71.10,1433"
+server = "tu_servidor_sql,1433"
 database = "UnoEE"
 ```
 

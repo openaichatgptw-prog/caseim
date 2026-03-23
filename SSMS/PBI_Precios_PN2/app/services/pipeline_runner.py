@@ -8,6 +8,9 @@ import time
 import configparser
 import shutil
 from typing import Callable
+
+import duckdb
+
 from services.sql_reports_loader import cargar_reportes_sql_en_duckdb
 
 
@@ -31,16 +34,28 @@ def _resolve_master_db_path() -> Path:
 
 
 def _publish_work_db(work_db: Path, master_db: Path) -> None:
+    """Publica solo las tablas que existen en la BD de trabajo hacia la maestra (merge, no reemplazo)."""
     last_error: Exception | None = None
-    for _ in range(8):
+    for attempt in range(6):
         try:
-            shutil.copy2(work_db, master_db)
+            with duckdb.connect(str(master_db)) as con:
+                con.execute(f"ATTACH '{work_db}' AS work (READ_ONLY)")
+                tables = [
+                    row[0]
+                    for row in con.execute(
+                        "SELECT table_name FROM work.information_schema.tables "
+                        "WHERE table_schema = 'main'"
+                    ).fetchall()
+                ]
+                for t in tables:
+                    con.execute(f'CREATE OR REPLACE TABLE main."{t}" AS SELECT * FROM work."{t}"')
+                con.execute("DETACH work")
             return
         except Exception as exc:
             last_error = exc
-            time.sleep(0.4)
+            time.sleep(0.5 * (attempt + 1))
     raise RuntimeError(
-        f"No fue posible publicar base de trabajo en {master_db}."
+        f"No fue posible publicar tablas de trabajo en {master_db}."
     ) from last_error
 
 
@@ -66,6 +81,7 @@ def ejecutar_pipelines(
     ejecutar_reportes_sql: bool | None = None,
     pipelines_a_ejecutar: list[str] | None = None,
     auditoria_bodegas: list[str] | None = None,
+    sql_queries: list[str] | None = None,
 ) -> tuple[bool, str]:
     salida: list[str] = []
     ok = True
@@ -75,16 +91,14 @@ def ejecutar_pipelines(
     master_db_path = _resolve_master_db_path()
     work_db_path = master_db_path.with_name(f"{master_db_path.stem}.work.duckdb")
     env["PIPELINE_DUCKDB_PATH"] = str(work_db_path)
-    try:
-        if work_db_path.exists():
-            work_db_path.unlink()
-    except Exception:
-        pass
-    if master_db_path.exists():
+    for suffix in [".duckdb", ".duckdb.wal"]:
+        p = work_db_path.with_suffix(suffix) if suffix != ".duckdb" else work_db_path
         try:
-            shutil.copy2(master_db_path, work_db_path)
+            if p.exists():
+                p.unlink()
         except Exception:
             pass
+
     def _append_log(msg: str) -> None:
         salida.append(msg)
         if log_callback:
@@ -159,6 +173,7 @@ def ejecutar_pipelines(
             log_callback=_append_log,
             duckdb_path_override=work_db_path,
             auditoria_bodegas=auditoria_bodegas,
+            sql_queries=sql_queries,
         )
         _append_log("\n" + log_sql)
         if not ok_sql:
@@ -174,7 +189,7 @@ def ejecutar_pipelines(
             if work_db_path.exists():
                 _publish_work_db(work_db_path, master_db_path)
                 _append_log(
-                    f"\nBase publicada correctamente: {master_db_path.name}"
+                    f"\nTablas publicadas correctamente en: {master_db_path.name}"
                 )
             else:
                 ok = False
@@ -183,6 +198,14 @@ def ejecutar_pipelines(
                 )
         except Exception as exc:
             ok = False
-            _append_log(f"\nError publicando base de trabajo: {exc}")
+            _append_log(f"\nError publicando tablas: {exc}")
+
+    try:
+        for suffix in [".duckdb", ".duckdb.wal"]:
+            p = work_db_path.with_suffix(suffix) if suffix != ".duckdb" else work_db_path
+            if p.exists():
+                p.unlink()
+    except Exception:
+        pass
 
     return ok, "\n".join(salida).strip()

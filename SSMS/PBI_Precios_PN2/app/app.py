@@ -31,13 +31,17 @@ from services.data_access import (
 )
 from services.filter_prefs import load_filter_prefs_into_session, render_reset_filters_button, save_tab_filter_prefs
 from services.pipeline_runner import ejecutar_pipelines
+from services.sql_reports_loader import SQL_001_KEY, SQL_002_KEY, SQL_003_KEY
 
 PIPELINE_OPCIONES: Final[list[str]] = [
     "01_Mejora_pipeline_precios_chnV21.py",
     "02_ventas_precios_cnhV2.py",
     "03_Maestro_historico.py",
 ]
-SQL_OPCION: Final[str] = "SQL 00_* (margen_siesa_raw y atributos)"
+SQL_001_OPCION: Final[str] = "SQL 001 — Margen SIESA (margen_siesa_raw)"
+SQL_002_OPCION: Final[str] = "SQL 002 — Atributos refs (atributos_referencias_raw)"
+SQL_003_OPCION: Final[str] = "SQL 003 — Auditoría refs (auditoria_raw)"
+SQL_OPCIONES: Final[list[str]] = [SQL_001_OPCION, SQL_002_OPCION, SQL_003_OPCION]
 
 
 st.set_page_config(page_title="Consulta precios CNH", page_icon=":bar_chart:", layout="wide")
@@ -46,6 +50,16 @@ load_filter_prefs_into_session()
 st.markdown(
     """
     <style>
+    :root {
+        --ui-surface: #101a31;
+        --ui-border: #25314d;
+        --ui-radius: 10px;
+        --ui-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
+        --ui-text: #e5e7eb;
+        --ui-muted: #94a3b8;
+        --ui-accent: #38bdf8;
+        --ui-best: #14b8a6;
+    }
     .stApp {
         background: #0b1220;
         color: #e5e7eb;
@@ -56,12 +70,12 @@ st.markdown(
         padding-bottom: 1.4rem;
     }
     .hero-card {
-        border: 1px solid #1f2a44;
-        border-radius: 14px;
+        border: 1px solid #25314d;
+        border-radius: 12px;
         padding: 1rem 1.1rem;
         margin-bottom: 1rem;
-        background: #111a2e;
-        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+        background: #101a31;
+        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
     }
     .hero-title {
         color: #f8fafc;
@@ -84,11 +98,31 @@ st.markdown(
         font-size: 1rem;
     }
     div[data-testid="stMetric"] {
-        border: 1px solid #25314d;
-        border-radius: 12px;
-        padding: 0.65rem 0.8rem;
-        background: #101a31;
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+        border: 1px solid var(--ui-border, #25314d);
+        border-radius: var(--ui-radius, 10px);
+        padding: 0.38rem 0.5rem;
+        background: var(--ui-surface, #101a31);
+        box-shadow: var(--ui-shadow, 0 3px 10px rgba(0, 0, 0, 0.22));
+        min-height: auto;
+    }
+    /* Menos “aire” vertical dentro de la tarjeta métrica */
+    div[data-testid="stMetric"] > div {
+        gap: 0.12rem !important;
+    }
+    div[data-testid="stMetric"] label p {
+        font-size: 0.78rem !important;
+        line-height: 1.2 !important;
+        margin-bottom: 0.1rem !important;
+    }
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        font-size: 1.05rem !important;
+    }
+    div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+        font-size: 0.72rem !important;
+    }
+    /* Fila de KPIs: alinea alturas entre columnas hermanas */
+    div[data-testid="column"] > div[data-testid="stVerticalBlock"] {
+        gap: 0.45rem;
     }
     .hint-text {
         color: #9ca3af;
@@ -109,82 +143,195 @@ st.markdown(
         color: #f8fafc !important;
         font-weight: 600 !important;
     }
-    .origin-grid {
+    /* ── Tarjetas / paneles alineados con st.metric ───────────────────── */
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background: var(--ui-surface) !important;
+        border: 1px solid var(--ui-border) !important;
+        border-radius: var(--ui-radius) !important;
+        box-shadow: var(--ui-shadow) !important;
+    }
+    .ui-card {
+        border: 1px solid var(--ui-border);
+        border-radius: var(--ui-radius);
+        background: var(--ui-surface);
+        box-shadow: var(--ui-shadow);
+        color: var(--ui-text);
+        padding: 0.55rem 0.65rem;
+    }
+    .ui-card--tight {
+        padding: 0.48rem 0.55rem;
+    }
+    .ui-card-heading {
+        font-size: 0.72rem;
+        font-weight: 650;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--ui-muted);
+        margin: 0 0 0.3rem 0;
+    }
+    .consulta-strip-gap {
+        height: 0.45rem;
+    }
+    /* Hasta 10 alternas: rejilla 5×2 en desktop, se adapta en móvil */
+    .alt-chip-grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 0.35rem;
+    }
+    @media (max-width: 900px) {
+        .alt-chip-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+    @media (max-width: 520px) {
+        .alt-chip-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
+    .alt-chip-note {
+        margin: 0.4rem 0 0 0;
+        font-size: 0.78rem;
+        color: var(--ui-muted);
+    }
+    .alt-chip-row {
         display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-        margin-top: 2px;
-        margin-bottom: 8px;
-    }
-    .origin-card {
-        flex: 1 1 220px;
-        min-width: 220px;
-        border-radius: 12px;
-        padding: 10px 12px;
-        border: 1px solid #2d3a58;
-        background: #101a31;
-        color: #cbd5e1;
-    }
-    .origin-card.best {
-        border-color: #0f766e;
-        background: #0f2f2a;
-        color: #d1fae5;
-        box-shadow: 0 8px 18px rgba(15, 118, 110, 0.16);
-    }
-    .origin-badge {
-        display: inline-block;
-        border-radius: 999px;
-        padding: 2px 8px;
-        font-size: 11px;
-        margin-bottom: 7px;
-        background: #334155;
-        color: #e2e8f0;
-    }
-    .origin-card.best .origin-badge {
-        background: #14b8a6;
-        color: #083344;
-    }
-    .origin-title {
-        font-size: 14px;
-        font-weight: 700;
-        margin-bottom: 2px;
-    }
-    .origin-price {
-        font-size: 27px;
-        line-height: 1.1;
-        font-weight: 700;
-        margin-bottom: 2px;
-    }
-    .origin-disp {
-        font-size: 12px;
-        opacity: 0.9;
-    }
-    .alt-wrap {
-        border: 1px solid #25314d;
-        border-radius: 12px;
-        padding: 10px;
-        background: #101a31;
-        display: flex;
-        gap: 8px;
+        flex-wrap: nowrap;
+        gap: 0.4rem;
         overflow-x: auto;
+        padding-bottom: 2px;
+        -webkit-overflow-scrolling: touch;
     }
     .alt-chip {
-        min-width: 140px;
+        min-width: 0;
         border: 1px solid #2d3a58;
-        border-radius: 10px;
-        padding: 8px 10px;
-        background: #0f172a;
-        color: #e5e7eb;
+        border-radius: var(--ui-radius);
+        padding: 0.28rem 0.4rem;
+        background: #0c1426;
     }
     .alt-chip.selected {
-        border-color: #0f766e;
-        background: #0f2f2a;
+        border-color: rgba(56, 189, 248, 0.55);
+        background: rgba(56, 189, 248, 0.08);
+        box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.12);
     }
-    .alt-panel {
-        border: 1px solid #25314d;
-        border-radius: 12px;
-        padding: 10px;
-        background: #101a31;
+    .alt-chip-role {
+        display: block;
+        font-size: 0.68rem;
+        color: var(--ui-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-bottom: 0.15rem;
+    }
+    .alt-chip-ref {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #f8fafc;
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .alt-chip.selected .alt-chip-ref {
+        color: var(--ui-accent);
+    }
+    /* Tres orígenes en una fila (sin bandas full-width vacías) */
+    .origin-grid-unified {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.5rem;
+        margin-top: 0.35rem;
+        align-items: stretch;
+    }
+    .origin-grid-unified > .ui-card--origin {
+        min-width: 0;
+    }
+    .origin-grid-unified .ui-origin-col--px {
+        font-size: 1.02rem;
+    }
+    @media (max-width: 768px) {
+        .origin-grid-unified {
+            grid-template-columns: 1fr;
+        }
+        .origin-grid-unified .ui-origin-col--px {
+            font-size: 1.1rem;
+        }
+    }
+    /* Una fila densa: origen | precio | disponibilidad (sin hueco a la derecha) */
+    .ui-card--origin-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(3.5rem, 1fr) minmax(4.2rem, 0.9fr);
+        align-items: center;
+        column-gap: 0.45rem;
+        padding: 0.38rem 0.55rem !important;
+        min-width: 0;
+    }
+    .ui-origin-name-line {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.35rem;
+    }
+    .ui-origin-name {
+        font-size: 0.8rem;
+        font-weight: 650;
+        color: var(--ui-muted);
+    }
+    .ui-origin-col--px {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #f8fafc;
+        text-align: center;
+        line-height: 1.15;
+    }
+    .ui-origin-col--dp {
+        text-align: right;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 0.08rem;
+    }
+    .ui-origin-disp-lbl {
+        font-size: 0.62rem;
+        font-weight: 650;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--ui-muted);
+    }
+    .ui-origin-disp-val {
+        font-size: 0.86rem;
+        font-weight: 600;
+        color: #e5e7eb;
+    }
+    .ui-card--origin.is-best {
+        border-color: rgba(20, 184, 166, 0.45);
+        box-shadow: 0 0 0 1px rgba(20, 184, 166, 0.18), var(--ui-shadow);
+    }
+    .ui-card--origin.is-best .ui-origin-col--px {
+        color: #5eead4;
+    }
+    .ui-best-pill {
+        display: inline-block;
+        font-size: 0.6rem;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: #0d9488;
+        background: rgba(20, 184, 166, 0.14);
+        border-radius: 999px;
+        padding: 0.1rem 0.4rem;
+        white-space: nowrap;
+    }
+    @media (max-width: 640px) {
+        .ui-card--origin-row {
+            grid-template-columns: 1fr;
+            row-gap: 0.45rem;
+        }
+        .ui-origin-col--px {
+            text-align: left;
+        }
+        .ui-origin-col--dp {
+            align-items: flex-start;
+            text-align: left;
+        }
     }
     </style>
     """,
@@ -213,6 +360,56 @@ def _parse_refs_alternas(raw_refs: str) -> list[str]:
         if ref:
             refs.append(ref)
     return refs
+
+
+_CONSULTA_MAX_ALTERNAS: Final[int] = 10
+
+
+def _fmt_consulta_display(val: object) -> str:
+    """Evita NaT / None / nan en textos y métricas de la pestaña Consulta."""
+    if val is None:
+        return "—"
+    try:
+        if pd.isna(val):
+            return "—"
+    except (TypeError, ValueError):
+        pass
+    if isinstance(val, float):
+        try:
+            if not math.isfinite(val) or math.isnan(val):
+                return "—"
+        except Exception:
+            pass
+    s = str(val).strip()
+    if s.lower() in ("nat", "none", "nan", "<na>"):
+        return "—"
+    return s
+
+
+def _fmt_consulta_fecha(val: object) -> str:
+    if val is None:
+        return "—"
+    try:
+        if pd.isna(val):
+            return "—"
+    except (TypeError, ValueError):
+        pass
+    try:
+        ts = pd.Timestamp(val)
+        if pd.isna(ts):
+            return "—"
+        return ts.strftime("%Y-%m-%d")
+    except Exception:
+        return _fmt_consulta_display(val)
+
+
+def _fmt_consulta_money(val: object) -> str:
+    if _fmt_consulta_display(val) == "—":
+        return "—"
+    try:
+        return f"{float(val):,.2f}"
+    except (TypeError, ValueError):
+        return "—"
 
 
 def _to_percent_text(value: float | None) -> str:
@@ -501,7 +698,7 @@ def _auditoria_column_order_full(df: pd.DataFrame, lower_map: dict[str, str], co
 
 
 def _auditoria_one_column_config(orig: str, label: str) -> st.column_config.Column:
-    """Formato auditoría: precios/costos como moneda ($%,.0f) como Reporte margen; fechas cortas DD/MM/AAAA; % para variaciones."""
+    """Formato auditoría: columnas de precio con formato moneda (dollar); costos/otros montos $ sin decimales como antes; fechas DD/MM/AAAA."""
     lc = orig.lower()
     if orig == "_Origen_Ultima_Norm":
         return st.column_config.TextColumn(label, width="small")
@@ -523,9 +720,9 @@ def _auditoria_one_column_config(orig: str, label: str) -> st.column_config.Colu
             return st.column_config.NumberColumn(label, format="%.4f")
         if "pct" in lc or "_abs_var" in lc or ("_var_" in lc and "costolog" in lc):
             return st.column_config.NumberColumn(label, format="%.2f%%")
-        # Precios COP ajustados (moneda, sin decimales como dashboard margen)
+        # Precios COP ajustados (formato moneda estándar en grid)
         if "precio" in lc or "log" in lc:
-            return st.column_config.NumberColumn(label, format="$%,.0f")
+            return st.column_config.NumberColumn(label, format="dollar")
         return st.column_config.NumberColumn(label, format="%.2f")
     if lc == "existencia_total":
         return st.column_config.NumberColumn(
@@ -578,10 +775,10 @@ def _auditoria_one_column_config(orig: str, label: str) -> st.column_config.Colu
             "precio_lista",
             "lista_09",
             "lista_04",
-            "valor_inventario",
-            "absvar_costo",
         )
     ) and "pct" not in lc:
+        return st.column_config.NumberColumn(label, format="dollar")
+    if any(x in lc for x in ("valor_inventario", "absvar_costo")) and "pct" not in lc:
         return st.column_config.NumberColumn(label, format="$%,.0f")
     if any(x in lc for x in ("costo_min", "costo_max", "costo_intermedio")) and "var_" not in lc:
         return st.column_config.NumberColumn(label, format="$%,.0f")
@@ -591,9 +788,9 @@ def _auditoria_one_column_config(orig: str, label: str) -> st.column_config.Colu
         return st.column_config.NumberColumn(label, format="%,.0f")
     if lc == "escostounico":
         return st.column_config.NumberColumn(label, format="%,.0f")
-    # Rescate: cualquier otro campo de precio/costo monetario (numérico + $ como margen)
+    # Rescate: cualquier otro campo de precio (no variación %)
     if "precio" in lc and not lc.startswith("var_"):
-        return st.column_config.NumberColumn(label, format="$%,.0f")
+        return st.column_config.NumberColumn(label, format="dollar")
     if "costo" in lc and not lc.startswith("var_") and "bodega" not in lc:
         if "pct" in lc:
             return st.column_config.NumberColumn(label, format="%.2f%%")
@@ -944,35 +1141,34 @@ def _render_header_y_actualizacion() -> None:
                     horizontal=True,
                     index=1,
                 )
-                opciones = PIPELINE_OPCIONES + [SQL_OPCION]
+                todas_opciones = PIPELINE_OPCIONES + SQL_OPCIONES
                 if preset == "Rápida":
                     seleccion = PIPELINE_OPCIONES.copy()
-                    st.caption("Rápida: actualiza 01, 02 y 03.")
+                    st.caption("Rápida: actualiza 01, 02 y 03 (sin SQL 00).")
                 elif preset == "Completa":
-                    seleccion = opciones.copy()
-                    st.caption("Completa: actualiza 01, 02, 03 y SQL 00_*.")
+                    seleccion = todas_opciones.copy()
+                    st.caption("Completa: actualiza 01, 02, 03 y las 3 consultas SQL 00.")
                 else:
                     selec_todas = st.checkbox("Seleccionar todas", value=True)
                     if selec_todas:
-                        seleccion = opciones.copy()
+                        seleccion = todas_opciones.copy()
                     else:
                         seleccion = st.multiselect(
                             "Consultas/procesos",
-                            options=opciones,
+                            options=todas_opciones,
                             default=PIPELINE_OPCIONES,
                         )
                 forzar_actualizar = st.checkbox(
                     "Forzar actualización (cerrar lecturas)",
                     value=False,
                 )
-                incluye_sql_00 = preset == "Completa" or (
-                    preset == "Personalizada" and SQL_OPCION in seleccion
-                )
-                if incluye_sql_00:
+                incluye_sql_003 = SQL_003_OPCION in seleccion
+                incluye_algun_sql = any(op in seleccion for op in SQL_OPCIONES)
+                if incluye_sql_003:
                     st.divider()
                     h_bod, btn_bod = st.columns([4, 1], gap="small")
                     with h_bod:
-                        st.markdown("##### Auditoría referencias (SQL 00)")
+                        st.markdown("##### Bodegas para SQL 003 — Auditoría")
                     with btn_bod:
                         if st.button(
                             "↻ Bodegas",
@@ -990,8 +1186,7 @@ def _render_header_y_actualizacion() -> None:
                             except Exception as exc:
                                 st.error(f"No se pudo actualizar bodegas: {exc}")
                     st.caption(
-                        "Filtra el armado de **#Existencias** por `b.f150_id` antes de costos min/inter/max. "
-                        "Lista desde **`bodegas_dim`** en DuckDB (se actualiza al cargar `margen_siesa_raw`). "
+                        "Filtra **#Existencias** por bodega en la consulta de auditoría. "
                         "**Vacío** = incluir todas las bodegas."
                     )
                     try:
@@ -1000,8 +1195,8 @@ def _render_header_y_actualizacion() -> None:
                         df_bod = pd.DataFrame()
                     if df_bod.empty:
                         st.info(
-                            "Aún no hay catálogo `bodegas_dim`. Ejecuta al menos una vez **Completa** "
-                            "o **Personalizada** con SQL 00 para generarlo desde margen."
+                            "Aún no hay catálogo `bodegas_dim`. Ejecuta primero **SQL 001** "
+                            "para generarlo desde `margen_siesa_raw`."
                         )
                         st.session_state.setdefault("auditoria_bodegas_sel", [])
                     else:
@@ -1026,7 +1221,12 @@ def _render_header_y_actualizacion() -> None:
                             format_func=_fmt_bodega_aud,
                             key="auditoria_bodegas_sel",
                             help="Sin selección = todas. Con selección, solo esas bodegas entran al cálculo de auditoría.",
-                )
+                        )
+                        if st.session_state.get("auditoria_bodegas_sel"):
+                            st.info(
+                                "Este filtro de bodegas **solo aplica a SQL 003 (`auditoria_raw`)**. "
+                                "SQL 001 y SQL 002 se cargan completas. Los scripts 01, 02 y 03 no se afectan."
+                            )
                 actualizar = st.button("Ejecutar actualización", type="primary", width="stretch")
         with control_cols[1]:
             mostrar_log = st.checkbox("Ver log de ejecución", value=False)
@@ -1066,15 +1266,15 @@ def _render_header_y_actualizacion() -> None:
         return
 
     if forzar_actualizar:
-        st.info("Modo forzado activo: se ejecutará también la carga SQL 00_* para reconstruir `margen_siesa_raw`.")
+        st.info("Modo forzado activo: se ejecutarán también las consultas SQL 00 seleccionadas.")
 
     st.session_state["_actualizando"] = True
-    st.session_state["_log_visible"] = bool(mostrar_log)
+    st.session_state["_log_visible"] = True
     st.session_state["_log_text"] = "Iniciando..."
     st.session_state["_log_status"] = " - Ejecución en curso"
     panel_logs = st.empty()
     log_placeholder = None
-    if st.session_state["_log_visible"]:
+    if mostrar_log:
         log_live = panel_logs.container()
         with log_live:
             st.markdown("**Ejecución en curso**")
@@ -1088,17 +1288,24 @@ def _render_header_y_actualizacion() -> None:
 
     ok = False
     try:
-        ejecutar_sql = SQL_OPCION in seleccion
+        _sql_opcion_map = {
+            SQL_001_OPCION: SQL_001_KEY,
+            SQL_002_OPCION: SQL_002_KEY,
+            SQL_003_OPCION: SQL_003_KEY,
+        }
+        sql_keys_sel = [_sql_opcion_map[op] for op in SQL_OPCIONES if op in seleccion]
+        ejecutar_sql = len(sql_keys_sel) > 0
         pipelines_seleccionados = [p for p in PIPELINE_OPCIONES if p in seleccion]
         bodegas_aud = None
-        if ejecutar_sql or forzar_actualizar:
+        if SQL_003_OPCION in seleccion or forzar_actualizar:
             bodegas_aud = list(st.session_state.get("auditoria_bodegas_sel") or [])
         with st.spinner("Ejecutando pipelines..."):
             ok, _ = ejecutar_pipelines(
-                log_callback=_on_log_update if mostrar_log else None,
+                log_callback=_on_log_update,
                 ejecutar_reportes_sql=(ejecutar_sql or forzar_actualizar),
                 pipelines_a_ejecutar=pipelines_seleccionados,
                 auditoria_bodegas=bodegas_aud,
+                sql_queries=sql_keys_sel if sql_keys_sel else None,
             )
     finally:
         st.session_state["_actualizando"] = False
@@ -1112,8 +1319,7 @@ def _render_header_y_actualizacion() -> None:
     except Exception as exc:
         sync_error = str(exc)
 
-    if st.session_state["_log_visible"]:
-        st.session_state["_log_status"] = " - Proceso exitoso" if ok else " - Proceso con errores"
+    st.session_state["_log_status"] = " - Proceso exitoso" if ok else " - Proceso con errores"
     if ok:
         st.success("Pipelines ejecutados correctamente.")
     else:
@@ -1130,11 +1336,7 @@ def _render_tab_consulta() -> None:
         st.info("Consultas pausadas mientras termina la actualización. Puedes cambiar entre pestañas libremente.")
         return
 
-    hb, hr = st.columns([4, 1], gap="small")
-    with hb:
-        st.markdown('<div class="section-title">Búsqueda</div>', unsafe_allow_html=True)
-    with hr:
-        render_reset_filters_button("consulta")
+    st.markdown('<div class="section-title">Búsqueda</div>', unsafe_allow_html=True)
 
     texto_busqueda = st.text_input(
         "Referencia principal, alterna, normalizada o texto en descripción",
@@ -1190,37 +1392,68 @@ def _render_tab_consulta() -> None:
     refs_alternas = str(resumen.get("RefsAlternas", "") or "").strip()
     ref_original = str(resumen.get("Referencia_Original", "") or "").strip().upper()
 
-    top_info_left, top_info_right = st.columns([2, 1], gap="large")
-    with top_info_left:
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Referencia", str(resumen.get("Referencia_Original", "-")))
-        col2.metric(
-            "Precio prorrateo",
-            f"{resumen.get('Precio Prorrateo', 0):,.2f}"
-            if resumen.get("Precio Prorrateo") is not None
-            else "-",
-        )
-        col3.metric("Disponibilidad total", f"{resumen.get('_disp_total', 0):,.2f}")
-        col4.metric("Disponible", resumen.get("_disponible", "NO"))
+    c1, c2, c3, c4 = st.columns(4, gap="small")
+    c1.metric("Referencia", str(resumen.get("Referencia_Original", "-")))
+    c2.metric(
+        "Precio prorrateo",
+        f"{resumen.get('Precio Prorrateo', 0):,.2f}"
+        if resumen.get("Precio Prorrateo") is not None
+        else "-",
+    )
+    c3.metric("Disponibilidad total", f"{resumen.get('_disp_total', 0):,.2f}")
+    c4.metric("Disponible", resumen.get("_disponible", "NO"))
 
-    with top_info_right:
-        st.markdown('<div class="section-title">Referencias alternas</div>', unsafe_allow_html=True)
-        with st.container(border=True):
-            if refs_alternas:
-                refs = _parse_refs_alternas(refs_alternas)
-                if refs:
-                    chips_cols = st.columns(min(2, max(1, len(refs))))
-                    for idx, ref in enumerate(refs):
-                        is_selected = ref.upper() == ref_original
-                        with chips_cols[idx % len(chips_cols)]:
-                            label = "Principal" if is_selected else "Alterna"
-                            ref_txt = f":blue[**{ref}**]" if is_selected else ref
-                            st.caption(label)
-                            st.markdown(ref_txt)
-                else:
-                    st.caption("Sin alternas registradas.")
-            else:
-                st.caption("Sin alternas registradas.")
+    st.markdown('<div class="consulta-strip-gap"></div>', unsafe_allow_html=True)
+
+    if refs_alternas:
+        refs = _parse_refs_alternas(refs_alternas)
+        if refs:
+            total_alt = len(refs)
+            refs_show = refs[:_CONSULTA_MAX_ALTERNAS]
+            chips_html: list[str] = []
+            for ref in refs_show:
+                is_selected = ref.upper() == ref_original
+                cls = "alt-chip selected" if is_selected else "alt-chip"
+                role = "Principal" if is_selected else "Alterna"
+                title_attr = html.escape(ref, quote=True)
+                chips_html.append(
+                    f'<div class="{cls}" title="{title_attr}">'
+                    f'<span class="alt-chip-role">{html.escape(role)}</span>'
+                    f'<span class="alt-chip-ref">{html.escape(ref)}</span>'
+                    f"</div>"
+                )
+            cap_extra = ""
+            if total_alt > _CONSULTA_MAX_ALTERNAS:
+                cap_extra = (
+                    f'<p class="alt-chip-note">Mostrando {_CONSULTA_MAX_ALTERNAS} de {total_alt} '
+                    "alternas registradas.</p>"
+                )
+            st.markdown(
+                '<div class="ui-card ui-card--tight">'
+                '<div class="ui-card-heading">Referencias alternas</div>'
+                '<div class="alt-chip-grid">'
+                + "".join(chips_html)
+                + "</div>"
+                + cap_extra
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div class="ui-card ui-card--tight">'
+                '<div class="ui-card-heading">Referencias alternas</div>'
+                '<p style="margin:0;color:#9ca3af;font-size:0.88rem;">Sin alternas registradas.</p>'
+                "</div>",
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown(
+            '<div class="ui-card ui-card--tight">'
+            '<div class="ui-card-heading">Referencias alternas</div>'
+            '<p style="margin:0;color:#9ca3af;font-size:0.88rem;">Sin alternas registradas.</p>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown('<div class="section-title">Mejor precio por origen</div>', unsafe_allow_html=True)
     candidatos = [
@@ -1239,41 +1472,41 @@ def _render_tab_consulta() -> None:
         best_price = min(precio for _, precio, _ in disponibles)
         mejores_origenes = {origen for origen, precio, _ in disponibles if precio == best_price}
 
-    cols_origen = st.columns(3)
-    for col, (origen, precio, disp) in zip(cols_origen, candidatos):
+    origin_cells: list[str] = []
+    for origen, precio, disp in candidatos:
         is_best_origin = origen in mejores_origenes
-        origen_txt = f"{flags.get(origen, '')} {origen}"
-        precio_txt = f"${precio:,.2f}" if precio is not None else "-"
-        disp_txt = f"{disp:,.2f}" if disp is not None else "-"
-        if is_best_origin:
-            origen_txt = f":green[**{origen_txt}**]"
-            precio_txt = f":green[**{precio_txt}**]"
-            disp_txt = f":green[**{disp_txt}**]"
-        with col:
-            with st.container(border=True):
-                st.markdown(origen_txt)
-                st.markdown(f"Precio: {precio_txt}")
-                st.markdown(f"Disponibilidad: {disp_txt}")
+        flag = flags.get(origen, "")
+        precio_s = f"${precio:,.2f}" if precio is not None else "—"
+        disp_s = f"{disp:,.2f}" if disp is not None else "—"
+        cls = "ui-card ui-card--tight ui-card--origin" + (" is-best" if is_best_origin else "")
+        pill_html = '<span class="ui-best-pill">Mejor precio</span>' if is_best_origin else ""
+        origin_cells.append(
+            f'<div class="{cls} ui-card--origin-row">'
+            f'<div><div class="ui-origin-name-line">'
+            f'<span class="ui-origin-name">{html.escape(flag)} {html.escape(origen)}</span>'
+            f"{pill_html}"
+            f"</div></div>"
+            f'<div class="ui-origin-col--px">{html.escape(precio_s)}</div>'
+            f'<div class="ui-origin-col--dp">'
+            f'<span class="ui-origin-disp-lbl">Disponibilidad</span>'
+            f'<span class="ui-origin-disp-val">{html.escape(disp_s)}</span>'
+            f"</div>"
+            f"</div>"
+        )
+    st.markdown(
+        f'<div class="origin-grid-unified">{"".join(origin_cells)}</div>',
+        unsafe_allow_html=True,
+    )
 
     if not mejores_origenes:
         st.info("Ningún origen tiene disponibilidad para recomendar precio.")
 
     st.markdown('<div class="section-title">Última compra registrada</div>', unsafe_allow_html=True)
-    compra_cols = st.columns(4)
-    compra_cols[0].metric("Fecha", str(resumen.get("Ult. Fecha Compra", "-")))
-    compra_cols[1].metric("Proveedor", str(resumen.get("Proveedor", "-")))
-    compra_cols[2].metric(
-        "Último valor (USD)",
-        f"{resumen.get('Último Valor (USD)', 0):,.2f}"
-        if resumen.get("Último Valor (USD)") is not None
-        else "-",
-    )
-    compra_cols[3].metric(
-        "Valor liq. (COP)",
-        f"{resumen.get('Valor Liq. (COP)', 0):,.2f}"
-        if resumen.get("Valor Liq. (COP)") is not None
-        else "-",
-    )
+    compra_cols = st.columns(4, gap="small")
+    compra_cols[0].metric("Fecha", _fmt_consulta_fecha(resumen.get("Ult. Fecha Compra")))
+    compra_cols[1].metric("Proveedor", _fmt_consulta_display(resumen.get("Proveedor")))
+    compra_cols[2].metric("Último valor (USD)", _fmt_consulta_money(resumen.get("Último Valor (USD)")))
+    compra_cols[3].metric("Valor liq. (COP)", _fmt_consulta_money(resumen.get("Valor Liq. (COP)")))
 
     try:
         ventas = obtener_ultimas_ventas(ref_norm, limite=20)
@@ -1399,7 +1632,7 @@ def _margen_ui_filtros_completos(df_margen: pd.DataFrame, margen_col: str, preci
             key="margen_precio_range",
             on_change=_sync_precio_from_slider,
         )
-        p1, p2 = st.columns(2)
+        p1, p2 = st.columns(2, gap="small")
         with p1:
             st.number_input(
                 f"Desde {precio_col}",
@@ -1455,7 +1688,7 @@ def _margen_ui_filtros_completos(df_margen: pd.DataFrame, margen_col: str, preci
             key="margen_exist_range",
             on_change=_sync_exist_from_slider,
         )
-        e1, e2 = st.columns(2)
+        e1, e2 = st.columns(2, gap="small")
         with e1:
             st.number_input(
                 "Desde Existencia",
@@ -1520,7 +1753,7 @@ def _margen_ui_filtros_completos(df_margen: pd.DataFrame, margen_col: str, preci
             key="margen_pct_range",
             on_change=_sync_margen_from_slider,
         )
-        m1, m2 = st.columns(2)
+        m1, m2 = st.columns(2, gap="small")
         with m1:
             st.number_input(
                 "Desde Margen %",
@@ -1703,14 +1936,15 @@ def _render_tab_margen() -> None:
                 return f"${v/1_000:,.1f} mil"
             return f"${v:,.0f}"
 
-        # UX compacto: una sola fila de KPIs para evitar tarjetas demasiado altas.
-        k1, k2, k3, k4, k5, k6 = st.columns(6)
-        k1.metric("Refs", f"{total_refs:,.0f}")
-        k2.metric("Inv", _fmt_short_money(valor_inventario))
-        k3.metric("Exist", f"{existencia_total:,.0f}")
-        k4.metric("Margen %", _to_percent_text(margen_total))
-        k5.metric("Margen $", _fmt_short_money(margen_nominal))
-        k6.metric("Costo Bodega", _fmt_short_money(costo_prom_bod))
+        # KPIs en 2×3: menos apretados en pantallas medianas y alturas más uniformes.
+        r1a, r1b, r1c = st.columns(3, gap="small")
+        r1a.metric("Refs", f"{total_refs:,.0f}")
+        r1b.metric("Inv", _fmt_short_money(valor_inventario))
+        r1c.metric("Exist", f"{existencia_total:,.0f}")
+        r2a, r2b, r2c = st.columns(3, gap="small")
+        r2a.metric("Margen %", _to_percent_text(margen_total))
+        r2b.metric("Margen $", _fmt_short_money(margen_nominal))
+        r2c.metric("Costo Bodega", _fmt_short_money(costo_prom_bod))
 
         subtabs = st.tabs(["Detalle filtrado", "Segmentación"])
         with subtabs[0]:
@@ -1791,10 +2025,14 @@ def _render_tab_margen() -> None:
 
             # Mantener dtypes numéricos para que el sort del grid sea numérico real.
             column_config: dict[str, st.column_config.Column] = {}
-            for col in ["Costo_Prom_Inst", "Valor_Inventario", "Precio_Lista_09", "Precio_Lista_04"]:
+            for col in ["Costo_Prom_Inst", "Valor_Inventario"]:
                 label = _label_negocio(col)
                 if label in df_show.columns:
                     column_config[label] = st.column_config.NumberColumn(label, format="$%,.0f")
+            for col in ["Precio_Lista_09", "Precio_Lista_04"]:
+                label = _label_negocio(col)
+                if label in df_show.columns:
+                    column_config[label] = st.column_config.NumberColumn(label, format="dollar")
             for col in ["Existencia", "Dias_Desde_Fecha_Max"]:
                 label = _label_negocio(col)
                 if label in df_show.columns:
@@ -1868,7 +2106,7 @@ def _render_tab_auditoria() -> None:
         st.warning(err)
 
     flags = audit.get("flags") or {}
-    f1, f2, f3, f4, f5 = st.columns(5)
+    f1, f2, f3, f4, f5 = st.columns(5, gap="small")
     f1.metric("Puente RPL/Alternas", "Sí" if flags.get("puente_rpl_alternas") else "No")
     f2.metric("Origen completo", "Sí" if flags.get("origen_tablero_completo") else "No")
     f3.metric("Tabla atributos", "Sí" if flags.get("tabla_atributos") else "No")
@@ -1929,6 +2167,44 @@ def _auditoria_color_discreto_semaforo(val: object) -> str:
     if s.startswith("SIN ") or s in ("SIN_DATO", ""):
         return "#64748b"
     return "#64748b"
+
+
+# Etiquetas de negocio para UI (evita "NO CRÍTICO": confuso y contiene "CRITICO" como subcadena).
+_SEMAFORO_NORM_A_UI: Final[dict[str, str]] = {
+    "CRITICO": "Crítico",
+    "MODERADO ALTO": "Moderado alto",
+    "MODERADO BAJO": "Moderado bajo",
+    "NO CRITICO": "Alineado",
+    "SIN_DATO": "Sin dato",
+}
+
+
+def _auditoria_etiqueta_semaforo_ui(val: object) -> str:
+    """Etiqueta legible para pantallas y gráficos (valor SQL → texto de negocio)."""
+    s = _auditoria_normalizar_etiqueta_semaforo(val)
+    if s.startswith("SIN ") or s in ("SIN_DATO", ""):
+        return "Sin dato"
+    if s in _SEMAFORO_NORM_A_UI:
+        return _SEMAFORO_NORM_A_UI[s]
+    return str(val).strip() if val is not None and str(val).strip() else "Sin dato"
+
+
+def _auditoria_color_discreto_semaforo_ui(val: object) -> str:
+    """Color cuando el dato ya es etiqueta UI o sigue siendo valor crudo SQL."""
+    s = str(val or "").strip()
+    inv = {v: k for k, v in _SEMAFORO_NORM_A_UI.items()}
+    if s in inv:
+        return _auditoria_color_discreto_semaforo(inv[s])
+    return _auditoria_color_discreto_semaforo(val)
+
+
+def _auditoria_df_map_semaforo_ui(df: pd.DataFrame, sem_col: str | None, alias_cols: dict[str, str]) -> None:
+    """Sustituye valores de semáforo por etiquetas UI en la columna ya renombrada (in-place)."""
+    if not sem_col:
+        return
+    disp = alias_cols.get(sem_col, sem_col)
+    if disp in df.columns:
+        df[disp] = df[disp].map(_auditoria_etiqueta_semaforo_ui)
 
 
 def _auditoria_inicializar_dataframe(df: pd.DataFrame) -> dict:
@@ -2064,8 +2340,10 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
                 options=sem_opts,
                 default=[],
                 key="aud_refs_sem_sel",
+                format_func=_auditoria_etiqueta_semaforo_ui,
                 help="Regla SQL sobre **alineación precio última compra vs costos extremos** (min/max) y cuartiles; "
-                "no es lo mismo que la variación penúltima→última compra.",
+                "no es lo mismo que la variación penúltima→última compra. "
+                "Las etiquetas muestran nombres de negocio (p. ej. **Alineado** en lugar de *NO CRÍTICO*).",
             )
         else:
             sem_sel = []
@@ -2126,7 +2404,7 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
                     key="aud_precio_range",
                     on_change=_sync_aud_precio_from_slider,
                 )
-                p1, p2 = st.columns(2)
+                p1, p2 = st.columns(2, gap="small")
                 with p1:
                     st.number_input(
                         f"Desde {precio_lista_col}",
@@ -2197,7 +2475,7 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
                     key="aud_exist_range",
                     on_change=_sync_aud_exist_from_slider,
                 )
-                e1, e2 = st.columns(2)
+                e1, e2 = st.columns(2, gap="small")
                 with e1:
                     st.number_input(
                         "Desde existencia",
@@ -2304,6 +2582,13 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
             st.caption("Sin datos de días entre compras.")
 
     with filtros10:
+        solo_significativas = st.checkbox(
+            "Solo variación fuerte (Eje 2)",
+            value=False,
+            key="aud_solo_significativas",
+            help="Filtra refs para tablas y Eje 2. El Eje 1 (Semáforo) siempre ve todas las refs.",
+        )
+        sliders_activos = solo_significativas
         u1, u2, u3 = st.columns(3, gap="medium")
         with u1:
             umbral_var_compra = st.slider(
@@ -2313,15 +2598,9 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
                 value=20.0,
                 step=1.0,
                 key="aud_umbral_var_compra",
-                help=(
-                    "Valor absoluto de variación % entre última y penúltima compra. "
-                    "**Cómo funciona con los demás filtros:** si activas 'Solo variación fuerte' "
-                    "y subes 'Umbral |Δ vs costo inv.|' al máximo (300 %), solo este umbral "
-                    "queda activo porque todas las refs pasan el umbral de costo. "
-                    "Combinaciones: (1) Ambos umbrales activos → refs que exceden *ambos*. "
-                    "(2) Solo Δ compra activo (costo al máx.) → filtra solo por variación de compra. "
-                    "(3) Solo Δ costo activo (compra al máx.) → filtra solo por desalineación vs inventario."
-                ),
+                disabled=not sliders_activos,
+                help="Valor absoluto de variación % entre última y penúltima compra. "
+                + ("Activo." if sliders_activos else "Desactivado — marca «Solo variación fuerte» para filtrar."),
             )
         with u2:
             umbral_var_costo = st.slider(
@@ -2331,14 +2610,31 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
                 value=15.0,
                 step=1.0,
                 key="aud_umbral_var_costo",
-                help="Variación % de última compra (COP×factor log.) frente a costo prom. inventario.",
+                disabled=not sliders_activos,
+                help="Variación % de última compra frente a costo prom. inventario. "
+                + ("Activo." if sliders_activos else "Desactivado — marca «Solo variación fuerte» para filtrar."),
             )
         with u3:
-            solo_significativas = st.checkbox(
-                "Solo variación fuerte",
-                value=True,
-                key="aud_solo_significativas",
-                help="Solo filas donde |Δ compra| ≥ umbral compra O |Δ vs costo| ≥ umbral costo.",
+            if not sliders_activos:
+                st.caption("Los umbrales no filtran.")
+            else:
+                st.caption("Filtran refs que superan al menos uno.")
+        with st.expander("¿Cómo funcionan los umbrales y el checkbox?", expanded=True):
+            st.markdown(
+                "**Los dos sliders** definen qué se considera \"variación fuerte\":\n\n"
+                "• **Umbral |Δ compra|** — Cambio % entre última y penúltima compra. "
+                "Ej: 20 % → refs cuyo precio de compra subió o bajó ≥20 % entre compras.\n\n"
+                "• **Umbral |Δ vs costo inv.|** — Desalineación entre precio de compra y costo prom. inventario. "
+                "Ej: 15 % → refs donde el precio se aleja ≥15 % del costo.\n\n"
+                "**El checkbox «Solo variación fuerte»:**\n\n"
+                "• **Marcado** — Aplica el filtro: solo ves refs que superan *al menos uno* de los umbrales. "
+                "Si una ref tiene |Δ compra| = 25 % y |Δ costo| = 5 %, pasa (supera el primero). "
+                "Si tiene 10 % y 8 %, no pasa (ninguno supera 20 % ni 15 %).\n\n"
+                "• **Desmarcado** — Los umbrales no filtran. Ves todas las refs (sliders grises, sin efecto).\n\n"
+                "**Eje 1 (Semáforo) siempre ve todas las refs**, sin importar este checkbox. "
+                "El filtro de umbrales solo afecta a las **tablas** y al **Eje 2 (Variación compra)**.\n\n"
+                "**Truco:** Subir un slider al máximo (300 %) lo desactiva — p. ej. costo al 300 % → "
+                "filtras solo por variación entre compras; compra al 300 % → solo por desalineación vs inventario."
             )
 
     with st.expander("Factores logísticos (última compra)", expanded=False):
@@ -2466,16 +2762,18 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
     else:
         df_fil["_abs_var_costo"] = pd.NA
 
+    df_base = df_fil.copy()
+
     if solo_significativas and not df_fil.empty:
         cond_compra = df_fil["_abs_var_compra"].fillna(-1) >= float(umbral_var_compra)
         cond_costo = df_fil["_abs_var_costo"].fillna(-1) >= float(umbral_var_costo)
         df_fil = df_fil[cond_compra | cond_costo]
 
-    if df_fil.empty:
+    if df_base.empty:
         st.info("No hay registros con los filtros actuales.")
         save_tab_filter_prefs("auditoria_refs")
-        return None
-    return df_fil
+        return None, None
+    return df_fil, df_base
 
 
 def _render_tab_auditoria_referencias() -> None:
@@ -2492,16 +2790,17 @@ def _render_tab_auditoria_referencias() -> None:
     if df.empty:
         st.info(
             "No hay filas en `auditoria_raw`. En **Actualizar datos** elige modo **Completa** "
-            "(o **Personalizada** e incluye **SQL 00_***). Luego vuelve a abrir esta pestaña o pulsa **Rerun**."
+            "(o **Personalizada** e incluye **SQL 003 — Auditoría**). Luego vuelve a abrir esta pestaña o pulsa **Rerun**."
         )
         return
 
     st.markdown("#### Auditoría referencias")
 
     ctx = _auditoria_inicializar_dataframe(df)
-    df_fil = _auditoria_ui_filtros_y_df_filtrado(ctx)
-    if df_fil is None:
+    _result = _auditoria_ui_filtros_y_df_filtrado(ctx)
+    if _result is None or _result[0] is None:
         return
+    df_fil, df_base = _result
     lower_map = ctx["lower_map"]
     ref_col = ctx["ref_col"]
     sem_col = ctx["sem_col"]
@@ -2540,7 +2839,7 @@ def _render_tab_auditoria_referencias() -> None:
         "(mín./máx. por referencia), con reglas sobre `ABSVar_Costo` / `ABSVar_Costo_Pct` y cuartiles globales en SQL. "
         "Es **distinto** de «subió mucho entre penúltima y última compra» (usa `Var_PrecioCOP` y los umbrales |Δ compra| arriba)."
     )
-    k1, k2, k3, k4, k5 = st.columns(5)
+    k1, k2, k3, k4, k5 = st.columns(5, gap="small")
     k1.metric(
         "Refs. distintas",
         f"{total_refs:,.0f}",
@@ -2549,7 +2848,7 @@ def _render_tab_auditoria_referencias() -> None:
     k2.metric(
         "Semáforo crítico",
         f"{criticos:,.0f}",
-        help="Filas con categoría exacta **CRÍTICO** en `Semaforo_Variacion` (no cuenta *NO CRÍTICO*). "
+        help="Filas con categoría **Crítico** en datos (SQL: CRÍTICO). No confunde con **Alineado** (SQL: NO CRÍTICO). "
         "El semáforo refleja alineación última compra vs costos extremos; ver texto aclaratorio arriba.",
     )
     k3.metric(
@@ -2580,268 +2879,290 @@ def _render_tab_auditoria_referencias() -> None:
     # Vista única ordenada por riesgo (reutilizada en táctica y operativa).
     df_vista = df_fil.sort_values("_score_alerta", ascending=False)
 
-    subtabs = st.tabs(
-        ["Vista estratégica", "Vista táctica", "Vista operativa", "Segmentación",
-         "Semáforo — alineación vs costos", "Variación compra — última vs penúltima"]
-    )
-    with subtabs[0]:
-        st.markdown("##### Vista estratégica — identificar y priorizar")
-        st.caption(
-            "**Objetivo:** localizar referencias con **dos tipos de problema de precio**: (1) salto entre **última y penúltima** compra, "
-            "(2) desalineación de la **última compra** frente al **costo prom. inventario**. "
-            "El **score** combina ambos (ver ayuda en columna). **Top N** por score descendente."
+    aud_tab_pri, aud_tab_graf = st.tabs(["Vista principal", "Reporte gráfico"])
+    with aud_tab_pri:
+        subtabs = st.tabs(
+            ["Vista estratégica", "Vista táctica", "Vista operativa", "Segmentación"]
         )
-        top_n = st.number_input(
-            "Top N",
-            min_value=10,
-            max_value=300,
-            value=50,
-            step=10,
-            key="aud_refs_top_n",
-        )
-        ref_alt_col = lower_map.get("referencias_alternas")
-        precio_lista_col = lower_map.get("precio_lista_09")
-        costo_min_c = lower_map.get("costo_min")
-        costo_max_c = lower_map.get("costo_max")
-        ex_int_c = lower_map.get("existencia_intermedio")
-        ex_tot_resumen = (
-            lower_map.get("existencia_total")
-            if lower_map.get("existencia_total") in df_fil.columns
-            else (
-                "_Existencia_suma_niveles"
-                if "_Existencia_suma_niveles" in df_fil.columns
-                else None
+        with subtabs[0]:
+            st.markdown("##### Vista estratégica — identificar y priorizar")
+            st.caption(
+                "**Objetivo:** localizar referencias con **dos tipos de problema de precio**: (1) salto entre **última y penúltima** compra, "
+                "(2) desalineación de la **última compra** frente al **costo prom. inventario**. "
+                "El **score** combina ambos (ver ayuda en columna). **Top N** por score descendente."
             )
-        )
-        costo_int_c = lower_map.get("costo_intermedio")
-        vpc_sql = lower_map.get("var_preciocop")
-        vusd_sql = lower_map.get("var_preciousd")
-        # Vista estratégica: identificar → priorizar (score) → problema 1 (última vs penúltima) → problema 2 (vs costo inv.) → magnitud.
-        cols_resumen = _auditoria_columns_in_order(
-            df_fil,
+            top_n = st.number_input(
+                "Top N",
+                min_value=10,
+                max_value=300,
+                value=50,
+                step=10,
+                key="aud_refs_top_n",
+            )
+            ref_alt_col = lower_map.get("referencias_alternas")
+            precio_lista_col = lower_map.get("precio_lista_09")
+            costo_min_c = lower_map.get("costo_min")
+            costo_max_c = lower_map.get("costo_max")
+            ex_int_c = lower_map.get("existencia_intermedio")
+            ex_tot_resumen = (
+                lower_map.get("existencia_total")
+                if lower_map.get("existencia_total") in df_fil.columns
+                else (
+                    "_Existencia_suma_niveles"
+                    if "_Existencia_suma_niveles" in df_fil.columns
+                    else None
+                )
+            )
+            costo_int_c = lower_map.get("costo_intermedio")
+            vpc_sql = lower_map.get("var_preciocop")
+            vusd_sql = lower_map.get("var_preciousd")
+            # Vista estratégica: identificar → priorizar (score) → problema 1 (última vs penúltima) → problema 2 (vs costo inv.) → magnitud.
+            cols_resumen = _auditoria_columns_in_order(
+                df_fil,
+                [
+                    ref_col,
+                    ref_alt_col,
+                    desc_col,
+                    sem_col,
+                    "_score_alerta",
+                    dias_col,
+                    var_compra_col,
+                    vusd_sql if vusd_sql and vusd_sql != var_compra_col else None,
+                    vpc_sql if vpc_sql and vpc_sql != var_compra_col else None,
+                    "_abs_var_compra",
+                    costo_inv_col,
+                    lower_map.get("absvar_costo_pct"),
+                    "_abs_var_costo",
+                    lower_map.get("var_costomin_preciocop"),
+                    precio_lista_col,
+                    ex_tot_resumen,
+                    costo_min_c,
+                    costo_int_c,
+                    costo_max_c,
+                    ex_int_c,
+                    sistema_precio_col,
+                    modelo_col,
+                    lower_map.get("margen_objetivo_sistema"),
+                ],
+            )
+            df_top = df_fil.sort_values("_score_alerta", ascending=False).head(int(top_n))[cols_resumen].copy()
+            df_top = _auditoria_coerce_display_dtypes(df_top)
+            df_top = df_top.rename(columns=alias_cols)
+            df_top = _hacer_columnas_unicas(df_top)
+            _auditoria_df_map_semaforo_ui(df_top, sem_col, alias_cols)
+            top_config = _auditoria_build_column_config(
+                [c for c in cols_resumen if c in df_fil.columns],
+                alias_cols,
+            )
+            top_config = {k: v for k, v in top_config.items() if k in df_top.columns}
+    
+            st.caption(
+                "**Orden:** identificación → **score** → **problema 1** (días, var. precios entre compras, |Δ compra|) → "
+                "**problema 2** (costo prom. inv., var. vs costo SQL, |Δ vs costo|) → magnitud (lista, stock, costos) → contexto."
+            )
+            st.dataframe(
+                df_top,
+                width="stretch",
+                height=420,
+                hide_index=True,
+                column_config=top_config,
+            )
+    
+        with subtabs[1]:
+            st.markdown("##### Vista táctica — diagnosticar cada referencia")
+            st.caption(
+                "**Una fila = una referencia**, todas las columnas. **Orden de lectura:** identificación → **semáforo** → "
+                "**Δ última vs penúltima** (días, var. USD/COP/TRM) → **costo prom. inv.** → **Δ vs costo** (SQL) → "
+                "contexto (costos bodega, stock, lista) → **evidencia** (fechas y precios última/penúltima compra) → "
+                "**ajustes app** (factor logístico, precios COP ajustados, |Δ| y score)."
+            )
+            orden_cols = _auditoria_column_order_full(df_vista, lower_map, costo_inv_col)
+            df_full = df_vista[orden_cols].copy()
+            df_full = _auditoria_coerce_display_dtypes(df_full)
+            df_full = df_full.rename(columns=alias_cols)
+            df_full = _hacer_columnas_unicas(df_full)
+            _auditoria_df_map_semaforo_ui(df_full, sem_col, alias_cols)
+            cfg_full = _auditoria_build_column_config(orden_cols, alias_cols)
+            cfg_full = {k: v for k, v in cfg_full.items() if k in df_full.columns}
+            st.dataframe(
+                df_full,
+                width="stretch",
+                height=680,
+                hide_index=True,
+                column_config=cfg_full,
+            )
+    
+        with subtabs[2]:
+            st.markdown("##### Vista operativa — revisar y exportar")
+            st.caption(
+                "**Misma priorización** que arriba, en **bloques** (menos scroll horizontal): primero **semáforo y score**, "
+                "luego **problema 1** y **problema 2**, después contexto y evidencia de compras, y factores logísticos. "
+                "Al final, **CSV** del slice para Excel u operaciones."
+            )
+            st.markdown("**Lectura por bloques**")
+            st.caption(
+                "En **cada bloque**, las primeras columnas son siempre **Ref.**, **Refs alternas** y **Descripción** (cuando existan en datos). "
+                "Luego el resto del bloque: prioridad → variación entre compras → vs inventario → negocio → comprobantes → ajuste COP."
+            )
+            bloques = _auditoria_vista_bloques(lower_map)
+            ref_alt_col = lower_map.get("referencias_alternas")
+            for bi, (titulo, keys) in enumerate(bloques):
+                cols_b: list[str] = []
+                for ky in keys:
+                    if ky == "_existencia_suma_niveles":
+                        coln = "_Existencia_suma_niveles"
+                    else:
+                        coln = lower_map.get(ky)
+                    if coln and coln in df_vista.columns and coln not in cols_b:
+                        cols_b.append(coln)
+                # Cada tabla operativa: Ref + Refs alternas + Descripción al inicio (contexto fijo).
+                id_parts = [c for c in (ref_col, ref_alt_col, desc_col) if c and c in df_vista.columns]
+                p2_front: list[str] = []
+                if titulo.startswith("Problema 2") and costo_inv_col and costo_inv_col in df_vista.columns:
+                    p2_front = [costo_inv_col]
+                body = [c for c in cols_b if c not in id_parts and c not in p2_front]
+                cols_b = id_parts + p2_front + body
+                if not cols_b:
+                    continue
+                df_b = df_vista[cols_b].copy()
+                df_b = _auditoria_coerce_display_dtypes(df_b)
+                df_b = df_b.rename(columns=alias_cols)
+                df_b = _hacer_columnas_unicas(df_b)
+                _auditoria_df_map_semaforo_ui(df_b, sem_col, alias_cols)
+                cfg_b = _auditoria_build_column_config(cols_b, alias_cols)
+                cfg_b = {k: v for k, v in cfg_b.items() if k in df_b.columns}
+                st.markdown(f"**{titulo}**")
+                st.dataframe(
+                    df_b,
+                    width="stretch",
+                    height=320,
+                    hide_index=True,
+                    column_config=cfg_b,
+                )
+                if bi < len(bloques) - 1:
+                    st.divider()
+    
+            st.divider()
+            st.markdown("##### Exportar")
+            st.caption("Descarga el conjunto **filtrado** con columnas en orden BI (UTF-8 con BOM para Excel).")
+            cols_exp = _auditoria_column_order_full(df_vista, lower_map, costo_inv_col)
+            df_exp = df_vista[cols_exp].copy()
+            df_exp = _auditoria_coerce_display_dtypes(df_exp)
+            df_exp = df_exp.rename(columns=alias_cols)
+            df_exp = _hacer_columnas_unicas(df_exp)
+            _auditoria_df_map_semaforo_ui(df_exp, sem_col, alias_cols)
+            buf = io.StringIO()
+            df_exp.to_csv(buf, index=False, encoding="utf-8-sig")
+            st.download_button(
+                label="Descargar CSV",
+                data=buf.getvalue(),
+                file_name="auditoria_referencias_filtrada.csv",
+                mime="text/csv; charset=utf-8",
+                type="primary",
+                key="aud_refs_download_csv",
+            )
+            st.metric("Filas a exportar", f"{len(df_exp):,}")
+            st.caption(f"Columnas: **{len(df_exp.columns)}**")
+    
+        with subtabs[3]:
+            st.markdown("##### Segmentación — dónde se concentran los problemas")
+            st.caption(
+                "**Corte transversal** del mismo filtro: agrupa por semáforo, sistema o modelo para ver **en qué segmentos** "
+                "hay más filas afectadas y **mayor score máximo** (prioridad de revisión por categoría)."
+            )
+            dims = [c for c in [sem_col, sistema_precio_col, modelo_col] if c]
+            if not dims:
+                st.caption("No hay dimensiones disponibles para segmentar.")
+            else:
+                d1, d2 = st.columns([2, 1], gap="large")
+                with d1:
+                    dim_sel = st.selectbox("Dimensión", options=dims)
+                with d2:
+                    top_seg = st.number_input(
+                        "Top grupos",
+                        min_value=5,
+                        max_value=50,
+                        value=15,
+                        step=5,
+                        key="aud_refs_top_grupos",
+                    )
+                df_seg = df_fil.copy()
+                df_seg[dim_sel] = df_seg[dim_sel].fillna("SIN_DATO").astype(str)
+                agg = (
+                    df_seg.groupby(dim_sel, dropna=False)
+                    .agg(
+                        Registros=(dim_sel, "count"),
+                        Referencias=(ref_col, "nunique") if ref_col else (dim_sel, "count"),
+                        Promedio_variacion_abs_compra_pct=("_abs_var_compra", "mean"),
+                        Promedio_variacion_abs_vs_costo_pct=("_abs_var_costo", "mean"),
+                        Score_alerta_maximo=("_score_alerta", "max"),
+                    )
+                    .reset_index()
+                    .sort_values(by="Score_alerta_maximo", ascending=False)
+                    .head(int(top_seg))
+                )
+                # Orden: dimensión → volumen → riesgo (score máx.) → intensidad media de variaciones.
+                _seg_order = [
+                    dim_sel,
+                    "Registros",
+                    "Referencias",
+                    "Score_alerta_maximo",
+                    "Promedio_variacion_abs_compra_pct",
+                    "Promedio_variacion_abs_vs_costo_pct",
+                ]
+                agg = agg[[c for c in _seg_order if c in agg.columns]]
+                if sem_col and dim_sel == sem_col:
+                    agg[dim_sel] = agg[dim_sel].map(_auditoria_etiqueta_semaforo_ui)
+                st.dataframe(
+                    agg,
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        dim_sel: st.column_config.TextColumn(_label_negocio(dim_sel), width="medium"),
+                        "Registros": st.column_config.NumberColumn("Registros (filas)", format="%,d"),
+                        "Referencias": st.column_config.NumberColumn("Referencias únicas", format="%,d"),
+                        "Score_alerta_maximo": st.column_config.NumberColumn("Score alerta máx.", format="%.2f"),
+                        "Promedio_variacion_abs_compra_pct": st.column_config.NumberColumn(
+                            "Prom. |Δ compra| (%)", format="%.2f%%"
+                        ),
+                        "Promedio_variacion_abs_vs_costo_pct": st.column_config.NumberColumn(
+                            "Prom. |Δ vs costo| (%)", format="%.2f%%"
+                        ),
+                    },
+                )
+
+    with aud_tab_graf:
+        st.markdown("##### Reporte gráfico")
+        graf_subtabs = st.tabs(
             [
-                ref_col,
-                ref_alt_col,
-                desc_col,
-                sem_col,
-                "_score_alerta",
-                dias_col,
-                var_compra_col,
-                vusd_sql if vusd_sql and vusd_sql != var_compra_col else None,
-                vpc_sql if vpc_sql and vpc_sql != var_compra_col else None,
-                "_abs_var_compra",
-                costo_inv_col,
-                lower_map.get("absvar_costo_pct"),
-                "_abs_var_costo",
-                lower_map.get("var_costomin_preciocop"),
-                precio_lista_col,
-                ex_tot_resumen,
-                costo_min_c,
-                costo_int_c,
-                costo_max_c,
-                ex_int_c,
-                sistema_precio_col,
-                modelo_col,
-                lower_map.get("margen_objetivo_sistema"),
-            ],
-        )
-        df_top = df_fil.sort_values("_score_alerta", ascending=False).head(int(top_n))[cols_resumen].copy()
-        df_top = _auditoria_coerce_display_dtypes(df_top)
-        df_top = df_top.rename(columns=alias_cols)
-        df_top = _hacer_columnas_unicas(df_top)
-        top_config = _auditoria_build_column_config(
-            [c for c in cols_resumen if c in df_fil.columns],
-            alias_cols,
-        )
-        top_config = {k: v for k, v in top_config.items() if k in df_top.columns}
-
-        st.caption(
-            "**Orden:** identificación → **score** → **problema 1** (días, var. precios entre compras, |Δ compra|) → "
-            "**problema 2** (costo prom. inv., var. vs costo SQL, |Δ vs costo|) → magnitud (lista, stock, costos) → contexto."
-        )
-        st.dataframe(
-            df_top,
-            width="stretch",
-            height=420,
-            hide_index=True,
-            column_config=top_config,
-        )
-
-    with subtabs[1]:
-        st.markdown("##### Vista táctica — diagnosticar cada referencia")
-        st.caption(
-            "**Una fila = una referencia**, todas las columnas. **Orden de lectura:** identificación → **semáforo** → "
-            "**Δ última vs penúltima** (días, var. USD/COP/TRM) → **costo prom. inv.** → **Δ vs costo** (SQL) → "
-            "contexto (costos bodega, stock, lista) → **evidencia** (fechas y precios última/penúltima compra) → "
-            "**ajustes app** (factor logístico, precios COP ajustados, |Δ| y score)."
-        )
-        orden_cols = _auditoria_column_order_full(df_vista, lower_map, costo_inv_col)
-        df_full = df_vista[orden_cols].copy()
-        df_full = _auditoria_coerce_display_dtypes(df_full)
-        df_full = df_full.rename(columns=alias_cols)
-        df_full = _hacer_columnas_unicas(df_full)
-        cfg_full = _auditoria_build_column_config(orden_cols, alias_cols)
-        cfg_full = {k: v for k, v in cfg_full.items() if k in df_full.columns}
-        st.dataframe(
-            df_full,
-            width="stretch",
-            height=680,
-            hide_index=True,
-            column_config=cfg_full,
-        )
-
-    with subtabs[2]:
-        st.markdown("##### Vista operativa — revisar y exportar")
-        st.caption(
-            "**Misma priorización** que arriba, en **bloques** (menos scroll horizontal): primero **semáforo y score**, "
-            "luego **problema 1** y **problema 2**, después contexto y evidencia de compras, y factores logísticos. "
-            "Al final, **CSV** del slice para Excel u operaciones."
-        )
-        st.markdown("**Lectura por bloques**")
-        st.caption(
-            "En **cada bloque**, las primeras columnas son siempre **Ref.**, **Refs alternas** y **Descripción** (cuando existan en datos). "
-            "Luego el resto del bloque: prioridad → variación entre compras → vs inventario → negocio → comprobantes → ajuste COP."
-        )
-        bloques = _auditoria_vista_bloques(lower_map)
-        ref_alt_col = lower_map.get("referencias_alternas")
-        for bi, (titulo, keys) in enumerate(bloques):
-            cols_b: list[str] = []
-            for ky in keys:
-                if ky == "_existencia_suma_niveles":
-                    coln = "_Existencia_suma_niveles"
-                else:
-                    coln = lower_map.get(ky)
-                if coln and coln in df_vista.columns and coln not in cols_b:
-                    cols_b.append(coln)
-            # Cada tabla operativa: Ref + Refs alternas + Descripción al inicio (contexto fijo).
-            id_parts = [c for c in (ref_col, ref_alt_col, desc_col) if c and c in df_vista.columns]
-            p2_front: list[str] = []
-            if titulo.startswith("Problema 2") and costo_inv_col and costo_inv_col in df_vista.columns:
-                p2_front = [costo_inv_col]
-            body = [c for c in cols_b if c not in id_parts and c not in p2_front]
-            cols_b = id_parts + p2_front + body
-            if not cols_b:
-                continue
-            df_b = df_vista[cols_b].copy()
-            df_b = _auditoria_coerce_display_dtypes(df_b)
-            df_b = df_b.rename(columns=alias_cols)
-            df_b = _hacer_columnas_unicas(df_b)
-            cfg_b = _auditoria_build_column_config(cols_b, alias_cols)
-            cfg_b = {k: v for k, v in cfg_b.items() if k in df_b.columns}
-            st.markdown(f"**{titulo}**")
-            st.dataframe(
-                df_b,
-                width="stretch",
-                height=320,
-                hide_index=True,
-                column_config=cfg_b,
-            )
-            if bi < len(bloques) - 1:
-                st.divider()
-
-        st.divider()
-        st.markdown("##### Exportar")
-        st.caption("Descarga el conjunto **filtrado** con columnas en orden BI (UTF-8 con BOM para Excel).")
-        cols_exp = _auditoria_column_order_full(df_vista, lower_map, costo_inv_col)
-        df_exp = df_vista[cols_exp].copy()
-        df_exp = _auditoria_coerce_display_dtypes(df_exp)
-        df_exp = df_exp.rename(columns=alias_cols)
-        df_exp = _hacer_columnas_unicas(df_exp)
-        buf = io.StringIO()
-        df_exp.to_csv(buf, index=False, encoding="utf-8-sig")
-        st.download_button(
-            label="Descargar CSV",
-            data=buf.getvalue(),
-            file_name="auditoria_referencias_filtrada.csv",
-            mime="text/csv; charset=utf-8",
-            type="primary",
-            key="aud_refs_download_csv",
-        )
-        st.metric("Filas a exportar", f"{len(df_exp):,}")
-        st.caption(f"Columnas: **{len(df_exp.columns)}**")
-
-    with subtabs[3]:
-        st.markdown("##### Segmentación — dónde se concentran los problemas")
-        st.caption(
-            "**Corte transversal** del mismo filtro: agrupa por semáforo, sistema o modelo para ver **en qué segmentos** "
-            "hay más filas afectadas y **mayor score máximo** (prioridad de revisión por categoría)."
-        )
-        dims = [c for c in [sem_col, sistema_precio_col, modelo_col] if c]
-        if not dims:
-            st.caption("No hay dimensiones disponibles para segmentar.")
-        else:
-            d1, d2 = st.columns([2, 1], gap="large")
-            with d1:
-                dim_sel = st.selectbox("Dimensión", options=dims)
-            with d2:
-                top_seg = st.number_input(
-                    "Top grupos",
-                    min_value=5,
-                    max_value=50,
-                    value=15,
-                    step=5,
-                    key="aud_refs_top_grupos",
-                )
-            df_seg = df_fil.copy()
-            df_seg[dim_sel] = df_seg[dim_sel].fillna("SIN_DATO").astype(str)
-            agg = (
-                df_seg.groupby(dim_sel, dropna=False)
-                .agg(
-                    Registros=(dim_sel, "count"),
-                    Referencias=(ref_col, "nunique") if ref_col else (dim_sel, "count"),
-                    Promedio_variacion_abs_compra_pct=("_abs_var_compra", "mean"),
-                    Promedio_variacion_abs_vs_costo_pct=("_abs_var_costo", "mean"),
-                    Score_alerta_maximo=("_score_alerta", "max"),
-                )
-                .reset_index()
-                .sort_values(by="Score_alerta_maximo", ascending=False)
-                .head(int(top_seg))
-            )
-            # Orden: dimensión → volumen → riesgo (score máx.) → intensidad media de variaciones.
-            _seg_order = [
-                dim_sel,
-                "Registros",
-                "Referencias",
-                "Score_alerta_maximo",
-                "Promedio_variacion_abs_compra_pct",
-                "Promedio_variacion_abs_vs_costo_pct",
+                "Eje 1 — Semáforo (alineación vs costos)",
+                "Eje 2 — Variación compra (última vs penúltima)",
             ]
-            agg = agg[[c for c in _seg_order if c in agg.columns]]
-            st.dataframe(
-                agg,
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    dim_sel: st.column_config.TextColumn(_label_negocio(dim_sel), width="medium"),
-                    "Registros": st.column_config.NumberColumn("Registros (filas)", format="%,d"),
-                    "Referencias": st.column_config.NumberColumn("Referencias únicas", format="%,d"),
-                    "Score_alerta_maximo": st.column_config.NumberColumn("Score alerta máx.", format="%.2f"),
-                    "Promedio_variacion_abs_compra_pct": st.column_config.NumberColumn(
-                        "Prom. |Δ compra| (%)", format="%.2f%%"
-                    ),
-                    "Promedio_variacion_abs_vs_costo_pct": st.column_config.NumberColumn(
-                        "Prom. |Δ vs costo| (%)", format="%.2f%%"
-                    ),
-                },
         )
-
-    with subtabs[4]:
-        st.markdown("##### Semáforo — alineación precio compra vs costos extremos")
-        st.caption(
-            "El **semáforo** (`Semaforo_Variacion`) mide la alineación de la **última compra** "
-            "frente a los costos mín./máx. del inventario (`ABSVar_Costo` / `ABSVar_Costo_Pct` en SQL). "
-            "Estos gráficos se enfocan en ese eje de riesgo."
-        )
-        _auditoria_charts_semaforo(df_fil, ctx)
-
-    with subtabs[5]:
-        st.markdown("##### Variación de compra — última vs penúltima")
-        st.caption(
-            "Foco en el **cambio de precio entre la última y la penúltima compra**: "
-            "magnitud, dirección, temporalidad y concentración por proveedor/sistema. "
-            "Candidatos prioritarios a revisión de precios y alerta a cadena de abastecimiento."
-        )
-        _auditoria_charts_variacion_compra(df_fil, ctx)
+        with graf_subtabs[0]:
+            st.caption(
+                f"Todas las refs filtradas ({len(df_base):,}) — **sin** filtro de umbrales. "
+                "El semáforo evalúa la distribución completa."
+            )
+            _auditoria_charts_semaforo_st(df_base, ctx)
+        with graf_subtabs[1]:
+            if df_fil.empty:
+                st.info("No hay refs que superen los umbrales. Ajusta los sliders o desmarca «Solo variación fuerte».")
+            else:
+                solo_activo = bool(st.session_state.get("aud_solo_significativas", False))
+                if solo_activo:
+                    st.caption(
+                        f"**{len(df_fil):,}** refs que superan al menos un umbral "
+                        f"(|Δ compra| ≥ {float(st.session_state.get('aud_umbral_var_compra', 20)):.0f}% "
+                        f"o |Δ costo| ≥ {float(st.session_state.get('aud_umbral_var_costo', 15)):.0f}%) "
+                        f"de {len(df_base):,} filtradas."
+                    )
+                else:
+                    st.caption(
+                        f"Todas las refs filtradas ({len(df_fil):,}) — «Solo variación fuerte» desactivado. "
+                        "Actívalo para enfocarte en refs con saltos de precio."
+                    )
+                _auditoria_charts_variacion_st(df_fil, ctx)
 
     save_tab_filter_prefs("auditoria_refs")
 
@@ -2912,7 +3233,7 @@ def _plotly_show(fig) -> None:
 
 
 def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) -> None:
-    """Gráficos analíticos avanzados sobre `df` ya filtrado (subpestaña **Reporte gráfico**)."""
+    """Reporte gráfico storytelling: panorama → concentración → relaciones → segmentos → anomalías."""
     if not _HAS_PLOTLY or px is None:
         st.warning("Instala **Plotly** para ver gráficos: `pip install plotly` (mismo venv que Streamlit).")
         return
@@ -2928,8 +3249,52 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
     else:
         df_sc = df
 
-    # ── 1. Distribución con zona de riesgo ──────────────────────────────
-    st.markdown("#### Diagnóstico de distribución y zonas de riesgo")
+    BANDS = [(-9999, 15, "Crítico < 15 %", "#ef4444"),
+             (15, 30, "Sospechoso 15–30 %", "#f59e0b"),
+             (30, 50, "Normal 30–50 %", "#22c55e"),
+             (50, 60, "Alto sospechoso 50–60 %", "#f97316"),
+             (60, 9999, "Muy alto > 60 %", "#dc2626")]
+    BAND_LABELS = [b[2] for b in BANDS]
+    BAND_COLORS = {b[2]: b[3] for b in BANDS}
+
+    def _classify_band(m: float) -> str:
+        for lo, hi, label, _ in BANDS:
+            if lo <= m < hi:
+                return label
+        return BAND_LABELS[-1]
+
+    df_b = df.copy()
+    df_b["_banda"] = df_b[margen_col].apply(_classify_band)
+    df_b["_banda"] = pd.Categorical(df_b["_banda"], categories=BAND_LABELS, ordered=True)
+    if existencia_col and "Costo_Prom_Inst" in df_b.columns:
+        df_b["_val_inv"] = df_b["Costo_Prom_Inst"].fillna(0) * df_b[existencia_col].fillna(0)
+    else:
+        df_b["_val_inv"] = 0.0
+
+    # ════════════════════════════════════════════════════════════════════
+    #  CAP 1 — Panorama: ¿cómo se distribuyen los márgenes?
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown("### 1 · Panorama — ¿cómo se distribuyen los márgenes?")
+    st.caption(
+        "La **forma de la distribución** revela de inmediato si el portafolio está sano "
+        "(concentrado en la banda normal 30-50 %) o si hay colas pesadas en zonas de riesgo. "
+        "Los **indicadores por banda** cuantifican el volumen de cada zona."
+    )
+
+    band_counts = df_b["_banda"].value_counts().reindex(BAND_LABELS, fill_value=0)
+    total = max(int(band_counts.sum()), 1)
+    kpi_cols = st.columns(len(BANDS), gap="small")
+    for i, (_, _, label, color) in enumerate(BANDS):
+        n = int(band_counts.get(label, 0))
+        pct = n / total * 100
+        kpi_cols[i].markdown(
+            f"<div style='text-align:center;border-left:3px solid {color};padding:0.35rem 0.45rem;border-radius:8px;"
+            f"background:#101a31;border:1px solid #25314d'>"
+            f"<span style='font-size:1.28em;font-weight:700;color:{color};line-height:1.15'>{n:,}</span><br>"
+            f"<span style='font-size:0.78em;color:#cbd5e1'>{pct:.1f} % — {label}</span></div>",
+            unsafe_allow_html=True,
+        )
+
     r1c1, r1c2 = st.columns(2, gap="large")
     with r1c1:
         fig_hist = px.histogram(
@@ -2952,29 +3317,148 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
         _plotly_show(fig_hist)
 
     with r1c2:
-        if "Bodega" in df.columns:
-            bod_agg = (
-                df.groupby(df["Bodega"].astype(str), dropna=False)[margen_col]
-                .agg(mediana="median", q25=lambda s: s.quantile(0.25), pct_neg=lambda s: float((s < 0).mean() * 100), n="count")
-                .reset_index()
-                .sort_values("mediana", ascending=True)
-                .head(20)
+        if existencia_col and "Costo_Prom_Inst" in df.columns:
+            zona_agg = df_b.groupby("_banda", observed=True).agg(
+                valor_inv=("_val_inv", "sum"), refs=("_ref_codigo", "nunique")
+            ).reset_index()
+            zona_agg["valor_mill"] = zona_agg["valor_inv"] / 1e6
+            fig_zona = px.bar(
+                zona_agg, x="_banda", y="valor_mill", text="refs",
+                color="_banda", color_discrete_map=BAND_COLORS,
+                title="Valor inventario (COP mill.) por banda de margen",
+                labels={"_banda": "Banda", "valor_mill": "Valor inv. (COP mill.)", "refs": "Refs únicas"},
             )
-            fig_bod = px.bar(
-                bod_agg, y="Bodega", x="mediana", orientation="h",
-                color="pct_neg", color_continuous_scale="RdYlGn_r",
-                hover_data={"q25": ":.1f", "n": True, "pct_neg": ":.1f"},
-                title="Mediana de margen por bodega — color = % refs negativas",
-                labels={"mediana": "Mediana margen (%)", "pct_neg": "% negativas", "n": "Refs"},
-            )
-            _plotly_show(fig_bod)
+            fig_zona.update_traces(textposition="outside")
+            fig_zona.update_layout(showlegend=False)
+            _plotly_show(fig_zona)
         else:
-            st.caption("Sin columna `Bodega`.")
+            st.caption("Sin datos de existencia/costo para análisis de riesgo.")
 
-    # ── 2. Bivariable: precio × margen con densidad ─────────────────────
-    st.markdown("#### Relación precio lista vs margen")
+    # ════════════════════════════════════════════════════════════════════
+    #  CAP 2 — Concentración: ¿dónde está el dinero en riesgo?
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### 2 · Concentración — ¿dónde está el dinero en riesgo?")
+    st.caption(
+        "El principio de **Pareto** suele cumplirse: pocas referencias concentran la mayor parte "
+        "del inventario. Si esas pocas caen en bandas anormales, el impacto financiero es desproporcionado. "
+        "Aquí identificamos **cuánto dinero** está expuesto y **en qué sistemas**."
+    )
+
+    if existencia_col and "Costo_Prom_Inst" in df.columns:
+        ref_agg = (
+            df_b.groupby("_ref_codigo", dropna=False)
+            .agg(val_inv=("_val_inv", "sum"), margen_med=(margen_col, "median"))
+            .reset_index()
+            .sort_values("val_inv", ascending=False)
+        )
+        ref_agg = ref_agg[ref_agg["val_inv"] > 0]
+        if not ref_agg.empty:
+            ref_agg["cum_pct"] = ref_agg["val_inv"].cumsum() / ref_agg["val_inv"].sum() * 100
+            ref_agg["rank"] = range(1, len(ref_agg) + 1)
+            n80 = int((ref_agg["cum_pct"] <= 80).sum())
+            top = ref_agg.head(100)
+            ref_labels = top["_ref_codigo"].astype(str).tolist()
+            fig_pareto = make_subplots(specs=[[{"secondary_y": True}]])
+            fig_pareto.add_trace(
+                go.Bar(
+                    x=ref_labels, y=top["val_inv"] / 1e6,
+                    name="Valor inv. (mill.)",
+                    marker_color=["#ef4444" if m < 0 else "#3b82f6" for m in top["margen_med"]],
+                    customdata=list(zip(top["rank"], top["margen_med"].round(1), top["cum_pct"].round(1))),
+                    hovertemplate="<b>%{x}</b><br>Rank: %{customdata[0]}<br>Valor: %{y:,.1f} mill.<br>Margen med.: %{customdata[1]}%<br>Acum.: %{customdata[2]}%<extra></extra>",
+                ),
+                secondary_y=False,
+            )
+            fig_pareto.add_trace(
+                go.Scatter(x=ref_labels, y=top["cum_pct"],
+                           mode="lines", name="% acumulado", line=dict(color="#facc15", width=2)),
+                secondary_y=True,
+            )
+            fig_pareto.add_hline(y=80, line_dash="dot", line_color="#a855f7", secondary_y=True,
+                                 annotation_text=f"80 % del inventario ≈ {n80} refs")
+            fig_pareto.update_layout(
+                title=f"Pareto de inventario (top 100 refs) — rojo = margen negativo  ({n80} refs = 80 % del valor)",
+                xaxis_title="Referencia", legend=dict(orientation="h", y=-0.18),
+                xaxis=dict(type="category", tickangle=-60, tickfont=dict(size=9)),
+            )
+            fig_pareto.update_yaxes(title_text="Valor inv. (COP mill.)", secondary_y=False)
+            fig_pareto.update_yaxes(title_text="% acumulado", secondary_y=True)
+            _plotly_show(fig_pareto)
+    else:
+        st.caption("Sin datos de inventario para Pareto.")
+
     r2c1, r2c2 = st.columns(2, gap="large")
     with r2c1:
+        if existencia_col and "Costo_Prom_Inst" in df.columns and "Sistema_Precio" in df.columns:
+            df_sys_neg = df_b[df_b[margen_col] < 0]
+            if not df_sys_neg.empty:
+                neg_by_sys = (
+                    df_sys_neg.groupby(df_sys_neg["Sistema_Precio"].astype(str), dropna=False)
+                    .agg(valor_neg=("_val_inv", "sum"), refs=("_ref_codigo", "nunique"))
+                    .reset_index()
+                    .sort_values("valor_neg", ascending=False)
+                    .head(15)
+                )
+                neg_by_sys["valor_mill"] = neg_by_sys["valor_neg"] / 1e6
+                fig_neg = px.bar(
+                    neg_by_sys, y="Sistema_Precio", x="valor_mill", orientation="h",
+                    text="refs", color="valor_mill", color_continuous_scale="Reds",
+                    title="Inventario con margen negativo — top 15 sistemas",
+                    labels={"valor_mill": "Valor inv. (COP mill.)", "Sistema_Precio": "Sistema precio", "refs": "Refs"},
+                )
+                fig_neg.update_traces(textposition="outside")
+                _plotly_show(fig_neg)
+            else:
+                st.caption("No hay referencias con margen negativo en el filtro actual.")
+        else:
+            st.caption("Sin datos para cruce sistema–inventario negativo.")
+
+    with r2c2:
+        anomaly_bands = ["Crítico < 15 %", "Sospechoso 15–30 %", "Alto sospechoso 50–60 %", "Muy alto > 60 %"]
+        if existencia_col and "Costo_Prom_Inst" in df_b.columns:
+            df_anom = df_b[df_b["_banda"].isin(anomaly_bands)].copy()
+            if not df_anom.empty:
+                top_anom = (
+                    df_anom.groupby("_ref_codigo", dropna=False)
+                    .agg(
+                        val_inv=("_val_inv", "sum"),
+                        margen_med=(margen_col, "median"),
+                        n_bodegas=("Bodega", "nunique") if "Bodega" in df_anom.columns else (margen_col, "count"),
+                        banda=("_banda", lambda s: s.mode().iloc[0] if not s.mode().empty else s.iloc[0]),
+                    )
+                    .reset_index()
+                    .sort_values("val_inv", ascending=False)
+                    .head(20)
+                )
+                top_anom["val_mill"] = top_anom["val_inv"] / 1e6
+                fig_top = px.bar(
+                    top_anom, y="_ref_codigo", x="val_mill", orientation="h",
+                    color="banda", color_discrete_map=BAND_COLORS,
+                    text=top_anom.apply(lambda r: f"{r['margen_med']:.0f}%  ({r['n_bodegas']} bod)", axis=1),
+                    hover_data={"margen_med": ":.1f", "n_bodegas": True},
+                    title="Top 20 refs anómalas por valor inventario",
+                    labels={"val_mill": "Valor inv. (COP mill.)", "_ref_codigo": "Referencia", "banda": "Banda"},
+                )
+                fig_top.update_traces(textposition="outside")
+                fig_top.update_layout(height=max(450, len(top_anom) * 22), yaxis=dict(autorange="reversed"))
+                _plotly_show(fig_top)
+            else:
+                st.success("Todas las referencias están en la banda normal (30–50 %).")
+
+    # ════════════════════════════════════════════════════════════════════
+    #  CAP 3 — Relaciones: ¿qué determina el nivel de margen?
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### 3 · Relaciones — ¿qué determina el nivel de margen?")
+    st.caption(
+        "Analizamos las dos variables que más influyen: el **precio lista** (¿a mayor precio, mejor margen?) "
+        "y la **rotación** (¿los productos que más rotan tienen márgenes más comprimidos?). "
+        "Si hay una **tendencia clara**, revela una regla de pricing a validar."
+    )
+
+    r3c1, r3c2 = st.columns(2, gap="large")
+    with r3c1:
         if precio_col in df_sc.columns:
             color_col = "Rotacion" if "Rotacion" in df_sc.columns else None
             fig_sc = px.scatter(
@@ -2990,7 +3474,7 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
         else:
             st.caption(f"Sin `{precio_col}` para dispersión.")
 
-    with r2c2:
+    with r3c2:
         if precio_col in df.columns:
             df_tmp = df[[precio_col, margen_col]].dropna()
             if not df_tmp.empty:
@@ -3014,145 +3498,7 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
                                         xaxis_tickangle=-40, legend=dict(orientation="h", y=-0.25))
                 _plotly_show(fig_trend)
 
-    # ── 3. Riesgo: valor inventario con margen negativo ──────────────────
-    st.markdown("#### Exposición de inventario por margen")
-    r3c1, r3c2 = st.columns(2, gap="large")
-    with r3c1:
-        if existencia_col and "Costo_Prom_Inst" in df.columns:
-            df_risk = df.copy()
-            df_risk["_val_inv"] = df_risk["Costo_Prom_Inst"].fillna(0) * df_risk[existencia_col].fillna(0)
-            df_risk["_zona"] = pd.cut(
-                df_risk[margen_col],
-                bins=[-9999, 15, 30, 50, 60, 9999],
-                labels=["Crítico < 15 %", "Sospechoso 15–30 %", "Normal 30–50 %", "Alto sosp. 50–60 %", "Muy alto > 60 %"],
-            )
-            zona_agg = df_risk.groupby("_zona", observed=True).agg(
-                valor_inv=("_val_inv", "sum"), refs=("_ref_codigo", "nunique")
-            ).reset_index()
-            zona_agg["valor_mill"] = zona_agg["valor_inv"] / 1e6
-            _zona_cmap = {"Crítico < 15 %": "#ef4444", "Sospechoso 15–30 %": "#f59e0b", "Normal 30–50 %": "#22c55e", "Alto sosp. 50–60 %": "#f97316", "Muy alto > 60 %": "#dc2626"}
-            fig_zona = px.bar(
-                zona_agg, x="_zona", y="valor_mill", text="refs",
-                color="_zona", color_discrete_map=_zona_cmap,
-                title="Valor inventario (COP mill.) por banda de margen del negocio",
-                labels={"_zona": "Banda de margen", "valor_mill": "Valor inv. (COP mill.)", "refs": "Refs únicas"},
-            )
-            fig_zona.update_traces(textposition="outside")
-            fig_zona.update_layout(showlegend=False)
-            _plotly_show(fig_zona)
-        else:
-            st.caption("Sin datos de existencia/costo para análisis de riesgo.")
-
-    with r3c2:
-        if existencia_col and "Costo_Prom_Inst" in df.columns and "Sistema_Precio" in df.columns:
-            df_sys = df.copy()
-            df_sys["_val_inv"] = df_sys["Costo_Prom_Inst"].fillna(0) * df_sys[existencia_col].fillna(0)
-            df_sys_neg = df_sys[df_sys[margen_col] < 0]
-            if not df_sys_neg.empty:
-                neg_by_sys = (
-                    df_sys_neg.groupby(df_sys_neg["Sistema_Precio"].astype(str), dropna=False)
-                    .agg(valor_neg=("_val_inv", "sum"), refs=("_ref_codigo", "nunique"))
-                    .reset_index()
-                    .sort_values("valor_neg", ascending=False)
-                    .head(15)
-                )
-                neg_by_sys["valor_mill"] = neg_by_sys["valor_neg"] / 1e6
-                fig_neg = px.bar(
-                    neg_by_sys, y="Sistema_Precio", x="valor_mill", orientation="h",
-                    text="refs", color="valor_mill", color_continuous_scale="Reds",
-                    title="Inventario con margen negativo — top 15 sistemas",
-                    labels={"valor_mill": "Valor inv. negativo (COP mill.)", "Sistema_Precio": "Sistema precio", "refs": "Refs"},
-                )
-                fig_neg.update_traces(textposition="outside")
-                _plotly_show(fig_neg)
-            else:
-                st.caption("No hay referencias con margen negativo en el filtro actual.")
-        else:
-            st.caption("Sin datos para cruce sistema–inventario negativo.")
-
-    # ── 4. Cruce bivariable: rotación × sistema (heatmap margen mediano) ─
-    st.markdown("#### Cruces bivariables — patrones ocultos")
-    r4c1, r4c2 = st.columns(2, gap="large")
-    with r4c1:
-        if "Rotacion" in df.columns and "Sistema_Precio" in df.columns:
-            top_rot = df["Rotacion"].astype(str).value_counts().head(8).index
-            top_sys = df["Sistema_Precio"].astype(str).value_counts().head(10).index
-            df_cross = df[df["Rotacion"].astype(str).isin(top_rot) & df["Sistema_Precio"].astype(str).isin(top_sys)]
-            if not df_cross.empty:
-                piv = df_cross.pivot_table(index="Sistema_Precio", columns="Rotacion", values=margen_col, aggfunc="median")
-                fig_hm = px.imshow(
-                    piv, text_auto=".1f", aspect="auto",
-                    color_continuous_scale="RdYlGn", color_continuous_midpoint=15,
-                    title="Mediana de margen: sistema × rotación (top combinaciones)",
-                    labels={"color": "Mediana margen (%)"},
-                )
-                _plotly_show(fig_hm)
-            else:
-                st.caption("Sin datos para heatmap sistema×rotación.")
-        else:
-            st.caption("Faltan `Rotacion` o `Sistema_Precio`.")
-
-    with r4c2:
-        if "Bodega" in df.columns and "Sistema_Precio" in df.columns:
-            top_bod2 = df["Bodega"].astype(str).value_counts().head(8).index
-            top_sys2 = df["Sistema_Precio"].astype(str).value_counts().head(10).index
-            df_cross2 = df[df["Bodega"].astype(str).isin(top_bod2) & df["Sistema_Precio"].astype(str).isin(top_sys2)]
-            if not df_cross2.empty:
-                piv2 = df_cross2.pivot_table(index="Sistema_Precio", columns="Bodega", values=margen_col, aggfunc=lambda s: float((s < 0).mean() * 100))
-                fig_hm2 = px.imshow(
-                    piv2, text_auto=".0f", aspect="auto",
-                    color_continuous_scale="YlOrRd",
-                    title="% refs con margen negativo: sistema × bodega",
-                    labels={"color": "% negativas"},
-                )
-                _plotly_show(fig_hm2)
-            else:
-                st.caption("Sin datos para heatmap sistema×bodega.")
-        else:
-            st.caption("Faltan `Bodega` o `Sistema_Precio`.")
-
-    # ── 5. Pareto: referencias que concentran el riesgo ──────────────────
-    st.markdown("#### Concentración de riesgo (Pareto)")
-    if existencia_col and "Costo_Prom_Inst" in df.columns:
-        df_par = df.copy()
-        df_par["_val_inv"] = df_par["Costo_Prom_Inst"].fillna(0) * df_par[existencia_col].fillna(0)
-        ref_agg = (
-            df_par.groupby("_ref_codigo", dropna=False)
-            .agg(val_inv=("_val_inv", "sum"), margen_med=(margen_col, "median"))
-            .reset_index()
-            .sort_values("val_inv", ascending=False)
-        )
-        ref_agg = ref_agg[ref_agg["val_inv"] > 0]
-        if not ref_agg.empty:
-            ref_agg["cum_pct"] = ref_agg["val_inv"].cumsum() / ref_agg["val_inv"].sum() * 100
-            ref_agg["rank"] = range(1, len(ref_agg) + 1)
-            n80 = int((ref_agg["cum_pct"] <= 80).sum())
-            fig_pareto = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_pareto.add_trace(
-                go.Bar(x=ref_agg["rank"].head(100), y=ref_agg["val_inv"].head(100) / 1e6,
-                       name="Valor inv. (mill.)", marker_color=["#ef4444" if m < 0 else "#3b82f6" for m in ref_agg["margen_med"].head(100)]),
-                secondary_y=False,
-            )
-            fig_pareto.add_trace(
-                go.Scatter(x=ref_agg["rank"].head(100), y=ref_agg["cum_pct"].head(100),
-                           mode="lines", name="% acumulado", line=dict(color="#facc15", width=2)),
-                secondary_y=True,
-            )
-            fig_pareto.add_hline(y=80, line_dash="dot", line_color="#a855f7", secondary_y=True,
-                                 annotation_text=f"80 % del inventario ≈ {n80} refs")
-            fig_pareto.update_layout(
-                title=f"Pareto de inventario (top 100 refs) — rojo = margen negativo  ({n80} refs = 80 % del valor)",
-                xaxis_title="Rank de referencia", legend=dict(orientation="h", y=-0.18),
-            )
-            fig_pareto.update_yaxes(title_text="Valor inv. (COP mill.)", secondary_y=False)
-            fig_pareto.update_yaxes(title_text="% acumulado", secondary_y=True)
-            _plotly_show(fig_pareto)
-    else:
-        st.caption("Sin datos de inventario para Pareto.")
-
-    # ── 6. Rotación vs margen (bubble) ───────────────────────────────────
     if "Rotacion" in df.columns and existencia_col:
-        st.markdown("#### Rotación vs margen — tamaño = inventario")
         rot_agg = (
             df.groupby(df["Rotacion"].astype(str), dropna=False)
             .agg(
@@ -3176,52 +3522,59 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
             fig_bub.add_hline(y=0, line_dash="dot", line_color="#ef4444")
             _plotly_show(fig_bub)
 
-    # ══════════════════════════════════════════════════════════════════════
-    #  BLOQUE DE ALTO IMPACTO — Detección de anomalías por banda de margen
-    # ══════════════════════════════════════════════════════════════════════
-    BANDS = [(-9999, 15, "Crítico < 15 %", "#ef4444"),
-             (15, 30, "Sospechoso 15–30 %", "#f59e0b"),
-             (30, 50, "Normal 30–50 %", "#22c55e"),
-             (50, 60, "Alto sospechoso 50–60 %", "#f97316"),
-             (60, 9999, "Muy alto > 60 %", "#dc2626")]
-    BAND_LABELS = [b[2] for b in BANDS]
-    BAND_COLORS = {b[2]: b[3] for b in BANDS}
-
-    def _classify_band(m: float) -> str:
-        for lo, hi, label, _ in BANDS:
-            if lo <= m < hi:
-                return label
-        return BAND_LABELS[-1]
-
-    df_b = df.copy()
-    df_b["_banda"] = df_b[margen_col].apply(_classify_band)
-    df_b["_banda"] = pd.Categorical(df_b["_banda"], categories=BAND_LABELS, ordered=True)
-
+    # ════════════════════════════════════════════════════════════════════
+    #  CAP 4 — Segmentos: ¿dónde se concentran los problemas?
+    # ════════════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("### Detección de anomalías — Bandas de margen del negocio")
+    st.markdown("### 4 · Segmentos — ¿dónde intervenir primero?")
     st.caption(
-        "**< 15 %** → crítico, no debería existir  ·  **15–30 %** → sospechoso  ·  "
-        "**30–50 %** → normal  ·  **50–60 %** → alto sospechoso  ·  **> 60 %** → demasiado alto"
+        "Cruzamos **bodega**, **sistema de precio** y **rotación** para descubrir "
+        "los segmentos que necesitan intervención prioritaria. "
+        "Las **bodegas de peor margen** y los **cruces sistema × rotación** revelan focos específicos."
     )
 
-    # ── 7. KPIs rápidos por banda ────────────────────────────────────────
-    band_counts = df_b["_banda"].value_counts().reindex(BAND_LABELS, fill_value=0)
-    total = max(int(band_counts.sum()), 1)
-    kpi_cols = st.columns(len(BANDS))
-    for i, (_, _, label, color) in enumerate(BANDS):
-        n = int(band_counts.get(label, 0))
-        pct = n / total * 100
-        kpi_cols[i].markdown(
-            f"<div style='text-align:center;border-left:4px solid {color};padding-left:8px'>"
-            f"<span style='font-size:1.6em;font-weight:700;color:{color}'>{n:,}</span><br>"
-            f"<span style='font-size:0.85em'>{pct:.1f} % — {label}</span></div>",
-            unsafe_allow_html=True,
-        )
+    r4c1, r4c2 = st.columns(2, gap="large")
+    with r4c1:
+        if "Bodega" in df.columns:
+            bod_agg = (
+                df.groupby(df["Bodega"].astype(str), dropna=False)[margen_col]
+                .agg(mediana="median", q25=lambda s: s.quantile(0.25), pct_neg=lambda s: float((s < 0).mean() * 100), n="count")
+                .reset_index()
+                .sort_values("mediana", ascending=True)
+                .head(20)
+            )
+            fig_bod = px.bar(
+                bod_agg, y="Bodega", x="mediana", orientation="h",
+                color="pct_neg", color_continuous_scale="RdYlGn_r",
+                hover_data={"q25": ":.1f", "n": True, "pct_neg": ":.1f"},
+                title="Mediana de margen por bodega — color = % refs negativas",
+                labels={"mediana": "Mediana margen (%)", "pct_neg": "% negativas", "n": "Refs"},
+            )
+            _plotly_show(fig_bod)
+        else:
+            st.caption("Sin columna `Bodega`.")
 
-    # ── 8. Treemap: valor inventario por banda × bodega ──────────────────
-    st.markdown("#### Mapa de exposición: valor de inventario por banda y bodega")
+    with r4c2:
+        if "Rotacion" in df.columns and "Sistema_Precio" in df.columns:
+            top_rot = df["Rotacion"].astype(str).value_counts().head(8).index
+            top_sys = df["Sistema_Precio"].astype(str).value_counts().head(10).index
+            df_cross = df[df["Rotacion"].astype(str).isin(top_rot) & df["Sistema_Precio"].astype(str).isin(top_sys)]
+            if not df_cross.empty:
+                piv = df_cross.pivot_table(index="Sistema_Precio", columns="Rotacion", values=margen_col, aggfunc="median")
+                fig_hm = px.imshow(
+                    piv, text_auto=".1f", aspect="auto",
+                    color_continuous_scale="RdYlGn", color_continuous_midpoint=15,
+                    title="Mediana de margen: sistema × rotación (top combinaciones)",
+                    labels={"color": "Mediana margen (%)"},
+                )
+                _plotly_show(fig_hm)
+            else:
+                st.caption("Sin datos para heatmap sistema×rotación.")
+        else:
+            st.caption("Faltan `Rotacion` o `Sistema_Precio`.")
+
     if existencia_col and "Costo_Prom_Inst" in df_b.columns and "Bodega" in df_b.columns:
-        df_b["_val_inv"] = df_b["Costo_Prom_Inst"].fillna(0) * df_b[existencia_col].fillna(0)
+        st.markdown("#### Mapa de exposición: inventario por banda y bodega")
         tree_agg = (
             df_b.groupby(["_banda", df_b["Bodega"].astype(str)], observed=True)
             .agg(valor=("_val_inv", "sum"), refs=("_ref_codigo", "nunique"))
@@ -3238,36 +3591,18 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
             )
             fig_tree.update_layout(margin=dict(t=50, l=10, r=10, b=10))
             _plotly_show(fig_tree)
-    else:
-        st.caption("Sin datos para treemap (necesita Bodega, Existencia, Costo_Prom_Inst).")
 
-    # ── 9. Refs fuera de la banda normal (< 15 % o > 60 %) por bodega ───
-    st.markdown("#### Referencias en zonas críticas por bodega")
-    if "Bodega" in df_b.columns:
-        anomalas = df_b[df_b["_banda"].isin(["Crítico < 15 %", "Muy alto > 60 %"])]
-        if not anomalas.empty:
-            an_agg = (
-                anomalas.groupby([anomalas["Bodega"].astype(str), "_banda"], observed=True)
-                .agg(refs=("_ref_codigo", "nunique"))
-                .reset_index()
-            )
-            fig_an = px.bar(
-                an_agg, x="Bodega", y="refs", color="_banda",
-                color_discrete_map=BAND_COLORS, barmode="group",
-                title="Refs con margen crítico (< 15 %) o demasiado alto (> 60 %) por bodega",
-                labels={"refs": "Refs únicas", "Bodega": "Bodega", "_banda": "Banda"},
-            )
-            fig_an.update_xaxes(tickangle=-35)
-            _plotly_show(fig_an)
-        else:
-            st.success("No hay referencias en zonas extremas con el filtro actual.")
-
-    # ── 10. Detector de inconsistencia cross-bodega ──────────────────────
-    st.markdown("#### Detector de inconsistencia cross-bodega")
+    # ════════════════════════════════════════════════════════════════════
+    #  CAP 5 — Anomalías: detección de inconsistencias
+    # ════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### 5 · Anomalías — detección de inconsistencias")
     st.caption(
-        "Referencias que aparecen en **más de una bodega** con un rango de margen amplio "
-        "(diferencia entre el máximo y el mínimo > 20 pp). Señal de problemas de costo o pricing."
+        "Una misma referencia con **márgenes muy distintos entre bodegas** (>20 pp) sugiere "
+        "errores de costo, transferencias sin ajuste o pricing desalineado. "
+        "Estas inconsistencias son **ganancias rápidas**: corregirlas tiene impacto inmediato."
     )
+
     if "Bodega" in df_b.columns:
         ref_cross = (
             df_b.groupby("_ref_codigo", dropna=False)
@@ -3303,9 +3638,8 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
                     if lo > -9999 and hi < 9999:
                         fig_inc.add_vline(x=lo, line_dash="dot", line_color=color, opacity=0.4)
                 fig_inc.update_layout(
-                    title=f"Top {min(25, len(inconsist))} refs con mayor dispersión de margen entre bodegas",
-                    xaxis_title="Margen (%)",
-                    yaxis_title="Referencia",
+                    title=f"Top {min(25, len(inconsist))} refs con mayor dispersión entre bodegas",
+                    xaxis_title="Margen (%)", yaxis_title="Referencia",
                     height=max(400, min(25, len(inconsist)) * 28),
                 )
                 _plotly_show(fig_inc)
@@ -3323,65 +3657,32 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
                     if lo > -9999:
                         fig_rng.add_vline(x=lo, line_dash="dot", line_color=color, opacity=0.5,
                                           annotation_text=label.split(" ")[0] if lo > 0 else "")
-                fig_rng.add_hline(y=20, line_dash="dot", line_color="#64748b",
-                                  annotation_text="Umbral 20 pp")
+                fig_rng.add_hline(y=20, line_dash="dot", line_color="#64748b", annotation_text="Umbral 20 pp")
                 _plotly_show(fig_rng)
 
             st.markdown(f"**{len(inconsist)} referencias** con dispersión > 20 pp entre bodegas.")
         else:
             st.success("No se detectan inconsistencias cross-bodega significativas (Δ > 20 pp).")
 
-    # ── 11. Heatmap: banda de margen × bodega (% de refs) ────────────────
-    st.markdown("#### Composición de cada bodega por banda de margen")
-    if "Bodega" in df_b.columns:
-        top_bods = df_b["Bodega"].astype(str).value_counts().head(15).index
-        df_hb = df_b[df_b["Bodega"].astype(str).isin(top_bods)]
-        if not df_hb.empty:
-            ct = pd.crosstab(df_hb["Bodega"].astype(str), df_hb["_banda"], normalize="index") * 100
-            ct = ct.reindex(columns=BAND_LABELS, fill_value=0)
-            fig_comp = px.imshow(
-                ct, text_auto=".1f", aspect="auto",
-                color_continuous_scale="RdYlGn", color_continuous_midpoint=50,
-                title="% de referencias en cada banda de margen por bodega (top 15)",
-                labels={"color": "% refs"},
-            )
-            _plotly_show(fig_comp)
-
-    # ── 12. Top refs de mayor valor en bandas anómalas ───────────────────
-    st.markdown("#### Top referencias de mayor valor en bandas anómalas")
-    st.caption("Las referencias con mayor inventario valorizado que caen fuera de la banda normal (30–50 %). Son las de mayor impacto financiero para revisar.")
-    anomaly_bands = ["Crítico < 15 %", "Sospechoso 15–30 %", "Alto sospechoso 50–60 %", "Muy alto > 60 %"]
-    if existencia_col and "Costo_Prom_Inst" in df_b.columns:
-        df_anom = df_b[df_b["_banda"].isin(anomaly_bands)].copy()
-        if not df_anom.empty:
-            if "_val_inv" not in df_anom.columns:
-                df_anom["_val_inv"] = df_anom["Costo_Prom_Inst"].fillna(0) * df_anom[existencia_col].fillna(0)
-            top_anom = (
-                df_anom.groupby("_ref_codigo", dropna=False)
-                .agg(
-                    val_inv=("_val_inv", "sum"),
-                    margen_med=(margen_col, "median"),
-                    n_bodegas=("Bodega", "nunique") if "Bodega" in df_anom.columns else (margen_col, "count"),
-                    banda=("_banda", lambda s: s.mode().iloc[0] if not s.mode().empty else s.iloc[0]),
-                )
+        anomalas = df_b[df_b["_banda"].isin(["Crítico < 15 %", "Muy alto > 60 %"])]
+        if not anomalas.empty:
+            st.markdown("#### Zonas extremas por bodega")
+            an_agg = (
+                anomalas.groupby([anomalas["Bodega"].astype(str), "_banda"], observed=True)
+                .agg(refs=("_ref_codigo", "nunique"))
                 .reset_index()
-                .sort_values("val_inv", ascending=False)
-                .head(30)
             )
-            top_anom["val_mill"] = top_anom["val_inv"] / 1e6
-            fig_top = px.bar(
-                top_anom, y="_ref_codigo", x="val_mill", orientation="h",
-                color="banda", color_discrete_map=BAND_COLORS,
-                text=top_anom.apply(lambda r: f"{r['margen_med']:.0f}%  ({r['n_bodegas']} bod)", axis=1),
-                hover_data={"margen_med": ":.1f", "n_bodegas": True},
-                title="Top 30 refs anómalas por valor de inventario — texto = margen mediano (bodegas)",
-                labels={"val_mill": "Valor inv. (COP mill.)", "_ref_codigo": "Referencia", "banda": "Banda"},
+            fig_an = px.bar(
+                an_agg, x="Bodega", y="refs", color="_banda",
+                color_discrete_map=BAND_COLORS, barmode="group",
+                title="Refs con margen crítico (< 15 %) o demasiado alto (> 60 %) por bodega",
+                labels={"refs": "Refs únicas", "Bodega": "Bodega", "_banda": "Banda"},
             )
-            fig_top.update_traces(textposition="outside")
-            fig_top.update_layout(height=max(500, len(top_anom) * 22), yaxis=dict(autorange="reversed"))
-            _plotly_show(fig_top)
+            fig_an.update_xaxes(tickangle=-35)
+            _plotly_show(fig_an)
         else:
-            st.success("Todas las referencias están en la banda normal (30–50 %).")
+            st.success("No hay referencias en zonas extremas con el filtro actual.")
+
 
 
 def _auditoria_prepare_chart_df(df_fil: pd.DataFrame) -> pd.DataFrame:
@@ -3402,13 +3703,15 @@ def _auditoria_prepare_chart_df(df_fil: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _auditoria_charts_semaforo(df_fil: pd.DataFrame, ctx: dict) -> None:
-    """Gráficos del eje **Semáforo** — alineación precio última compra vs costos extremos (mín./máx.)."""
+def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
+    """Eje Semáforo — storytelling: resumen → panorama → anatomía → concentración → plan."""
     if not _HAS_PLOTLY or px is None:
         st.warning("Instala **Plotly** para ver gráficos: `pip install plotly`.")
         return
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
+
+    _CL = dict(height=440)
 
     df = _auditoria_prepare_chart_df(df_fil)
     sem_col = ctx["sem_col"]
@@ -3416,216 +3719,382 @@ def _auditoria_charts_semaforo(df_fil: pd.DataFrame, ctx: dict) -> None:
     var_c = ctx["var_compra_col"]
     var_costo_pct = ctx["var_costo_base_col"]
     sistema_precio_col = ctx["sistema_precio_col"]
-    modelo_col = ctx["modelo_col"]
     costo_inv_col = ctx["costo_inv_col"]
     lower_map = ctx["lower_map"]
     ex_tot_col = ctx["ex_tot_col"]
     precio_ult_cop_col = ctx["precio_ult_cop_col"]
     precio_lista_col = ctx["precio_lista_col"]
+    desc_col = ctx["desc_col"]
+    rot_col = ctx["rot_col"]
 
-    # ── KPIs del eje semáforo ────────────────────────────────────────────
+    umbral_v = float(st.session_state.get("aud_umbral_var_costo", 15.0))
+
+    # ── CAP 1 · Resumen ejecutivo ────────────────────────────────────────
+    st.markdown("#### 1 · Resumen ejecutivo")
+    st.caption("Vista rápida: severidad de la desalineación del precio de compra frente al costo de inventario.")
+
     n_total = len(df)
     n_critico = int(df[sem_col].map(_auditoria_es_semaforo_critico).sum()) if sem_col and sem_col in df.columns else 0
     n_mod_alto = int(df[sem_col].map(_auditoria_es_semaforo_mod_alto).sum()) if sem_col and sem_col in df.columns else 0
-    umbral_v = float(st.session_state.get("aud_umbral_var_costo", 15.0))
     pct_umbral_costo = float((df["_g_abs_var_costo"].fillna(-1) >= umbral_v).mean() * 100.0)
     valor_inv = _valor_inventario_cop_auditoria(df, lower_map)
+    media_var_costo = float(df["_g_abs_var_costo"].dropna().mean()) if df["_g_abs_var_costo"].notna().any() else 0.0
 
-    ks1, ks2, ks3, ks4, ks5 = st.columns(5)
-    ks1.metric("Refs filtradas", f"{n_total:,}")
-    ks2.metric("Semáforo crítico", f"{n_critico:,}",
-               delta=f"{n_critico/max(n_total,1)*100:.1f} %", delta_color="inverse")
-    ks3.metric("Moderado alto", f"{n_mod_alto:,}",
-               delta=f"{n_mod_alto/max(n_total,1)*100:.1f} %", delta_color="inverse")
-    ks4.metric("% ≥ umbral |Δ vs costo|", f"{pct_umbral_costo:.1f}%")
-    ks5.metric("Valor inv. expuesto", _fmt_cop_resumido(valor_inv) if valor_inv is not None else "N/D")
+    s1, s2, s3 = st.columns(3, gap="small")
+    s1.metric("Filtradas", f"{n_total:,}")
+    s2.metric("Crítico", f"{n_critico:,}", delta=f"{n_critico/max(n_total,1)*100:.1f}%", delta_color="inverse")
+    s3.metric("Mod-alto", f"{n_mod_alto:,}", delta=f"{n_mod_alto/max(n_total,1)*100:.1f}%", delta_color="inverse")
+    s4, s5, s6 = st.columns(3, gap="small")
+    s4.metric("≥ umbral costo", f"{pct_umbral_costo:.1f}%")
+    s5.metric("Media |Δ costo|", f"{media_var_costo:.1f}%")
+    s6.metric("Inv. expuesto", _fmt_cop_resumido(valor_inv) if valor_inv is not None else "N/D")
 
-    # ── 1. Distribución de alertas por semáforo ──────────────────────────
-    st.markdown("#### Distribución de alertas por semáforo")
-    g1, g2 = st.columns(2, gap="large")
-    with g1:
+    # ── CAP 2 · Panorama ─────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 2 · Panorama — distribución de alertas y score")
+    st.caption("¿Qué proporción del portafolio es problemática según el semáforo y el score compuesto?")
+
+    sub_s = df.dropna(subset=["_g_score"])
+    _score_med = _score_p90 = _score_clip = _score_max = None
+    if not sub_s.empty:
+        _score_p90 = float(sub_s["_g_score"].quantile(0.90))
+        _score_med = float(sub_s["_g_score"].median())
+        _score_clip = max(float(sub_s["_g_score"].quantile(0.95)) * 1.15, 1.0)
+        _score_max = float(sub_s["_g_score"].max())
+
+    p1, p2 = st.columns(2, gap="medium")
+    with p1:
         if sem_col and sem_col in df.columns:
             sem_norm = df[sem_col].fillna("SIN_DATO").astype(str).str.strip()
             vc = sem_norm.value_counts().reset_index()
             vc.columns = ["Semáforo", "n"]
-            color_map = {s: _auditoria_color_discreto_semaforo(s) for s in vc["Semáforo"]}
-            fig_sem = px.bar(
-                vc, x="Semáforo", y="n", color="Semáforo",
-                color_discrete_map=color_map,
-                title="Conteo de referencias por categoría de semáforo",
-                labels={"n": "N° referencias"},
-            )
-            fig_sem.update_layout(showlegend=False)
-            _plotly_show(fig_sem)
-        else:
-            st.caption("Sin columna `Semaforo_Variacion`.")
+            vc["Semáforo_ui"] = vc["Semáforo"].map(_auditoria_etiqueta_semaforo_ui)
+            color_map = {ui: _auditoria_color_discreto_semaforo_ui(ui) for ui in vc["Semáforo_ui"].unique()}
+            fig = px.bar(vc, x="Semáforo_ui", y="n", color="Semáforo_ui",
+                         color_discrete_map=color_map, title="Distribución del semáforo",
+                         labels={"Semáforo_ui": "Semáforo", "n": "N° refs"})
+            fig.update_layout(showlegend=False, **_CL)
+            _plotly_show(fig)
+    with p2:
+        if not sub_s.empty and _score_clip is not None and _score_med is not None and _score_p90 is not None:
+            fig = px.histogram(sub_s[sub_s["_g_score"] <= _score_clip], x="_g_score", nbins=50,
+                               title="Score de riesgo compuesto", labels={"_g_score": "Score"})
+            fig.add_vline(x=_score_p90, line_dash="dash", line_color="#ef4444", annotation_text=f"P90={_score_p90:.1f}")
+            fig.add_vline(x=_score_med, line_dash="dot", line_color="#facc15", annotation_text=f"Med={_score_med:.1f}")
+            fig.update_layout(**_CL)
+            _plotly_show(fig)
 
-    with g2:
-        sub_s = df.dropna(subset=["_g_score"])
-        if not sub_s.empty:
-            p95_sc = float(sub_s["_g_score"].quantile(0.95))
-            p90_sc = float(sub_s["_g_score"].quantile(0.90))
-            median_sc = float(sub_s["_g_score"].median())
-            clip_max = max(p95_sc * 1.15, 1.0)
-            sub_clipped = sub_s[sub_s["_g_score"] <= clip_max]
-            n_outliers = len(sub_s) - len(sub_clipped)
-            fig_score = px.histogram(
-                sub_clipped, x="_g_score", nbins=50,
-                title="Score de riesgo (0,55·|Δ compra| + 0,45·|Δ vs costo|) — recortado P95",
-                labels={"_g_score": "Score"},
-            )
-            fig_score.add_vline(x=p90_sc, line_dash="dash", line_color="#ef4444",
-                                annotation_text=f"P90 = {p90_sc:.1f}")
-            fig_score.add_vline(x=median_sc, line_dash="dot", line_color="#facc15",
-                                annotation_text=f"Mediana = {median_sc:.1f}")
-            _plotly_show(fig_score)
-            if n_outliers > 0:
-                st.caption(f"Se ocultaron **{n_outliers}** valores extremos (> {clip_max:.1f}).")
-            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            col_m1.metric("Mediana", f"{median_sc:.1f}")
-            col_m2.metric("P90", f"{p90_sc:.1f}")
-            col_m3.metric("P95", f"{p95_sc:.1f}")
-            col_m4.metric("Máximo", f"{float(sub_s['_g_score'].max()):.1f}")
-        else:
-            st.caption("Sin datos para score proxy.")
+    p3, p4 = st.columns(2, gap="medium")
+    with p3:
+        if sem_col and sem_col in df.columns and df["_g_abs_var_costo"].notna().any():
+            df_box = df.dropna(subset=["_g_abs_var_costo"]).copy()
+            df_box["_sem_str"] = df_box[sem_col].fillna("SIN_DATO").astype(str).str.strip()
+            df_box["_sem_ui"] = df_box["_sem_str"].map(_auditoria_etiqueta_semaforo_ui)
+            p95_bx = float(df_box["_g_abs_var_costo"].quantile(0.95))
+            df_box = df_box[df_box["_g_abs_var_costo"] <= p95_bx * 1.1]
+            cmap_bx = {ui: _auditoria_color_discreto_semaforo_ui(ui) for ui in df_box["_sem_ui"].unique()}
+            fig = px.box(df_box, x="_sem_ui", y="_g_abs_var_costo", color="_sem_ui",
+                         color_discrete_map=cmap_bx,
+                         title="Severidad |Δ vs costo| por semáforo",
+                         labels={"_sem_ui": "Semáforo", "_g_abs_var_costo": "|Δ vs costo| %"})
+            fig.update_layout(showlegend=False, **_CL)
+            _plotly_show(fig)
+    with p4:
+        if sem_col and sem_col in df.columns and rot_col and rot_col in df.columns:
+            rot_sem = pd.crosstab(df[rot_col].astype(str), df[sem_col].fillna("SIN_DATO").astype(str))
+            if not rot_sem.empty:
+                rot_sem.columns = [_auditoria_etiqueta_semaforo_ui(c) for c in rot_sem.columns]
+                rot_pct = rot_sem.div(rot_sem.sum(axis=1), axis=0) * 100
+                fig = px.imshow(rot_pct, text_auto=".0f", aspect="auto",
+                                color_continuous_scale="YlOrRd",
+                                title="Rotación × semáforo (% fila)",
+                                labels={"color": "%"})
+                fig.update_layout(**_CL)
+                _plotly_show(fig)
 
-    # ── 2. Heatmap sistema × semáforo ────────────────────────────────────
-    if sem_col and sistema_precio_col and sistema_precio_col in df.columns and sem_col in df.columns:
-        st.markdown("#### Cruce sistema × semáforo — ¿dónde se concentran los críticos?")
-        top_sys = df[sistema_precio_col].astype(str).value_counts().head(12).index
-        df_hm = df[df[sistema_precio_col].astype(str).isin(top_sys)].copy()
-        if not df_hm.empty:
-            piv = pd.crosstab(df_hm[sistema_precio_col].astype(str), df_hm[sem_col].fillna("SIN_DATO").astype(str))
-            fig_hm = px.imshow(
-                piv, text_auto=True, aspect="auto",
-                color_continuous_scale="YlOrRd",
-                title="Conteo: sistema de precio × semáforo (top 12 sistemas)",
-                labels={"color": "N° refs"},
-            )
-            _plotly_show(fig_hm)
+    if not sub_s.empty and _score_max is not None and _score_med is not None and _score_p90 is not None:
+        st.caption("Resumen del score de riesgo (misma muestra que el histograma).")
+        sm1, sm2, sm3 = st.columns(3, gap="small")
+        sm1.metric("Mediana score", f"{_score_med:.1f}")
+        sm2.metric("P90 score", f"{_score_p90:.1f}")
+        sm3.metric("Máx score", f"{_score_max:.1f}")
 
-    # ── 3. Concentración por sistema (burbuja score) ─────────────────────
-    st.markdown("#### Concentración de riesgo por sistema de precio")
-    if sistema_precio_col and sistema_precio_col in df.columns and df["_g_score"].notna().any():
-        sys_agg = (
-            df.groupby(df[sistema_precio_col].astype(str), dropna=False)
-            .agg(
-                score_max=("_g_score", "max"),
-                score_media=("_g_score", "mean"),
-                refs=(ref_col, "nunique") if ref_col else ("_g_score", "count"),
-            )
-            .reset_index()
-            .sort_values("score_media", ascending=False)
-            .head(15)
-        )
-        fig_sys = px.scatter(
-            sys_agg, x="score_media", y="score_max", size="refs",
-            text=sistema_precio_col, color="score_media",
-            color_continuous_scale="YlOrRd",
-            title="Sistemas: score medio vs máximo — tamaño = refs únicas",
-            labels={"score_media": "Score medio", "score_max": "Score máximo", "refs": "Refs"},
-        )
-        fig_sys.update_traces(textposition="top center", textfont_size=9)
-        _plotly_show(fig_sys)
-    else:
-        st.caption("Sin sistema de precio o score.")
+    # ── CAP 3 · Anatomía ─────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 3 · Anatomía — ¿de dónde vienen los desalineamientos?")
+    st.caption("Heatmap sistema × semáforo, scatter de cobertura precio lista y distribución del ratio costo/lista.")
 
-    # ── 4. ¿El precio lista cubre el incremento de compra? ───────────────
-    if precio_ult_cop_col and precio_lista_col and precio_ult_cop_col in df.columns and precio_lista_col in df.columns:
-        st.markdown("#### ¿El precio lista absorbe el costo de compra?")
-        st.caption(
-            "Si el costo de compra representa un % alto del precio lista, "
-            "el margen se comprime → candidato a cambio de precio lista."
-        )
-        df_pl = df[[precio_ult_cop_col, precio_lista_col]].dropna().copy()
-        df_pl = df_pl[(df_pl[precio_lista_col] > 0) & (df_pl[precio_ult_cop_col] > 0)]
-        if not df_pl.empty:
-            df_pl["_ratio"] = df_pl[precio_ult_cop_col] / df_pl[precio_lista_col] * 100
-            pl1, pl2 = st.columns(2, gap="large")
-            with pl1:
+    a1, a2 = st.columns(2, gap="medium")
+    with a1:
+        if sem_col and sistema_precio_col and sistema_precio_col in df.columns and sem_col in df.columns:
+            top_sys = df[sistema_precio_col].astype(str).value_counts().head(10).index
+            df_hm = df[df[sistema_precio_col].astype(str).isin(top_sys)]
+            if not df_hm.empty:
+                piv = pd.crosstab(df_hm[sistema_precio_col].astype(str), df_hm[sem_col].fillna("SIN_DATO").astype(str))
+                piv.columns = [_auditoria_etiqueta_semaforo_ui(c) for c in piv.columns]
+                fig = px.imshow(piv, text_auto=True, aspect="auto", color_continuous_scale="YlOrRd",
+                                title="Sistema × semáforo (top 10)", labels={"color": "Refs"})
+                fig.update_layout(**_CL)
+                _plotly_show(fig)
+
+    with a2:
+        if precio_ult_cop_col and precio_lista_col and precio_ult_cop_col in df.columns and precio_lista_col in df.columns:
+            df_sc_pl = df[[precio_ult_cop_col, precio_lista_col]].dropna()
+            df_sc_pl = df_sc_pl[(df_sc_pl[precio_lista_col] > 0) & (df_sc_pl[precio_ult_cop_col] > 0)].copy()
+            if not df_sc_pl.empty:
+                df_sc_pl["_ratio"] = df_sc_pl[precio_ult_cop_col] / df_sc_pl[precio_lista_col] * 100
+                p95_pl = float(df_sc_pl[precio_lista_col].quantile(0.95))
+                p95_uc = float(df_sc_pl[precio_ult_cop_col].quantile(0.95))
+                df_sc_v = df_sc_pl[(df_sc_pl[precio_lista_col] <= p95_pl * 1.1) & (df_sc_pl[precio_ult_cop_col] <= p95_uc * 1.1)]
+                fig = px.scatter(df_sc_v, x=precio_lista_col, y=precio_ult_cop_col,
+                                 opacity=0.35, color="_ratio", color_continuous_scale="RdYlGn_r",
+                                 title="Precio lista vs costo compra — color=ratio%",
+                                 labels={precio_lista_col: "P. Lista", precio_ult_cop_col: "Costo compra", "_ratio": "Ratio%"})
+                mx_v = max(float(df_sc_v[precio_lista_col].max()), float(df_sc_v[precio_ult_cop_col].max()))
+                fig.add_trace(go.Scatter(x=[0, mx_v], y=[0, mx_v], mode="lines",
+                                         line=dict(color="#ef4444", dash="dash", width=1.5),
+                                         name="100% = sin margen", showlegend=True))
+                fig.update_traces(marker=dict(size=4), selector=dict(type="scatter"))
+                fig.update_layout(**_CL)
+                _plotly_show(fig)
+
+    a3, a4 = st.columns(2, gap="medium")
+    with a3:
+        if precio_ult_cop_col and precio_lista_col and precio_ult_cop_col in df.columns and precio_lista_col in df.columns:
+            df_pl = df[[precio_ult_cop_col, precio_lista_col]].dropna()
+            df_pl = df_pl[(df_pl[precio_lista_col] > 0) & (df_pl[precio_ult_cop_col] > 0)].copy()
+            if not df_pl.empty:
+                df_pl["_ratio"] = df_pl[precio_ult_cop_col] / df_pl[precio_lista_col] * 100
                 p95_r = float(df_pl["_ratio"].quantile(0.95))
-                df_pl_clip = df_pl[df_pl["_ratio"] <= max(p95_r * 1.1, 100)]
-                fig_ratio = px.histogram(
-                    df_pl_clip, x="_ratio", nbins=50,
-                    title="Costo compra como % del precio lista",
-                    labels={"_ratio": "Costo / Precio lista (%)"},
-                    color_discrete_sequence=["#38bdf8"],
-                )
-                fig_ratio.add_vline(x=100, line_dash="solid", line_color="#ef4444",
-                                    annotation_text="100% = sin margen")
-                fig_ratio.add_vline(x=85, line_dash="dot", line_color="#f59e0b",
-                                    annotation_text="85% → margen 15%")
-                med_ratio = float(df_pl_clip["_ratio"].median())
-                fig_ratio.add_vline(x=med_ratio, line_dash="dash", line_color="#facc15",
-                                    annotation_text=f"Mediana {med_ratio:.0f}%")
-                _plotly_show(fig_ratio)
-            with pl2:
-                n_sobre_85 = int((df_pl["_ratio"] >= 85).sum())
-                n_sobre_100 = int((df_pl["_ratio"] >= 100).sum())
-                st.metric("Refs con costo ≥ 85% del precio lista", f"{n_sobre_85:,}",
-                          delta=f"{n_sobre_85/max(len(df_pl),1)*100:.1f}% del total", delta_color="inverse")
-                st.metric("Refs con costo ≥ 100% (margen negativo potencial)", f"{n_sobre_100:,}",
-                          delta=f"{n_sobre_100/max(len(df_pl),1)*100:.1f}% del total", delta_color="inverse")
+                df_clip = df_pl[df_pl["_ratio"] <= max(p95_r * 1.1, 100)]
+                fig = px.histogram(df_clip, x="_ratio", nbins=50,
+                                   title="Distribución costo/precio lista (%)",
+                                   labels={"_ratio": "Costo / P.Lista (%)"},
+                                   color_discrete_sequence=["#38bdf8"])
+                fig.add_vline(x=100, line_dash="solid", line_color="#ef4444", annotation_text="100%")
+                fig.add_vline(x=85, line_dash="dot", line_color="#f59e0b", annotation_text="85%")
+                med_r = float(df_clip["_ratio"].median())
+                fig.add_vline(x=med_r, line_dash="dash", line_color="#facc15", annotation_text=f"Med {med_r:.0f}%")
+                fig.update_layout(**_CL)
+                _plotly_show(fig)
+    with a4:
+        if precio_ult_cop_col and precio_lista_col and precio_ult_cop_col in df.columns and precio_lista_col in df.columns:
+            df_pl2 = df[[precio_ult_cop_col, precio_lista_col]].dropna()
+            df_pl2 = df_pl2[(df_pl2[precio_lista_col] > 0) & (df_pl2[precio_ult_cop_col] > 0)].copy()
+            if not df_pl2.empty:
+                df_pl2["_ratio"] = df_pl2[precio_ult_cop_col] / df_pl2[precio_lista_col] * 100
+                n85 = int((df_pl2["_ratio"] >= 85).sum())
+                n100 = int((df_pl2["_ratio"] >= 100).sum())
+                n_compr = 0
                 if var_c and var_c in df.columns:
-                    df_pl["_var_compra"] = pd.to_numeric(df.loc[df_pl.index, var_c], errors="coerce")
-                    comprimidos = df_pl[(df_pl["_ratio"] >= 80) & (df_pl["_var_compra"] > 0)]
-                    st.metric("Refs comprimidas (costo ≥ 80% + precio subió)",
-                              f"{len(comprimidos):,}",
-                              help="Candidatas prioritarias a cambio de precio lista")
+                    df_pl2["_var_c"] = pd.to_numeric(df.loc[df_pl2.index, var_c], errors="coerce")
+                    n_compr = len(df_pl2[(df_pl2["_ratio"] >= 80) & (df_pl2["_var_c"] > 0)])
+                am1, am2, am3 = st.columns(3, gap="small")
+                am1.metric(
+                    "Costo ≥ 85% P.Lista",
+                    f"{n85:,}",
+                    delta=f"{n85/max(len(df_pl2),1)*100:.1f}%",
+                    delta_color="inverse",
+                )
+                am2.metric(
+                    "Costo ≥ 100% (margen neg.)",
+                    f"{n100:,}",
+                    delta=f"{n100/max(len(df_pl2),1)*100:.1f}%",
+                    delta_color="inverse",
+                )
+                am3.metric(
+                    "Comprimidas (≥80% + subió)",
+                    f"{n_compr:,}",
+                    help="Costo alto + precio subió = cambio urgente de P.Lista",
+                )
 
-    # ── 5. Pareto de impacto económico ───────────────────────────────────
-    ex_int_col = lower_map.get("existencia_intermedio")
-    costo_int_col = lower_map.get("costo_intermedio")
-    can_pareto = (ex_int_col and costo_int_col and ex_int_col in df.columns and costo_int_col in df.columns) or (
-        ex_tot_col and costo_inv_col and ex_tot_col in df.columns and costo_inv_col in df.columns
-    )
-    if can_pareto and df["_g_score"].notna().any():
-        st.markdown("#### Pareto de impacto — pocas referencias, mucho riesgo")
-        df_p = df.copy()
-        if ex_int_col and costo_int_col and ex_int_col in df_p.columns:
-            df_p["_val_inv"] = pd.to_numeric(df_p[ex_int_col], errors="coerce").fillna(0) * pd.to_numeric(df_p[costo_int_col], errors="coerce").fillna(0)
+    # ── CAP 4 · Concentración ─────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 4 · Concentración — ¿dónde se acumula el riesgo?")
+    st.caption("Sistema, modelo, Pareto de inventario y rotación vs score: los 4 ejes de concentración.")
+
+    co1, co2 = st.columns(2, gap="medium")
+    with co1:
+        if sistema_precio_col and sistema_precio_col in df.columns and df["_g_score"].notna().any():
+            sys_agg = (
+                df.groupby(df[sistema_precio_col].astype(str), dropna=False)
+                .agg(score_max=("_g_score", "max"), score_media=("_g_score", "mean"),
+                     refs=(ref_col, "nunique") if ref_col else ("_g_score", "count"))
+                .reset_index().sort_values("score_media", ascending=False).head(12)
+            )
+            fig = px.scatter(sys_agg, x="score_media", y="score_max", size="refs",
+                             text=sistema_precio_col, color="score_media",
+                             color_continuous_scale="YlOrRd",
+                             title="Sistemas: score medio vs máx",
+                             labels={"score_media": "Score medio", "score_max": "Score máx", "refs": "Refs"})
+            fig.update_traces(textposition="top center", textfont_size=8)
+            fig.update_layout(**_CL)
+            _plotly_show(fig)
+
+    with co2:
+        modelo_col = ctx.get("modelo_col")
+        if modelo_col and modelo_col in df.columns and df["_g_abs_var_costo"].notna().any():
+            mod_sem = (
+                df.groupby(df[modelo_col].astype(str), dropna=False)
+                .agg(media_costo=("_g_abs_var_costo", "mean"),
+                     refs=(ref_col, "nunique") if ref_col else ("_g_abs_var_costo", "count"),
+                     pct_crit=("_g_abs_var_costo", lambda s: float((s >= umbral_v).sum() / max(len(s), 1) * 100)))
+                .reset_index().sort_values("media_costo", ascending=False).head(12)
+            )
+            fig = px.bar(mod_sem, y=modelo_col, x="media_costo", orientation="h",
+                         color="pct_crit", color_continuous_scale="Reds", text="refs",
+                         title="Modelos con mayor |Δ vs costo|",
+                         labels={"media_costo": "Media |Δ costo|%", modelo_col: "Modelo", "pct_crit": "%>=umbral"})
+            fig.update_traces(textposition="outside")
+            fig.update_layout(**_CL)
+            _plotly_show(fig)
+
+    co3, co4 = st.columns(2, gap="medium")
+    with co3:
+        ex_int_col = lower_map.get("existencia_intermedio")
+        costo_int_col = lower_map.get("costo_intermedio")
+        can_pareto = (ex_int_col and costo_int_col and ex_int_col in df.columns and costo_int_col in df.columns) or (
+            ex_tot_col and costo_inv_col and ex_tot_col in df.columns and costo_inv_col in df.columns)
+        if can_pareto and df["_g_score"].notna().any():
+            df_p = df.copy()
+            if ex_int_col and costo_int_col and ex_int_col in df_p.columns:
+                df_p["_val_inv"] = pd.to_numeric(df_p[ex_int_col], errors="coerce").fillna(0) * pd.to_numeric(df_p[costo_int_col], errors="coerce").fillna(0)
+            else:
+                df_p["_val_inv"] = pd.to_numeric(df_p[ex_tot_col], errors="coerce").fillna(0) * pd.to_numeric(df_p[costo_inv_col], errors="coerce").fillna(0)
+            ref_p = (
+                df_p.groupby(ref_col if ref_col else "_g_score", dropna=False)
+                .agg(val_inv=("_val_inv", "sum"), score=("_g_score", "max"))
+                .reset_index().sort_values("val_inv", ascending=False)
+            )
+            ref_p = ref_p[ref_p["val_inv"] > 0]
+            if not ref_p.empty:
+                ref_p["cum_pct"] = ref_p["val_inv"].cumsum() / ref_p["val_inv"].sum() * 100
+                ref_p["rank"] = range(1, len(ref_p) + 1)
+                n80 = int((ref_p["cum_pct"] <= 80).sum())
+                _ref_key = ref_col if ref_col else "_g_score"
+                top60 = ref_p.head(60).copy()
+                q75_sc = float(ref_p["score"].quantile(0.75))
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
+                fig.add_trace(
+                    go.Bar(
+                        x=top60["rank"],
+                        y=top60["val_inv"] / 1e6,
+                        name="Inv. (M)",
+                        marker_color=["#ef4444" if s > q75_sc else "#3b82f6" for s in top60["score"]],
+                        customdata=list(
+                            zip(
+                                top60[_ref_key].astype(str),
+                                top60["score"].round(2),
+                                top60["cum_pct"].round(2),
+                            )
+                        ),
+                        hovertemplate=(
+                            "<b>Referencia</b>: %{customdata[0]}<br>"
+                            "Rank: %{x}<br>"
+                            "Valor inv. (M COP mill.): %{y:,.2f}<br>"
+                            "Score: %{customdata[1]:.1f}<br>"
+                            "% acumulado: %{customdata[2]:.1f}%<br>"
+                            "<extra></extra>"
+                        ),
+                    ),
+                    secondary_y=False,
+                )
+                fig.add_trace(
+                    go.Scatter(x=top60["rank"], y=top60["cum_pct"],
+                               mode="lines", name="% acum.", line=dict(color="#facc15", width=2)),
+                    secondary_y=True)
+                fig.add_hline(y=80, line_dash="dot", line_color="#a855f7", secondary_y=True,
+                              annotation_text=f"80%={n80} refs")
+                fig.update_layout(title="Pareto inv. expuesto (rojo=score alto)",
+                                  xaxis_title="Rank", legend=dict(orientation="h", y=-0.2), **_CL)
+                fig.update_yaxes(title_text="COP mill.", secondary_y=False)
+                fig.update_yaxes(title_text="% acum.", secondary_y=True)
+                _plotly_show(fig)
         else:
-            df_p["_val_inv"] = pd.to_numeric(df_p[ex_tot_col], errors="coerce").fillna(0) * pd.to_numeric(df_p[costo_inv_col], errors="coerce").fillna(0)
-        ref_p = (
-            df_p.groupby(ref_col if ref_col else "_g_score", dropna=False)
-            .agg(val_inv=("_val_inv", "sum"), score=("_g_score", "max"))
-            .reset_index()
-            .sort_values("val_inv", ascending=False)
+            st.caption("Sin datos de inventario para Pareto.")
+
+    with co4:
+        if rot_col and rot_col in df.columns and df["_g_abs_var_costo"].notna().any():
+            rot_agg_s = (
+                df.groupby(df[rot_col].astype(str), dropna=False)
+                .agg(media_costo=("_g_abs_var_costo", "mean"),
+                     score_medio=("_g_score", "mean"),
+                     refs=(ref_col, "nunique") if ref_col else ("_g_abs_var_costo", "count"),
+                     pct_crit=("_g_abs_var_costo", lambda s: float((s >= umbral_v).sum() / max(len(s), 1) * 100)))
+                .reset_index()
+            )
+            rot_agg_s = rot_agg_s[rot_agg_s["refs"] >= 2]
+            if not rot_agg_s.empty:
+                fig = px.scatter(rot_agg_s, x=rot_col, y="media_costo", size="refs",
+                                 color="pct_crit", color_continuous_scale="YlOrRd",
+                                 title="Rotación vs |Δ costo| medio",
+                                 labels={rot_col: "Rotación", "media_costo": "Media |Δ costo|%", "pct_crit": "%>=umbral"})
+                fig.update_layout(**_CL)
+                _plotly_show(fig)
+
+    # ── CAP 5 · Plan de acción ────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 5 · Plan de acción — top 20 por desalineación vs costo")
+    st.caption("Prioridad = 0,60·|Δ vs costo| + 0,25·|Δ compra| + 0,15·score, ×1,5 si semáforo crítico.")
+
+    df_cand = df.copy()
+    df_cand["_pri_sem"] = (
+        df_cand["_g_abs_var_costo"].fillna(0) * 0.60
+        + df_cand["_g_abs_var_compra"].fillna(0) * 0.25
+        + df_cand["_g_score"].fillna(0) * 0.15
+    )
+    if sem_col and sem_col in df_cand.columns:
+        df_cand.loc[df_cand[sem_col].map(_auditoria_es_semaforo_critico), "_pri_sem"] *= 1.5
+        mask_mod = df_cand[sem_col].map(_auditoria_es_semaforo_mod_alto) & ~df_cand[sem_col].map(_auditoria_es_semaforo_critico)
+        df_cand.loc[mask_mod, "_pri_sem"] *= 1.2
+
+    if ref_col and ref_col in df_cand.columns:
+        agg_c: dict = {"_pri_sem": ("_pri_sem", "max")}
+        if var_costo_pct and var_costo_pct in df_cand.columns:
+            agg_c["var_costo"] = (var_costo_pct, "first")
+        if var_c and var_c in df_cand.columns:
+            agg_c["var_compra"] = (var_c, "first")
+        if sem_col and sem_col in df_cand.columns:
+            agg_c["semaforo"] = (sem_col, "first")
+        if desc_col and desc_col in df_cand.columns:
+            agg_c["descripcion"] = (desc_col, "first")
+        if sistema_precio_col and sistema_precio_col in df_cand.columns:
+            agg_c["sistema"] = (sistema_precio_col, "first")
+
+        top = (
+            df_cand.groupby(ref_col, dropna=False).agg(**agg_c)
+            .reset_index().sort_values("_pri_sem", ascending=False).head(20)
         )
-        ref_p = ref_p[ref_p["val_inv"] > 0]
-        if not ref_p.empty:
-            ref_p["cum_pct"] = ref_p["val_inv"].cumsum() / ref_p["val_inv"].sum() * 100
-            ref_p["rank"] = range(1, len(ref_p) + 1)
-            n80 = int((ref_p["cum_pct"] <= 80).sum())
-            fig_par = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_par.add_trace(
-                go.Bar(x=ref_p["rank"].head(80), y=ref_p["val_inv"].head(80) / 1e6,
-                       name="Valor inv. (mill.)",
-                       marker_color=["#ef4444" if s > float(ref_p["score"].quantile(0.75)) else "#3b82f6" for s in ref_p["score"].head(80)]),
-                secondary_y=False,
-            )
-            fig_par.add_trace(
-                go.Scatter(x=ref_p["rank"].head(80), y=ref_p["cum_pct"].head(80),
-                           mode="lines", name="% acumulado", line=dict(color="#facc15", width=2)),
-                secondary_y=True,
-            )
-            fig_par.add_hline(y=80, line_dash="dot", line_color="#a855f7", secondary_y=True,
-                              annotation_text=f"80 % del inv. ≈ {n80} refs")
-            fig_par.update_layout(
-                title=f"Pareto de inventario expuesto (top 80 refs) — rojo = score alto ({n80} refs = 80 %)",
-                xaxis_title="Rank", legend=dict(orientation="h", y=-0.18),
-            )
-            fig_par.update_yaxes(title_text="Valor inv. (COP mill.)", secondary_y=False)
-            fig_par.update_yaxes(title_text="% acumulado", secondary_y=True)
-            _plotly_show(fig_par)
+        if not top.empty:
+            bar_c = []
+            for _, r in top.iterrows():
+                s = _auditoria_normalizar_etiqueta_semaforo(r.get("semaforo", ""))
+                bar_c.append("#ef4444" if s == "CRITICO" else "#f59e0b" if s == "MODERADO ALTO" else "#3b82f6")
+            vc_col = "var_costo" if "var_costo" in top.columns else None
+            vp_col = "var_compra" if "var_compra" in top.columns else None
+            text_vals = []
+            for _, r in top.iterrows():
+                vc_v = f"{float(r.get('var_costo', 0)):+.1f}%" if vc_col else ""
+                vp_v = f"{float(r.get('var_compra', 0)):+.1f}%" if vp_col else ""
+                text_vals.append(f"Δcosto {vc_v}  Δcompra {vp_v}".strip())
+            fig = go.Figure(go.Bar(
+                y=top[ref_col].astype(str), x=top["_pri_sem"], orientation="h",
+                marker_color=bar_c, text=text_vals, textposition="outside"))
+            fig.update_layout(
+                title="Top 20 — prioridad por desalineación vs costo inv.",
+                xaxis_title="Índice de prioridad", yaxis_title="Referencia",
+                height=max(400, len(top) * 22), yaxis=dict(autorange="reversed"))
+            _plotly_show(fig)
 
 
-def _auditoria_charts_variacion_compra(df_fil: pd.DataFrame, ctx: dict) -> None:
-    """Gráficos del eje **Variación compra** — cambio de precio entre última y penúltima compra."""
+def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
+    """Eje Variación compra — storytelling: resumen → panorama → anatomía → concentración → plan."""
     if not _HAS_PLOTLY or px is None:
         st.warning("Instala **Plotly** para ver gráficos: `pip install plotly`.")
         return
     import plotly.graph_objects as go
+
+    _CL = dict(height=440)
 
     df = _auditoria_prepare_chart_df(df_fil)
     sem_col = ctx["sem_col"]
@@ -3635,8 +4104,6 @@ def _auditoria_charts_variacion_compra(df_fil: pd.DataFrame, ctx: dict) -> None:
     dias_col = ctx["dias_col"]
     sistema_precio_col = ctx["sistema_precio_col"]
     modelo_col = ctx["modelo_col"]
-    costo_inv_col = ctx["costo_inv_col"]
-    lower_map = ctx["lower_map"]
     precio_ult_cop_col = ctx["precio_ult_cop_col"]
     precio_pen_cop_col = ctx["precio_pen_cop_col"]
     rot_col = ctx["rot_col"]
@@ -3649,386 +4116,312 @@ def _auditoria_charts_variacion_compra(df_fil: pd.DataFrame, ctx: dict) -> None:
     n_max = 10_000
     if len(df) > n_max:
         df_sc = df.sample(n=n_max, random_state=7)
-        st.caption(f"Muestra de **{n_max:,}** filas (de {len(df):,}) para dispersión.")
     else:
         df_sc = df
 
-    # ── KPIs del eje variación compra ────────────────────────────────────
+    # ── CAP 1 · Resumen ejecutivo ────────────────────────────────────────
+    st.markdown("#### 1 · Resumen ejecutivo")
+    st.caption("Vista rápida: magnitud y dirección del cambio de precio entre la última y penúltima compra.")
+
     n_total = len(df)
-    n_precio_sube = int((pd.to_numeric(df[var_c], errors="coerce").fillna(0) > umbral_c).sum()) if var_c and var_c in df.columns else 0
-    n_precio_baja = int((pd.to_numeric(df[var_c], errors="coerce").fillna(0) < -umbral_c).sum()) if var_c and var_c in df.columns else 0
+    var_series = pd.to_numeric(df[var_c], errors="coerce") if var_c and var_c in df.columns else pd.Series(dtype=float)
+    n_sube = int((var_series.fillna(0) > umbral_c).sum())
+    n_baja = int((var_series.fillna(0) < -umbral_c).sum())
     n_doble = int(((df["_g_abs_var_compra"].fillna(0) >= umbral_c) & (df["_g_abs_var_costo"].fillna(0) >= umbral_v)).sum())
+    media_abs = float(df["_g_abs_var_compra"].dropna().mean()) if df["_g_abs_var_compra"].notna().any() else 0.0
+    med_abs = float(df["_g_abs_var_compra"].dropna().median()) if df["_g_abs_var_compra"].notna().any() else 0.0
 
-    kv1, kv2, kv3, kv4 = st.columns(4)
-    kv1.metric("Refs filtradas", f"{n_total:,}")
-    kv2.metric("Precio compra ↑ > umbral", f"{n_precio_sube:,}",
-               delta=f"{n_precio_sube/max(n_total,1)*100:.1f} %", delta_color="inverse")
-    kv3.metric("Precio compra ↓ > umbral", f"{n_precio_baja:,}",
-               delta=f"{n_precio_baja/max(n_total,1)*100:.1f} %", delta_color="off")
-    kv4.metric("Doble problema (+ vs costo)", f"{n_doble:,}",
-               delta=f"{n_doble/max(n_total,1)*100:.1f} %", delta_color="inverse")
+    v1, v2, v3 = st.columns(3, gap="small")
+    v1.metric("Filtradas", f"{n_total:,}")
+    v2.metric("Subió > umbral", f"{n_sube:,}", delta=f"{n_sube/max(n_total,1)*100:.1f}%", delta_color="inverse")
+    v3.metric("Bajó > umbral", f"{n_baja:,}", delta=f"{n_baja/max(n_total,1)*100:.1f}%", delta_color="off")
+    v4, v5, v6 = st.columns(3, gap="small")
+    v4.metric("Doble problema", f"{n_doble:,}", delta=f"{n_doble/max(n_total,1)*100:.1f}%", delta_color="inverse")
+    v5.metric("Media |Δ compra|", f"{media_abs:.1f}%")
+    v6.metric("Mediana |Δ compra|", f"{med_abs:.1f}%")
 
-    # ── 1. Distribución del cambio % de compra ───────────────────────────
-    st.markdown("#### Magnitud del cambio de precio de compra")
-    if precio_ult_cop_col and precio_pen_cop_col and precio_ult_cop_col in df.columns and precio_pen_cop_col in df.columns:
-        df_pc = df[[precio_ult_cop_col, precio_pen_cop_col]].dropna().copy()
-        if not df_pc.empty:
-            df_pc["_delta_cop"] = df_pc[precio_ult_cop_col] - df_pc[precio_pen_cop_col]
-            df_pc["_delta_pct"] = df_pc["_delta_cop"] / df_pc[precio_pen_cop_col].replace(0, float("nan")) * 100
+    # ── CAP 2 · Panorama ─────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 2 · Panorama — magnitud del cambio entre compras")
+    st.caption("Distribución del Δ% y contraste penúltima vs última compra (puntos lejos de la diagonal = saltos).")
 
-            pc1, pc2 = st.columns(2, gap="large")
-            with pc1:
-                p95_d = float(df_pc["_delta_pct"].abs().quantile(0.95))
-                df_pc_clip = df_pc[df_pc["_delta_pct"].abs() <= p95_d * 1.1]
-                fig_delta = px.histogram(
-                    df_pc_clip, x="_delta_pct", nbins=60,
-                    color_discrete_sequence=["#38bdf8"],
-                    title="Distribución del cambio % (última vs penúltima compra)",
-                    labels={"_delta_pct": "Cambio (%)"},
-                )
-                fig_delta.add_vline(x=0, line_dash="solid", line_color="#64748b")
-                fig_delta.add_vline(x=umbral_c, line_dash="dash", line_color="#ef4444",
-                                    annotation_text=f"+{umbral_c}%")
-                fig_delta.add_vline(x=-umbral_c, line_dash="dash", line_color="#22c55e",
-                                    annotation_text=f"−{umbral_c}%")
-                _plotly_show(fig_delta)
+    p1, p2 = st.columns(2, gap="medium")
+    with p1:
+        if precio_ult_cop_col and precio_pen_cop_col and precio_ult_cop_col in df.columns and precio_pen_cop_col in df.columns:
+            df_pc = df[[precio_ult_cop_col, precio_pen_cop_col]].dropna().copy()
+            if not df_pc.empty:
+                df_pc["_delta_pct"] = (df_pc[precio_ult_cop_col] - df_pc[precio_pen_cop_col]) / df_pc[precio_pen_cop_col].replace(0, float("nan")) * 100
+                p95 = float(df_pc["_delta_pct"].abs().quantile(0.95))
+                df_clip = df_pc[df_pc["_delta_pct"].abs() <= p95 * 1.1]
+                fig = px.histogram(df_clip, x="_delta_pct", nbins=60,
+                                   color_discrete_sequence=["#38bdf8"],
+                                   title="Cambio % última vs penúltima",
+                                   labels={"_delta_pct": "Cambio (%)"})
+                fig.add_vline(x=0, line_dash="solid", line_color="#64748b")
+                fig.add_vline(x=umbral_c, line_dash="dash", line_color="#ef4444", annotation_text=f"+{umbral_c}%")
+                fig.add_vline(x=-umbral_c, line_dash="dash", line_color="#22c55e", annotation_text=f"-{umbral_c}%")
+                fig.update_layout(**_CL)
+                _plotly_show(fig)
 
-            with pc2:
-                df_pc_abs = df_pc.copy()
-                df_pc_abs["_abs_delta"] = df_pc_abs["_delta_pct"].abs()
-                p95_abs = float(df_pc_abs["_abs_delta"].quantile(0.95))
-                df_pc_abs = df_pc_abs[df_pc_abs["_abs_delta"] <= p95_abs * 1.1]
-                fig_sc_prc = px.scatter(
-                    df_pc_abs, x=precio_pen_cop_col, y=precio_ult_cop_col,
-                    opacity=0.35, color="_abs_delta",
-                    color_continuous_scale="YlOrRd",
-                    title="Precio penúltima vs última compra — color = |Δ%|",
-                    labels={precio_pen_cop_col: "Penúltima (COP)", precio_ult_cop_col: "Última (COP)", "_abs_delta": "|Δ%|"},
-                )
-                max_val = max(float(df_pc_abs[precio_pen_cop_col].max()), float(df_pc_abs[precio_ult_cop_col].max()))
-                fig_sc_prc.add_trace(go.Scatter(
-                    x=[0, max_val], y=[0, max_val],
-                    mode="lines", line=dict(color="#64748b", dash="dot", width=1),
-                    name="Sin cambio", showlegend=False,
-                ))
-                fig_sc_prc.update_traces(marker=dict(size=5), selector=dict(type="scatter"))
-                _plotly_show(fig_sc_prc)
-    else:
-        st.caption("Sin columnas de precio última/penúltima compra.")
+    with p2:
+        if precio_ult_cop_col and precio_pen_cop_col and precio_ult_cop_col in df.columns and precio_pen_cop_col in df.columns:
+            df_pc2 = df[[precio_ult_cop_col, precio_pen_cop_col]].dropna().copy()
+            if not df_pc2.empty:
+                df_pc2["_abs_delta"] = ((df_pc2[precio_ult_cop_col] - df_pc2[precio_pen_cop_col]) / df_pc2[precio_pen_cop_col].replace(0, float("nan")) * 100).abs()
+                p95a = float(df_pc2["_abs_delta"].quantile(0.95))
+                df_pc2 = df_pc2[df_pc2["_abs_delta"] <= p95a * 1.1]
+                fig = px.scatter(df_pc2, x=precio_pen_cop_col, y=precio_ult_cop_col,
+                                 opacity=0.35, color="_abs_delta", color_continuous_scale="YlOrRd",
+                                 title="Penúltima vs última — color=|Δ%|",
+                                 labels={precio_pen_cop_col: "Penúltima", precio_ult_cop_col: "Última", "_abs_delta": "|Δ%|"})
+                mx = max(float(df_pc2[precio_pen_cop_col].max()), float(df_pc2[precio_ult_cop_col].max()))
+                fig.add_trace(go.Scatter(x=[0, mx], y=[0, mx], mode="lines",
+                                         line=dict(color="#64748b", dash="dot", width=1),
+                                         showlegend=False))
+                fig.update_traces(marker=dict(size=4), selector=dict(type="scatter"))
+                fig.update_layout(**_CL)
+                _plotly_show(fig)
 
-    # ── 2. Cuadrante de doble problema ───────────────────────────────────
-    st.markdown("#### Cuadrante de doble problema — decisión rápida")
-    st.caption(
-        "**Eje X:** |Δ última vs penúltima compra| — **Eje Y:** |Δ última vs costo prom. inventario|. "
-        "Cuadrante superior-derecho = ambos problemas simultáneos → prioridad máxima."
-    )
-    gc1, gc2 = st.columns(2, gap="large")
-    with gc1:
+    # ── CAP 3 · Anatomía ─────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 3 · Anatomía — ¿de dónde vienen las variaciones?")
+    st.caption("Cuadrante doble problema, temporalidad y dirección del cambio por sistema de precio.")
+
+    a1, a2 = st.columns(2, gap="medium")
+    with a1:
         has_both = df_sc["_g_abs_var_compra"].notna() & df_sc["_g_abs_var_costo"].notna()
         d2 = df_sc[has_both].copy()
         if not d2.empty:
-            p97_c = float(d2["_g_abs_var_compra"].quantile(0.97))
-            p97_v = float(d2["_g_abs_var_costo"].quantile(0.97))
-            x_max = max(p97_c * 1.1, umbral_c * 2)
-            y_max = max(p97_v * 1.1, umbral_v * 2)
-            d2_view = d2[(d2["_g_abs_var_compra"] <= x_max) & (d2["_g_abs_var_costo"] <= y_max)]
-            n_out_q = len(d2) - len(d2_view)
-            color = sem_col if sem_col and sem_col in d2_view.columns else None
-            fig_quad = px.scatter(
-                d2_view, x="_g_abs_var_compra", y="_g_abs_var_costo", color=color,
-                opacity=0.45, hover_data=[ref_col] if ref_col and ref_col in d2_view.columns else None,
-                title="Cuadrante de doble variación (recortado P97)",
-                labels={"_g_abs_var_compra": "|Δ compra| (%)", "_g_abs_var_costo": "|Δ vs costo| (%)"},
-            )
-            fig_quad.update_traces(marker=dict(size=6))
-            fig_quad.add_vline(x=umbral_c, line_dash="dot", line_color="#f59e0b",
-                               annotation_text=f"Umbral compra {umbral_c}%")
-            fig_quad.add_hline(y=umbral_v, line_dash="dot", line_color="#f59e0b",
-                               annotation_text=f"Umbral costo {umbral_v}%")
-            fig_quad.add_vrect(x0=umbral_c, x1=x_max,
-                               y0=umbral_v, y1=y_max,
-                               fillcolor="red", opacity=0.06, annotation_text="Doble problema")
-            _plotly_show(fig_quad)
-            if n_out_q > 0:
-                st.caption(f"{n_out_q} outliers extremos (> P97) ocultados.")
-        else:
-            st.caption("Sin datos para cuadrante.")
+            p97c = float(d2["_g_abs_var_compra"].quantile(0.97))
+            p97v = float(d2["_g_abs_var_costo"].quantile(0.97))
+            xm = max(p97c * 1.1, umbral_c * 2)
+            ym = max(p97v * 1.1, umbral_v * 2)
+            d2v = d2[(d2["_g_abs_var_compra"] <= xm) & (d2["_g_abs_var_costo"] <= ym)]
+            if sem_col and sem_col in d2v.columns:
+                d2v = d2v.copy()
+                d2v["_sem_ui"] = d2v[sem_col].map(_auditoria_etiqueta_semaforo_ui)
+                _cmap_q = {ui: _auditoria_color_discreto_semaforo_ui(ui) for ui in d2v["_sem_ui"].dropna().unique()}
+                fig = px.scatter(
+                    d2v, x="_g_abs_var_compra", y="_g_abs_var_costo", color="_sem_ui",
+                    color_discrete_map=_cmap_q,
+                    opacity=0.45, hover_data=[ref_col] if ref_col and ref_col in d2v.columns else None,
+                    title="Cuadrante doble variación (P97)",
+                    labels={"_g_abs_var_compra": "|Δ compra|%", "_g_abs_var_costo": "|Δ costo|%", "_sem_ui": "Semáforo"},
+                )
+            else:
+                fig = px.scatter(d2v, x="_g_abs_var_compra", y="_g_abs_var_costo", color=None,
+                                 opacity=0.45, hover_data=[ref_col] if ref_col and ref_col in d2v.columns else None,
+                                 title="Cuadrante doble variación (P97)",
+                                 labels={"_g_abs_var_compra": "|Δ compra|%", "_g_abs_var_costo": "|Δ costo|%"})
+            fig.update_traces(marker=dict(size=5))
+            fig.add_vline(x=umbral_c, line_dash="dot", line_color="#f59e0b")
+            fig.add_hline(y=umbral_v, line_dash="dot", line_color="#f59e0b")
+            fig.add_vrect(x0=umbral_c, x1=xm, y0=umbral_v, y1=ym, fillcolor="red", opacity=0.06,
+                          annotation_text="Doble problema")
+            fig.update_layout(**_CL)
+            _plotly_show(fig)
 
-    with gc2:
-        if not d2.empty:
-            d2["_cuadrante"] = "Bajo ambos"
-            d2.loc[(d2["_g_abs_var_compra"] >= umbral_c) & (d2["_g_abs_var_costo"] < umbral_v), "_cuadrante"] = "Solo Δ compra"
-            d2.loc[(d2["_g_abs_var_compra"] < umbral_c) & (d2["_g_abs_var_costo"] >= umbral_v), "_cuadrante"] = "Solo Δ vs costo"
-            d2.loc[(d2["_g_abs_var_compra"] >= umbral_c) & (d2["_g_abs_var_costo"] >= umbral_v), "_cuadrante"] = "Doble problema"
-            q_count = d2["_cuadrante"].value_counts().reset_index()
-            q_count.columns = ["Cuadrante", "n"]
-            cmap_q = {"Doble problema": "#ef4444", "Solo Δ compra": "#f59e0b", "Solo Δ vs costo": "#3b82f6", "Bajo ambos": "#22c55e"}
-            fig_qbar = px.bar(
-                q_count, x="Cuadrante", y="n", color="Cuadrante",
-                color_discrete_map=cmap_q,
-                title="Distribución por cuadrante de riesgo",
-                labels={"n": "N° referencias"},
-            )
-            fig_qbar.update_layout(showlegend=False)
-            _plotly_show(fig_qbar)
+    with a2:
+        has_both_f = df["_g_abs_var_compra"].notna() & df["_g_abs_var_costo"].notna()
+        d2f = df[has_both_f].copy()
+        if not d2f.empty:
+            d2f["_cuad"] = "Bajo ambos"
+            d2f.loc[(d2f["_g_abs_var_compra"] >= umbral_c) & (d2f["_g_abs_var_costo"] < umbral_v), "_cuad"] = "Solo Δ compra"
+            d2f.loc[(d2f["_g_abs_var_compra"] < umbral_c) & (d2f["_g_abs_var_costo"] >= umbral_v), "_cuad"] = "Solo Δ costo"
+            d2f.loc[(d2f["_g_abs_var_compra"] >= umbral_c) & (d2f["_g_abs_var_costo"] >= umbral_v), "_cuad"] = "Doble problema"
+            qc = d2f["_cuad"].value_counts().reset_index()
+            qc.columns = ["Cuadrante", "n"]
+            cmap_q = {"Doble problema": "#ef4444", "Solo Δ compra": "#f59e0b", "Solo Δ costo": "#3b82f6", "Bajo ambos": "#22c55e"}
+            fig = px.bar(qc, x="Cuadrante", y="n", color="Cuadrante",
+                         color_discrete_map=cmap_q, title="Distribución por cuadrante",
+                         labels={"n": "Refs"})
+            fig.update_layout(showlegend=False, **_CL)
+            _plotly_show(fig)
 
-    # ── 3. Días entre compras vs variación ───────────────────────────────
-    st.markdown("#### Temporalidad — ¿los saltos coinciden con compras distantes?")
-    g3, g4 = st.columns(2, gap="large")
-    with g3:
+    a3, a4 = st.columns(2, gap="medium")
+    with a3:
         if dias_col and dias_col in df_sc.columns and df_sc["_g_abs_var_compra"].notna().any():
             d3 = df_sc.dropna(subset=[dias_col, "_g_abs_var_compra"])
             if not d3.empty:
-                p95_dias = float(d3[dias_col].quantile(0.95))
-                p95_var = float(d3["_g_abs_var_compra"].quantile(0.95))
-                d3_clean = d3[(d3[dias_col] <= p95_dias * 1.1) & (d3["_g_abs_var_compra"] <= p95_var * 1.1)]
-                n_out = len(d3) - len(d3_clean)
-                _use_score_color = "_g_score" in d3_clean.columns and d3_clean["_g_score"].notna().any()
-                fig_dias = px.scatter(
-                    d3_clean, x=dias_col, y="_g_abs_var_compra", opacity=0.40,
-                    color="_g_score" if _use_score_color else None,
-                    color_continuous_scale="YlOrRd" if _use_score_color else None,
-                    title="Días entre compras vs |Δ compra| (recortado P95)",
-                    labels={dias_col: "Días entre compras", "_g_abs_var_compra": "|Δ compra| (%)", "_g_score": "Score"},
-                )
-                fig_dias.update_traces(marker=dict(size=5), selector=dict(type="scatter"))
-                _plotly_show(fig_dias)
-                if n_out > 0:
-                    st.caption(f"{n_out} outliers extremos ocultados.")
-        else:
-            st.caption("Sin datos de días o variación de compra.")
+                p95d = float(d3[dias_col].quantile(0.95))
+                p95v = float(d3["_g_abs_var_compra"].quantile(0.95))
+                d3c = d3[(d3[dias_col] <= p95d * 1.1) & (d3["_g_abs_var_compra"] <= p95v * 1.1)]
+                use_sc = "_g_score" in d3c.columns and d3c["_g_score"].notna().any()
+                fig = px.scatter(d3c, x=dias_col, y="_g_abs_var_compra", opacity=0.4,
+                                 color="_g_score" if use_sc else None,
+                                 color_continuous_scale="YlOrRd" if use_sc else None,
+                                 title="Días entre compras vs |Δ compra|",
+                                 labels={dias_col: "Días", "_g_abs_var_compra": "|Δ compra|%"})
+                fig.update_traces(marker=dict(size=4), selector=dict(type="scatter"))
+                fig.update_layout(**_CL)
+                _plotly_show(fig)
 
-    with g4:
-        if dias_col and dias_col in df.columns and df["_g_abs_var_compra"].notna().any():
-            d4 = df.dropna(subset=[dias_col, "_g_abs_var_compra"])
-            if not d4.empty:
-                d4["_dias_bin"] = pd.qcut(d4[dias_col], q=8, duplicates="drop")
-                dias_agg = (
-                    d4.groupby("_dias_bin", observed=True)["_g_abs_var_compra"]
-                    .agg(media="mean", mediana="median", p75=lambda s: s.quantile(0.75))
-                    .reset_index()
+    with a4:
+        if (precio_ult_cop_col and precio_pen_cop_col and sistema_precio_col
+                and all(c in df.columns for c in [precio_ult_cop_col, precio_pen_cop_col, sistema_precio_col])):
+            sys_dir = (
+                df.groupby(df[sistema_precio_col].astype(str), dropna=False)
+                .agg(
+                    subio=(var_c, lambda s: int((pd.to_numeric(s, errors="coerce") > umbral_c).sum())) if var_c and var_c in df.columns else (precio_ult_cop_col, "count"),
+                    bajo=(var_c, lambda s: int((pd.to_numeric(s, errors="coerce") < -umbral_c).sum())) if var_c and var_c in df.columns else (precio_ult_cop_col, "count"),
+                    estable=(var_c, lambda s: int((pd.to_numeric(s, errors="coerce").abs() <= umbral_c).sum())) if var_c and var_c in df.columns else (precio_ult_cop_col, "count"),
+                    refs=(ref_col, "nunique") if ref_col else (precio_ult_cop_col, "count"),
                 )
-                dias_agg["label"] = dias_agg["_dias_bin"].astype(str)
-                fig_dias_trend = go.Figure()
-                fig_dias_trend.add_trace(go.Scatter(
-                    x=dias_agg["label"], y=dias_agg["media"],
-                    mode="lines+markers", name="Media |Δ compra|", line=dict(color="#38bdf8", width=2)))
-                fig_dias_trend.add_trace(go.Scatter(
-                    x=dias_agg["label"], y=dias_agg["p75"],
-                    mode="lines", name="P75 (cola pesada)", line=dict(color="#ef4444", width=1.5, dash="dash")))
-                fig_dias_trend.update_layout(
-                    title="¿Más días → más variación? Tendencia por octil",
-                    xaxis_title="Octil de días", yaxis_title="|Δ compra| (%)",
-                    xaxis_tickangle=-35, legend=dict(orientation="h", y=-0.25))
-                _plotly_show(fig_dias_trend)
-        else:
-            st.caption("Sin datos para tendencia días/variación.")
+                .reset_index().sort_values("subio", ascending=False).head(12)
+            )
+            if not sys_dir.empty and var_c:
+                sys_m = sys_dir.melt(id_vars=[sistema_precio_col, "refs"],
+                                     value_vars=["subio", "bajo", "estable"],
+                                     var_name="Dir", value_name="n")
+                dir_lab = {"subio": f"Subió>{umbral_c}%", "bajo": f"Bajó>{umbral_c}%", "estable": "Estable"}
+                dir_col = {"subio": "#ef4444", "bajo": "#22c55e", "estable": "#64748b"}
+                sys_m["Dir"] = sys_m["Dir"].map(dir_lab)
+                cmap_d = {v: dir_col[k] for k, v in dir_lab.items()}
+                fig = px.bar(sys_m, y=sistema_precio_col, x="n", color="Dir",
+                             orientation="h", barmode="stack", color_discrete_map=cmap_d,
+                             title=f"Dirección por sistema (±{umbral_c}%)",
+                             labels={"n": "Refs", sistema_precio_col: "Sistema"})
+                fig.update_layout(**_CL)
+                _plotly_show(fig)
 
-    # ── 4. Top refs candidatas a cambio de precio ────────────────────────
-    st.markdown("#### Top referencias candidatas a cambio de precio")
-    st.caption(
-        "Ranking por índice de prioridad (0,40·|Δ compra| + 0,30·|Δ vs costo| + 0,30·score, "
-        "×1,5 si semáforo crítico, ×1,2 si moderado alto)."
-    )
+    # ── CAP 4 · Concentración ─────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 4 · Concentración — ¿en qué segmentos?")
+    st.caption("Modelo, país de origen y rotación: los tres ejes de la cadena de abastecimiento.")
+
+    co1, co2 = st.columns(2, gap="medium")
+    with co1:
+        if modelo_col and modelo_col in df.columns and df["_g_abs_var_compra"].notna().any():
+            mod_agg = (
+                df.groupby(df[modelo_col].astype(str), dropna=False)
+                .agg(media_var=("_g_abs_var_compra", "mean"),
+                     refs=(ref_col, "nunique") if ref_col else ("_g_abs_var_compra", "count"),
+                     pct_sobre=("_g_abs_var_compra", lambda s: float((s >= umbral_c).sum() / max(len(s), 1) * 100)))
+                .reset_index().sort_values("media_var", ascending=False).head(12)
+            )
+            fig = px.bar(mod_agg, y=modelo_col, x="media_var", orientation="h",
+                         color="pct_sobre", color_continuous_scale="Reds", text="refs",
+                         title="Modelos con mayor |Δ compra|",
+                         labels={"media_var": "Media |Δ|%", modelo_col: "Modelo", "pct_sobre": "%≥umbral"})
+            fig.update_traces(textposition="outside")
+            fig.update_layout(**_CL)
+            _plotly_show(fig)
+
+    with co2:
+        if pais_ult_col and pais_ult_col in df.columns and df["_g_abs_var_compra"].notna().any():
+            pais_agg = (
+                df.groupby(df[pais_ult_col].fillna("SIN DATO").astype(str), dropna=False)
+                .agg(media_var=("_g_abs_var_compra", "mean"),
+                     refs=(ref_col, "nunique") if ref_col else ("_g_abs_var_compra", "count"),
+                     pct_sobre=("_g_abs_var_compra", lambda s: float((s >= umbral_c).sum() / max(len(s), 1) * 100)))
+                .reset_index()
+            )
+            pais_agg = pais_agg[pais_agg["refs"] >= 3].sort_values("media_var", ascending=False).head(12)
+            if not pais_agg.empty:
+                fig = px.bar(pais_agg, y=pais_ult_col, x="media_var", orientation="h",
+                             color="pct_sobre", color_continuous_scale="YlOrRd", text="refs",
+                             title="Variación por país de origen",
+                             labels={"media_var": "Media |Δ|%", pais_ult_col: "País", "pct_sobre": "%≥umbral"})
+                fig.update_traces(textposition="outside")
+                fig.update_layout(**_CL)
+                _plotly_show(fig)
+
+    if rot_col and rot_col in df.columns and df["_g_abs_var_compra"].notna().any():
+        rot_agg = (
+            df.groupby(df[rot_col].astype(str), dropna=False)
+            .agg(media_var=("_g_abs_var_compra", "mean"),
+                 refs=(ref_col, "nunique") if ref_col else ("_g_abs_var_compra", "count"),
+                 pct_crit=("_g_abs_var_compra", lambda s: float((s >= umbral_c).sum() / max(len(s), 1) * 100)))
+            .reset_index()
+        )
+        rot_agg = rot_agg[rot_agg["refs"] >= 2]
+        if not rot_agg.empty:
+            ro1, ro2 = st.columns(2)
+            with ro1:
+                fig = px.scatter(rot_agg, x=rot_col, y="media_var", size="refs",
+                                 color="pct_crit", color_continuous_scale="YlOrRd",
+                                 title="Rotación vs variación",
+                                 labels={rot_col: "Rotación", "media_var": "Media |Δ|%", "pct_crit": "%≥umbral"})
+                fig.add_hline(y=umbral_c, line_dash="dot", line_color="#ef4444")
+                fig.update_layout(**_CL)
+                _plotly_show(fig)
+            with ro2:
+                if dias_col and dias_col in df.columns and df["_g_abs_var_compra"].notna().any():
+                    d4 = df.dropna(subset=[dias_col, "_g_abs_var_compra"])
+                    if not d4.empty:
+                        d4["_dias_bin"] = pd.qcut(d4[dias_col], q=8, duplicates="drop")
+                        dias_a = (
+                            d4.groupby("_dias_bin", observed=True)["_g_abs_var_compra"]
+                            .agg(media="mean", p75=lambda s: s.quantile(0.75))
+                            .reset_index()
+                        )
+                        dias_a["label"] = dias_a["_dias_bin"].astype(str)
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=dias_a["label"], y=dias_a["media"],
+                                                 mode="lines+markers", name="Media",
+                                                 line=dict(color="#38bdf8", width=2)))
+                        fig.add_trace(go.Scatter(x=dias_a["label"], y=dias_a["p75"],
+                                                 mode="lines", name="P75",
+                                                 line=dict(color="#ef4444", width=1.5, dash="dash")))
+                        fig.update_layout(title="Tendencia |Δ| por octil de días",
+                                          xaxis_title="Días (octil)", yaxis_title="|Δ compra|%",
+                                          xaxis_tickangle=-35, legend=dict(orientation="h", y=-0.25),
+                                          **_CL)
+                        _plotly_show(fig)
+
+    # ── CAP 5 · Plan de acción ────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 5 · Plan de acción — top 20 por variación de compra")
+    st.caption("Prioridad = 0,60·|Δ compra| + 0,25·|Δ costo| + 0,15·score, ×1,5 si semáforo crítico.")
+
     df_cand = df.copy()
-    df_cand["_prioridad"] = 0.0
-    if df_cand["_g_abs_var_compra"].notna().any():
-        df_cand["_prioridad"] += df_cand["_g_abs_var_compra"].fillna(0) * 0.40
-    if df_cand["_g_abs_var_costo"].notna().any():
-        df_cand["_prioridad"] += df_cand["_g_abs_var_costo"].fillna(0) * 0.30
-    if df_cand["_g_score"].notna().any():
-        df_cand["_prioridad"] += df_cand["_g_score"].fillna(0) * 0.30
+    df_cand["_pri_var"] = (
+        df_cand["_g_abs_var_compra"].fillna(0) * 0.60
+        + df_cand["_g_abs_var_costo"].fillna(0) * 0.25
+        + df_cand["_g_score"].fillna(0) * 0.15
+    )
     if sem_col and sem_col in df_cand.columns:
-        crit_mask = df_cand[sem_col].map(_auditoria_es_semaforo_critico)
-        mod_alto_mask = df_cand[sem_col].map(_auditoria_es_semaforo_mod_alto)
-        df_cand.loc[crit_mask, "_prioridad"] *= 1.5
-        df_cand.loc[mod_alto_mask & ~crit_mask, "_prioridad"] *= 1.2
+        df_cand.loc[df_cand[sem_col].map(_auditoria_es_semaforo_critico), "_pri_var"] *= 1.5
+        mask_mod = df_cand[sem_col].map(_auditoria_es_semaforo_mod_alto) & ~df_cand[sem_col].map(_auditoria_es_semaforo_critico)
+        df_cand.loc[mask_mod, "_pri_var"] *= 1.2
 
     if ref_col and ref_col in df_cand.columns:
-        agg_cols = {"_prioridad": ("_prioridad", "max")}
+        agg_c: dict = {"_pri_var": ("_pri_var", "max")}
         if var_c and var_c in df_cand.columns:
-            agg_cols["var_compra"] = (var_c, "first")
+            agg_c["var_compra"] = (var_c, "first")
         if var_costo_pct and var_costo_pct in df_cand.columns:
-            agg_cols["var_costo"] = (var_costo_pct, "first")
+            agg_c["var_costo"] = (var_costo_pct, "first")
         if sem_col and sem_col in df_cand.columns:
-            agg_cols["semaforo"] = (sem_col, "first")
+            agg_c["semaforo"] = (sem_col, "first")
         if desc_col and desc_col in df_cand.columns:
-            agg_cols["descripcion"] = (desc_col, "first")
+            agg_c["descripcion"] = (desc_col, "first")
         if sistema_precio_col and sistema_precio_col in df_cand.columns:
-            agg_cols["sistema"] = (sistema_precio_col, "first")
+            agg_c["sistema"] = (sistema_precio_col, "first")
 
-        top_cand = (
-            df_cand.groupby(ref_col, dropna=False)
-            .agg(**agg_cols)
-            .reset_index()
-            .sort_values("_prioridad", ascending=False)
-            .head(30)
+        top = (
+            df_cand.groupby(ref_col, dropna=False).agg(**agg_c)
+            .reset_index().sort_values("_pri_var", ascending=False).head(20)
         )
-        if not top_cand.empty:
-            fig_cand = go.Figure()
-            bar_colors = []
-            for _, r in top_cand.iterrows():
-                sem_str = _auditoria_normalizar_etiqueta_semaforo(r.get("semaforo", ""))
-                if sem_str == "CRITICO":
-                    bar_colors.append("#ef4444")
-                elif sem_str == "MODERADO ALTO":
-                    bar_colors.append("#f59e0b")
-                else:
-                    bar_colors.append("#3b82f6")
-            fig_cand.add_trace(go.Bar(
-                y=top_cand[ref_col].astype(str),
-                x=top_cand["_prioridad"],
-                orientation="h",
-                marker_color=bar_colors,
-                text=[f"{r.get('var_compra', 0):+.1f}% / {r.get('var_costo', 0):+.1f}%" for _, r in top_cand.iterrows()],
-                textposition="outside",
-                hovertemplate=(
-                    "Ref: %{y}<br>Prioridad: %{x:.1f}<br>"
-                    + "".join(f"{k}: %{{customdata[{i}]}}<br>" for i, k in enumerate(["Semáforo", "Sistema", "Descripción"]))
-                    + "<extra></extra>"
-                ),
-                customdata=top_cand[["semaforo", "sistema", "descripcion"]].values if all(c in top_cand.columns for c in ["semaforo", "sistema", "descripcion"]) else None,
-            ))
-            fig_cand.update_layout(
-                title="Top 30 refs prioritarias — rojo=crítico, naranja=alto, azul=otro | texto = Δ compra / Δ costo",
-                xaxis_title="Índice de prioridad",
-                yaxis_title="Referencia",
-                height=max(500, len(top_cand) * 22),
-                yaxis=dict(autorange="reversed"),
-            )
-            _plotly_show(fig_cand)
+        if not top.empty:
+            bar_c = []
+            for _, r in top.iterrows():
+                s = _auditoria_normalizar_etiqueta_semaforo(r.get("semaforo", ""))
+                bar_c.append("#ef4444" if s == "CRITICO" else "#f59e0b" if s == "MODERADO ALTO" else "#3b82f6")
+            text_vals = []
+            for _, r in top.iterrows():
+                vp = f"{float(r.get('var_compra', 0)):+.1f}%" if "var_compra" in top.columns else ""
+                vc = f"{float(r.get('var_costo', 0)):+.1f}%" if "var_costo" in top.columns else ""
+                text_vals.append(f"Δcompra {vp}  Δcosto {vc}".strip())
+            fig = go.Figure(go.Bar(
+                y=top[ref_col].astype(str), x=top["_pri_var"], orientation="h",
+                marker_color=bar_c, text=text_vals, textposition="outside"))
+            fig.update_layout(
+                title="Top 20 — prioridad por variación de compra",
+                xaxis_title="Índice de prioridad", yaxis_title="Referencia",
+                height=max(400, len(top) * 22), yaxis=dict(autorange="reversed"))
+            _plotly_show(fig)
 
-    # ── 5. Concentración por modelo ──────────────────────────────────────
-    st.markdown("#### Modelos con mayor variación de compra")
-    if modelo_col and modelo_col in df.columns and df["_g_abs_var_compra"].notna().any():
-        mod_agg = (
-            df.groupby(df[modelo_col].astype(str), dropna=False)
-            .agg(
-                media_var=("_g_abs_var_compra", "mean"),
-                refs=(ref_col, "nunique") if ref_col else ("_g_abs_var_compra", "count"),
-                pct_sobre=("_g_abs_var_compra", lambda s: float((s >= umbral_c).sum() / max(len(s), 1) * 100)),
-            )
-            .reset_index()
-            .sort_values("media_var", ascending=False)
-            .head(15)
-        )
-        fig_mod = px.bar(
-            mod_agg, y=modelo_col, x="media_var", orientation="h",
-            color="pct_sobre", color_continuous_scale="Reds",
-            text="refs", hover_data={"pct_sobre": ":.1f"},
-            title="Modelos con mayor |Δ compra| medio — color = % sobre umbral",
-            labels={"media_var": "Media |Δ compra| (%)", modelo_col: "Modelo", "pct_sobre": "% ≥ umbral", "refs": "Refs"},
-        )
-        fig_mod.update_traces(textposition="outside")
-        _plotly_show(fig_mod)
-    else:
-        st.caption("Sin `Modelo_CNH` o variación de compra.")
 
-    # ── 6. País de última compra × variación ─────────────────────────────
-    if pais_ult_col and pais_ult_col in df.columns and df["_g_abs_var_compra"].notna().any():
-        st.markdown("#### Alerta cadena de abastecimiento por país de origen")
-        st.caption("¿Los incrementos se concentran en algún país? Señal de riesgo cambiario o de proveedor.")
-        pais_agg = (
-            df.groupby(df[pais_ult_col].fillna("SIN DATO").astype(str), dropna=False)
-            .agg(
-                media_var=("_g_abs_var_compra", "mean"),
-                mediana_var=("_g_abs_var_compra", "median"),
-                refs=(ref_col, "nunique") if ref_col else ("_g_abs_var_compra", "count"),
-                pct_sobre_umbral=("_g_abs_var_compra", lambda s: float((s >= umbral_c).sum() / max(len(s), 1) * 100)),
-            )
-            .reset_index()
-        )
-        pais_agg = pais_agg[pais_agg["refs"] >= 3].sort_values("media_var", ascending=False).head(15)
-        if not pais_agg.empty:
-            pa1, pa2 = st.columns(2, gap="large")
-            with pa1:
-                fig_pais = px.bar(
-                    pais_agg, y=pais_ult_col, x="media_var", orientation="h",
-                    color="pct_sobre_umbral", color_continuous_scale="YlOrRd",
-                    text="refs",
-                    hover_data={"mediana_var": ":.1f", "pct_sobre_umbral": ":.1f"},
-                    title="Variación media de compra por país — color = % sobre umbral",
-                    labels={"media_var": "Media |Δ compra| (%)", pais_ult_col: "País", "pct_sobre_umbral": "% ≥ umbral", "refs": "Refs"},
-                )
-                fig_pais.update_traces(textposition="outside")
-                _plotly_show(fig_pais)
-            with pa2:
-                fig_pais_bub = px.scatter(
-                    pais_agg, x="mediana_var", y="pct_sobre_umbral",
-                    size="refs", text=pais_ult_col,
-                    color="media_var", color_continuous_scale="YlOrRd",
-                    title="País: mediana variación vs % refs sobre umbral",
-                    labels={"mediana_var": "Mediana |Δ compra| (%)", "pct_sobre_umbral": "% refs ≥ umbral", "refs": "Refs", "media_var": "Media"},
-                )
-                fig_pais_bub.update_traces(textposition="top center", textfont_size=9)
-                fig_pais_bub.add_vline(x=umbral_c, line_dash="dot", line_color="#ef4444")
-                _plotly_show(fig_pais_bub)
-
-    # ── 7. Rotación × variación ──────────────────────────────────────────
-    if rot_col and rot_col in df.columns and df["_g_abs_var_compra"].notna().any():
-        st.markdown("#### ¿La rotación esconde el problema?")
-        st.caption(
-            "Alta rotación + variación alta → impacto masivo en costos. "
-            "Baja rotación + variación alta → inventario obsoleto a precio incorrecto."
-        )
-        rot_var = (
-            df.groupby(df[rot_col].astype(str), dropna=False)
-            .agg(
-                media_var=("_g_abs_var_compra", "mean"),
-                score_medio=("_g_score", "mean"),
-                refs=(ref_col, "nunique") if ref_col else ("_g_abs_var_compra", "count"),
-                pct_critico=("_g_abs_var_compra", lambda s: float((s >= umbral_c).sum() / max(len(s), 1) * 100)),
-            )
-            .reset_index()
-        )
-        rot_var = rot_var[rot_var["refs"] >= 2]
-        if not rot_var.empty:
-            fig_rot_var = px.scatter(
-                rot_var, x=rot_col, y="media_var",
-                size="refs", color="pct_critico",
-                color_continuous_scale="YlOrRd",
-                hover_data={"score_medio": ":.1f", "pct_critico": ":.1f", "refs": True},
-                title="Rotación vs variación media — tamaño = refs, color = % críticas",
-                labels={rot_col: "Rotación", "media_var": "Media |Δ compra| (%)", "pct_critico": "% ≥ umbral"},
-            )
-            fig_rot_var.add_hline(y=umbral_c, line_dash="dot", line_color="#ef4444",
-                                  annotation_text=f"Umbral {umbral_c}%")
-            _plotly_show(fig_rot_var)
-
-    # ── 8. Dirección del cambio por sistema ──────────────────────────────
-    if (precio_ult_cop_col and precio_pen_cop_col and sistema_precio_col
-            and all(c in df.columns for c in [precio_ult_cop_col, precio_pen_cop_col, sistema_precio_col])):
-        st.markdown("#### Dirección del cambio de precio por sistema")
-        sys_dir = (
-            df.groupby(df[sistema_precio_col].astype(str), dropna=False)
-            .agg(
-                subio=(var_c, lambda s: int((pd.to_numeric(s, errors="coerce") > umbral_c).sum())) if var_c and var_c in df.columns else (precio_ult_cop_col, "count"),
-                bajo=(var_c, lambda s: int((pd.to_numeric(s, errors="coerce") < -umbral_c).sum())) if var_c and var_c in df.columns else (precio_ult_cop_col, "count"),
-                estable=(var_c, lambda s: int((pd.to_numeric(s, errors="coerce").abs() <= umbral_c).sum())) if var_c and var_c in df.columns else (precio_ult_cop_col, "count"),
-                refs=(ref_col, "nunique") if ref_col else (precio_ult_cop_col, "count"),
-            )
-            .reset_index()
-            .sort_values("subio", ascending=False)
-            .head(15)
-        )
-        if not sys_dir.empty and var_c:
-            sys_melt = sys_dir.melt(
-                id_vars=[sistema_precio_col, "refs"],
-                value_vars=["subio", "bajo", "estable"],
-                var_name="Dirección", value_name="n",
-            )
-            dir_cmap = {"subio": "#ef4444", "bajo": "#22c55e", "estable": "#64748b"}
-            dir_labels = {"subio": f"Subió > {umbral_c}%", "bajo": f"Bajó > {umbral_c}%", "estable": "Estable"}
-            sys_melt["Dirección"] = sys_melt["Dirección"].map(dir_labels)
-            dir_cmap_named = {v: dir_cmap[k] for k, v in dir_labels.items()}
-            fig_dir = px.bar(
-                sys_melt, y=sistema_precio_col, x="n", color="Dirección",
-                orientation="h", barmode="stack",
-                color_discrete_map=dir_cmap_named,
-                title=f"Dirección del precio de compra por sistema (umbral ±{umbral_c}%)",
-                labels={"n": "N° referencias", sistema_precio_col: "Sistema precio"},
-            )
-            _plotly_show(fig_dir)
 
 
 _render_header_y_actualizacion()
