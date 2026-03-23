@@ -44,6 +44,19 @@ SQL_003_OPCION: Final[str] = "SQL 003 — Auditoría refs (auditoria_raw)"
 SQL_OPCIONES: Final[list[str]] = [SQL_001_OPCION, SQL_002_OPCION, SQL_003_OPCION]
 
 
+def _init_multiselect_list(key: str, options: list[str]) -> None:
+    """Evita default=[] + valor en session_state (p. ej. desde user_filter_prefs.json)."""
+    opt_set = set(options)
+    if key not in st.session_state:
+        st.session_state[key] = []
+    else:
+        prev = st.session_state[key]
+        if not isinstance(prev, list):
+            st.session_state[key] = []
+        else:
+            st.session_state[key] = [x for x in prev if x in opt_set]
+
+
 st.set_page_config(page_title="Consulta precios CNH", page_icon=":bar_chart:", layout="wide")
 load_filter_prefs_into_session()
 
@@ -1583,14 +1596,16 @@ def _margen_ui_filtros_completos(df_margen: pd.DataFrame, margen_col: str, preci
             if "Bodega" in df_margen.columns
             else []
         )
-        bodega_sel = st.multiselect("Bodega", options=bodegas, default=[], key="margen_filtro_bodega")
+        _init_multiselect_list("margen_filtro_bodega", bodegas)
+        bodega_sel = st.multiselect("Bodega", options=bodegas, key="margen_filtro_bodega")
     with filtros3:
         rotaciones = (
             sorted([str(x) for x in df_margen["Rotacion"].dropna().unique()])
             if "Rotacion" in df_margen.columns
             else []
         )
-        rot_sel = st.multiselect("Rotación", options=rotaciones, default=[], key="margen_filtro_rotacion")
+        _init_multiselect_list("margen_filtro_rotacion", rotaciones)
+        rot_sel = st.multiselect("Rotación", options=rotaciones, key="margen_filtro_rotacion")
 
     filtros5, filtros6, filtros7, filtros8 = st.columns([1, 1, 1, 1], gap="large")
     with filtros5:
@@ -1715,14 +1730,16 @@ def _margen_ui_filtros_completos(df_margen: pd.DataFrame, margen_col: str, preci
             if "Nom_Instalacion" in df_margen.columns
             else []
         )
-        inst_sel = st.multiselect("Nom. instalación", options=nom_inst, default=[], key="margen_filtro_instalacion")
+        _init_multiselect_list("margen_filtro_instalacion", nom_inst)
+        inst_sel = st.multiselect("Nom. instalación", options=nom_inst, key="margen_filtro_instalacion")
     with filtros8:
         sistemas = (
             sorted([str(x) for x in df_margen["Sistema_Precio"].dropna().unique()])
             if "Sistema_Precio" in df_margen.columns
             else []
         )
-        sistema_sel = st.multiselect("Sistema precio", options=sistemas, default=[], key="margen_filtro_sistema")
+        _init_multiselect_list("margen_filtro_sistema", sistemas)
+        sistema_sel = st.multiselect("Sistema precio", options=sistemas, key="margen_filtro_sistema")
 
         def _sync_margen_from_slider() -> None:
             lo, hi = st.session_state["margen_pct_range"]
@@ -1857,13 +1874,23 @@ def _render_tab_margen() -> None:
     if not margenes_disponibles:
         st.warning("No hay columnas de margen disponibles para analizar.")
         return
+    _mk = "margen_filtro_margen_col"
+    _fallback = [margen_col if margen_col in margenes_disponibles else margenes_disponibles[0]]
+    if _mk not in st.session_state:
+        st.session_state[_mk] = _fallback
+    else:
+        prev = st.session_state[_mk]
+        if not isinstance(prev, list):
+            st.session_state[_mk] = _fallback
+        else:
+            ok = [x for x in prev if x in margenes_disponibles][:1]
+            st.session_state[_mk] = ok if ok else _fallback
     margen_sel = st.multiselect(
         "Margen a analizar",
         options=margenes_disponibles,
-        default=[margen_col if margen_col in margenes_disponibles else margenes_disponibles[0]],
         max_selections=1,
         help="Selecciona el margen que quieres mover en filtros y KPIs.",
-        key="margen_filtro_margen_col",
+        key=_mk,
     )
     if not margen_sel:
         st.info("Selecciona un margen para continuar.")
@@ -2335,10 +2362,10 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
     with filtros2:
         if sem_col:
             sem_opts = sorted([str(x) for x in df[sem_col].dropna().astype(str).str.strip().unique() if str(x).strip()])
+            _init_multiselect_list("aud_refs_sem_sel", sem_opts)
             sem_sel = st.multiselect(
                 "Semáforo",
                 options=sem_opts,
-                default=[],
                 key="aud_refs_sem_sel",
                 format_func=_auditoria_etiqueta_semaforo_ui,
                 help="Regla SQL sobre **alineación precio última compra vs costos extremos** (min/max) y cuartiles; "
@@ -2351,7 +2378,8 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
     with filtros3:
         if rot_col and rot_col in df.columns:
             rot_opts = sorted([str(x) for x in df[rot_col].dropna().astype(str).str.strip().unique() if str(x).strip()])
-            rot_sel = st.multiselect("Rotación / clasificación", options=rot_opts, default=[], key="aud_refs_rot_sel")
+            _init_multiselect_list("aud_refs_rot_sel", rot_opts)
+            rot_sel = st.multiselect("Rotación / clasificación", options=rot_opts, key="aud_refs_rot_sel")
         else:
             rot_sel = []
             st.caption("Sin clasificación rotación.")
@@ -2507,7 +2535,8 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
             if sistema_precio_col and sistema_precio_col in df.columns
             else []
         )
-        sistema_sel = st.multiselect("Sistema precio", options=sistemas, default=[], key="aud_refs_sistema_sel")
+        _init_multiselect_list("aud_refs_sistema_sel", sistemas)
+        sistema_sel = st.multiselect("Sistema precio", options=sistemas, key="aud_refs_sistema_sel")
     with filtros8:
         st.empty()
 
