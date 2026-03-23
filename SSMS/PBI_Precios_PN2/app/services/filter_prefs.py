@@ -16,6 +16,7 @@ TAB_FILTER_KEYS: Final[dict[str, list[str]]] = {
     "consulta": [
         "consulta_txt_busqueda",
         "consulta_coincidencias",
+        "consulta_origen_disp_umbral",
     ],
     "margen": [
         "margen_filtro_busqueda",

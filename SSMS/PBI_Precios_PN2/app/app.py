@@ -105,15 +105,18 @@ st.markdown(
     }
     .section-title {
         color: #e5e7eb;
-        margin-top: 1rem;
-        margin-bottom: 0.5rem;
+        margin-top: 0.65rem;
+        margin-bottom: 0.35rem;
         font-weight: 650;
-        font-size: 1rem;
+        font-size: 0.95rem;
+    }
+    .section-title--first {
+        margin-top: 0.1rem;
     }
     div[data-testid="stMetric"] {
         border: 1px solid var(--ui-border, #25314d);
         border-radius: var(--ui-radius, 10px);
-        padding: 0.38rem 0.5rem;
+        padding: 0.28rem 0.45rem;
         background: var(--ui-surface, #101a31);
         box-shadow: var(--ui-shadow, 0 3px 10px rgba(0, 0, 0, 0.22));
         min-height: auto;
@@ -128,7 +131,7 @@ st.markdown(
         margin-bottom: 0.1rem !important;
     }
     div[data-testid="stMetric"] [data-testid="stMetricValue"] {
-        font-size: 1.05rem !important;
+        font-size: 0.98rem !important;
     }
     div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
         font-size: 0.72rem !important;
@@ -172,7 +175,7 @@ st.markdown(
         padding: 0.55rem 0.65rem;
     }
     .ui-card--tight {
-        padding: 0.48rem 0.55rem;
+        padding: 0.36rem 0.48rem;
     }
     .ui-card-heading {
         font-size: 0.72rem;
@@ -183,13 +186,13 @@ st.markdown(
         margin: 0 0 0.3rem 0;
     }
     .consulta-strip-gap {
-        height: 0.45rem;
+        height: 0.28rem;
     }
     /* Hasta 10 alternas: rejilla 5×2 en desktop, se adapta en móvil */
     .alt-chip-grid {
         display: grid;
         grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 0.35rem;
+        gap: 0.28rem;
     }
     @media (max-width: 900px) {
         .alt-chip-grid {
@@ -250,22 +253,22 @@ st.markdown(
     .origin-grid-unified {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 0.5rem;
-        margin-top: 0.35rem;
-        align-items: stretch;
+        gap: 0.38rem;
+        margin-top: 0.22rem;
+        align-items: start;
     }
     .origin-grid-unified > .ui-card--origin {
         min-width: 0;
     }
     .origin-grid-unified .ui-origin-col--px {
-        font-size: 1.02rem;
+        font-size: 0.95rem;
     }
     @media (max-width: 768px) {
         .origin-grid-unified {
             grid-template-columns: 1fr;
         }
         .origin-grid-unified .ui-origin-col--px {
-            font-size: 1.1rem;
+            font-size: 1rem;
         }
     }
     /* Una fila densa: origen | precio | disponibilidad (sin hueco a la derecha) */
@@ -274,7 +277,7 @@ st.markdown(
         grid-template-columns: minmax(0, 1.1fr) minmax(3.5rem, 1fr) minmax(4.2rem, 0.9fr);
         align-items: center;
         column-gap: 0.45rem;
-        padding: 0.38rem 0.55rem !important;
+        padding: 0.26rem 0.42rem !important;
         min-width: 0;
     }
     .ui-origin-name-line {
@@ -289,7 +292,7 @@ st.markdown(
         color: var(--ui-muted);
     }
     .ui-origin-col--px {
-        font-size: 1.1rem;
+        font-size: 0.95rem;
         font-weight: 700;
         color: #f8fafc;
         text-align: center;
@@ -321,6 +324,16 @@ st.markdown(
     .ui-card--origin.is-best .ui-origin-col--px {
         color: #5eead4;
     }
+    .ui-card--origin.is-best .ui-origin-disp-lbl {
+        color: rgba(94, 234, 212, 0.88);
+    }
+    .ui-card--origin.is-best .ui-origin-disp-val {
+        color: #5eead4;
+        font-weight: 700;
+    }
+    .ui-card--origin.is-best .ui-origin-name {
+        color: rgba(94, 234, 212, 0.95);
+    }
     .ui-best-pill {
         display: inline-block;
         font-size: 0.6rem;
@@ -345,6 +358,197 @@ st.markdown(
             align-items: flex-start;
             text-align: left;
         }
+    }
+    /* Auditoría referencias: texto introductorio del cuadro de mando en un solo bloque */
+    .auditoria-dash-blurb {
+        font-size: 0.82rem;
+        color: #94a3b8;
+        line-height: 1.45;
+        margin: 0 0 0.55rem 0;
+    }
+    .auditoria-dash-blurb p {
+        margin: 0 0 0.4rem 0;
+    }
+    .auditoria-dash-blurb p:last-child {
+        margin-bottom: 0;
+    }
+    h4.auditoria-tab-h {
+        margin: 0 0 0.35rem 0;
+        font-size: 1.05rem;
+        font-weight: 650;
+        color: #e5e7eb;
+    }
+    /* ── Consulta referencias: una hoja compacta, sin bloques apilados ─ */
+    .consulta-page-lead {
+        margin: 0 0 0.25rem 0;
+        font-size: 0.8rem;
+        font-weight: 650;
+        color: #94a3b8;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+    .consulta-sheet-wrap {
+        width: 100%;
+        margin: 0.3rem 0 0 0;
+        box-sizing: border-box;
+    }
+    .consulta-sheet {
+        border: 1px solid var(--ui-border);
+        border-radius: 12px;
+        background: linear-gradient(180deg, #0e1629 0%, #0a1020 100%);
+        padding: 0.5rem 0.55rem 0.55rem 0.55rem;
+        box-shadow: var(--ui-shadow);
+    }
+    .consulta-topline {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        gap: 0.35rem 0.85rem;
+        padding-bottom: 0.4rem;
+        margin-bottom: 0.4rem;
+        border-bottom: 1px solid rgba(37, 49, 77, 0.9);
+    }
+    .consulta-ref-block {
+        font-size: 1.02rem;
+        font-weight: 750;
+        color: #f8fafc;
+        letter-spacing: 0.02em;
+        word-break: break-word;
+        flex: 1 1 10rem;
+        line-height: 1.25;
+    }
+    .consulta-kpi-inline {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.3rem 0.75rem;
+        align-items: baseline;
+        flex: 2 1 14rem;
+    }
+    .consulta-kpi-inline-item {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 0.35rem;
+        white-space: nowrap;
+    }
+    .consulta-kpi-inline-item .consulta-kpi-lbl {
+        font-size: 0.62rem;
+        font-weight: 650;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: #94a3b8;
+    }
+    .consulta-kpi-inline-item .consulta-kpi-val {
+        font-size: 0.88rem;
+        font-weight: 650;
+        color: #e5e7eb;
+    }
+    .consulta-split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+        gap: 0.45rem;
+        align-items: start;
+    }
+    @media (max-width: 780px) {
+        .consulta-split {
+            grid-template-columns: 1fr;
+        }
+    }
+    .consulta-panel-title {
+        font-size: 0.64rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #94a3b8;
+        margin: 0 0 0.28rem 0;
+    }
+    .consulta-panel {
+        border: 1px solid rgba(37, 49, 77, 0.75);
+        border-radius: 8px;
+        background: rgba(8, 14, 28, 0.55);
+        padding: 0.3rem 0.38rem;
+        min-width: 0;
+        align-self: stretch;
+    }
+    .consulta-panel--alternas {
+        min-height: 0;
+    }
+    .consulta-panel--alternas .alt-chip-grid {
+        grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+    }
+    .consulta-sheet .origin-grid-unified {
+        grid-template-columns: 1fr;
+        gap: 0.28rem;
+        margin-top: 0;
+    }
+    .consulta-hr {
+        height: 1px;
+        background: rgba(37, 49, 77, 0.85);
+        margin: 0.38rem 0;
+        border: 0;
+    }
+    .consulta-blockhead {
+        font-size: 0.64rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #94a3b8;
+        margin: 0 0 0.3rem 0;
+    }
+    .consulta-note {
+        margin: 0.2rem 0 0 0;
+        font-size: 0.75rem;
+        color: #94a3b8;
+        line-height: 1.35;
+    }
+    .consulta-kpi-cell .consulta-kpi-lbl {
+        display: block;
+        font-size: 0.62rem;
+        font-weight: 650;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        color: #94a3b8;
+        margin-bottom: 0.12rem;
+    }
+    .consulta-kpi-cell .consulta-kpi-val {
+        font-size: 0.86rem;
+        font-weight: 650;
+        color: #e5e7eb;
+        line-height: 1.25;
+        word-break: break-word;
+    }
+    .consulta-compra-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.32rem 0.45rem;
+        margin: 0;
+    }
+    @media (max-width: 520px) {
+        .consulta-compra-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+    .consulta-ventas-wrap {
+        width: 100%;
+        margin: 0.35rem 0 0 0;
+        box-sizing: border-box;
+    }
+    .consulta-ventas-head {
+        font-size: 0.64rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #94a3b8;
+        margin: 0 0 0.2rem 0;
+    }
+    .consulta-msg-soft {
+        margin: 0.15rem 0 0 0;
+        padding: 0.4rem 0.5rem;
+        font-size: 0.84rem;
+        color: #94a3b8;
+        line-height: 1.4;
+        border: 1px solid rgba(37, 49, 77, 0.65);
+        border-radius: 8px;
+        background: rgba(12, 20, 38, 0.5);
     }
     </style>
     """,
@@ -376,6 +580,137 @@ def _parse_refs_alternas(raw_refs: str) -> list[str]:
 
 
 _CONSULTA_MAX_ALTERNAS: Final[int] = 10
+
+
+def _consulta_html_topline_kpis(resumen: dict) -> str:
+    """Referencia + KPIs en una sola franja horizontal (menos altura que bloques separados)."""
+    ref = html.escape(str(resumen.get("Referencia_Original", "-")))
+    pp = resumen.get("Precio Prorrateo")
+    if pp is not None:
+        try:
+            pp_s = html.escape(f"${float(pp):,.2f}")
+        except (TypeError, ValueError):
+            pp_s = "—"
+    else:
+        pp_s = "—"
+    disp_t = html.escape(f"{resumen.get('_disp_total', 0):,.2f}")
+    disp_ok = html.escape(str(resumen.get("_disponible", "NO")))
+    items = (
+        f'<span class="consulta-kpi-inline-item"><span class="consulta-kpi-lbl">Prorrateo</span>'
+        f'<span class="consulta-kpi-val">{pp_s}</span></span>'
+        f'<span class="consulta-kpi-inline-item"><span class="consulta-kpi-lbl">Disp. total</span>'
+        f'<span class="consulta-kpi-val">{disp_t}</span></span>'
+        f'<span class="consulta-kpi-inline-item"><span class="consulta-kpi-lbl">Disponible</span>'
+        f'<span class="consulta-kpi-val">{disp_ok}</span></span>'
+    )
+    return (
+        f'<div class="consulta-topline">'
+        f'<span class="consulta-ref-block">{ref}</span>'
+        f'<div class="consulta-kpi-inline">{items}</div>'
+        f"</div>"
+    )
+
+
+def _consulta_html_alternas_panel(refs_alternas: str, ref_original: str) -> str:
+    if not refs_alternas:
+        return (
+            '<div class="consulta-panel consulta-panel--alternas">'
+            '<div class="consulta-panel-title">Referencias alternas</div>'
+            '<p style="margin:0;color:#94a3b8;font-size:0.82rem;">Sin alternas registradas.</p>'
+            "</div>"
+        )
+    refs = _parse_refs_alternas(refs_alternas)
+    if not refs:
+        return (
+            '<div class="consulta-panel consulta-panel--alternas">'
+            '<div class="consulta-panel-title">Referencias alternas</div>'
+            '<p style="margin:0;color:#94a3b8;font-size:0.82rem;">Sin alternas registradas.</p>'
+            "</div>"
+        )
+    total_alt = len(refs)
+    refs_show = refs[:_CONSULTA_MAX_ALTERNAS]
+    chips: list[str] = []
+    for ref in refs_show:
+        is_selected = ref.upper() == ref_original
+        cls = "alt-chip selected" if is_selected else "alt-chip"
+        role = "Principal" if is_selected else "Alterna"
+        title_attr = html.escape(ref, quote=True)
+        chips.append(
+            f'<div class="{cls}" title="{title_attr}">'
+            f'<span class="alt-chip-role">{html.escape(role)}</span>'
+            f'<span class="alt-chip-ref">{html.escape(ref)}</span>'
+            f"</div>"
+        )
+    cap_extra = ""
+    if total_alt > _CONSULTA_MAX_ALTERNAS:
+        cap_extra = (
+            f'<p class="alt-chip-note">Mostrando {_CONSULTA_MAX_ALTERNAS} de {total_alt} alternas.</p>'
+        )
+    inner = (
+        '<div class="consulta-panel-title">Referencias alternas</div>'
+        f'<div class="alt-chip-grid">{"".join(chips)}</div>{cap_extra}'
+    )
+    return f'<div class="consulta-panel consulta-panel--alternas">{inner}</div>'
+
+
+def _consulta_max_disp_para_slider(resumen: dict) -> float:
+    """Tope del slider según datos (mín. 50 para UX)."""
+    vals: list[float] = []
+    for k in ("disp_br", "disp_usa", "disp_eur"):
+        v = _to_float(resumen.get(k))
+        if v is not None and math.isfinite(v) and v >= 0:
+            vals.append(float(v))
+    hi = max(vals) if vals else 100.0
+    return max(50.0, hi * 1.35)
+
+
+def _consulta_html_origins_panel(resumen: dict, disp_umbral: float) -> tuple[str, bool]:
+    """HTML del panel de orígenes + True si hay un “mejor precio” elegible bajo la regla disp > umbral."""
+    candidatos = [
+        ("Brasil", _to_float(resumen.get("Precio Brasil")), _to_float(resumen.get("disp_br"))),
+        ("USA", _to_float(resumen.get("Precio Usa")), _to_float(resumen.get("disp_usa"))),
+        ("Europa", _to_float(resumen.get("Precio Europa")), _to_float(resumen.get("disp_eur"))),
+    ]
+    flags = {"Brasil": "🇧🇷", "USA": "🇺🇸", "Europa": "🇪🇺"}
+    u = float(disp_umbral)
+    elegibles = [
+        (origen, precio, disp)
+        for origen, precio, disp in candidatos
+        if precio is not None
+        and disp is not None
+        and math.isfinite(float(precio))
+        and math.isfinite(float(disp))
+        and float(disp) > u
+    ]
+    mejores_origenes: set[str] = set()
+    if elegibles:
+        best_price = min(float(p) for _, p, _ in elegibles)
+        mejores_origenes = {o for o, p, _ in elegibles if float(p) == best_price}
+
+    origin_cells: list[str] = []
+    for origen, precio, disp in candidatos:
+        is_best_origin = origen in mejores_origenes
+        flag = flags.get(origen, "")
+        precio_s = f"${precio:,.2f}" if precio is not None else "—"
+        disp_s = f"{disp:,.2f}" if disp is not None else "—"
+        cls = "ui-card ui-card--tight ui-card--origin" + (" is-best" if is_best_origin else "")
+        pill_html = '<span class="ui-best-pill">Mejor precio</span>' if is_best_origin else ""
+        origin_cells.append(
+            f'<div class="{cls} ui-card--origin-row">'
+            f'<div><div class="ui-origin-name-line">'
+            f'<span class="ui-origin-name">{html.escape(flag)} {html.escape(origen)}</span>'
+            f"{pill_html}"
+            f"</div></div>"
+            f'<div class="ui-origin-col--px">{html.escape(precio_s)}</div>'
+            f'<div class="ui-origin-col--dp">'
+            f'<span class="ui-origin-disp-lbl">Disponibilidad</span>'
+            f'<span class="ui-origin-disp-val">{html.escape(disp_s)}</span>'
+            f"</div>"
+            f"</div>"
+        )
+    grid = f'<div class="origin-grid-unified">{"".join(origin_cells)}</div>'
+    body = f'<div class="consulta-panel-title">Comparación por región</div>{grid}'
+    return f'<div class="consulta-panel">{body}</div>', bool(mejores_origenes)
 
 
 def _fmt_consulta_display(val: object) -> str:
@@ -423,6 +758,49 @@ def _fmt_consulta_money(val: object) -> str:
         return f"${float(val):,.2f}"
     except (TypeError, ValueError):
         return "—"
+
+
+def _consulta_html_ultima_compra(resumen: dict) -> str:
+    fecha = html.escape(_fmt_consulta_fecha(resumen.get("Ult. Fecha Compra")))
+    prov = html.escape(_fmt_consulta_display(resumen.get("Proveedor")))
+    usd = html.escape(_fmt_consulta_money(resumen.get("Último Valor (USD)")))
+    cop = html.escape(_fmt_consulta_money(resumen.get("Valor Liq. (COP)")))
+    return (
+        f'<div class="consulta-compra-grid">'
+        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Fecha</span>'
+        f'<span class="consulta-kpi-val">{fecha}</span></div>'
+        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Proveedor</span>'
+        f'<span class="consulta-kpi-val">{prov}</span></div>'
+        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Último valor (USD)</span>'
+        f'<span class="consulta-kpi-val">{usd}</span></div>'
+        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Valor líquido (COP)</span>'
+        f'<span class="consulta-kpi-val">{cop}</span></div>'
+        f"</div>"
+    )
+
+
+def _consulta_build_sheet_html(
+    resumen: dict, refs_alternas: str, ref_original: str, disp_umbral: float
+) -> str:
+    """Un solo bloque HTML: resumen + alternas/orígenes + última compra (un único st.markdown)."""
+    top = _consulta_html_topline_kpis(resumen)
+    alt = _consulta_html_alternas_panel(refs_alternas, ref_original)
+    orig, hay_mejor = _consulta_html_origins_panel(resumen, disp_umbral)
+    split = f'<div class="consulta-split"><div>{alt}</div><div>{orig}</div></div>'
+    note = (
+        ""
+        if hay_mejor
+        else (
+            '<p class="consulta-note">Ningún origen cumple <strong>disponibilidad &gt; '
+            f"{html.escape(f'{float(disp_umbral):,.2f}')}</strong> "
+            "; sube el umbral o revisa stock por región.</p>"
+        )
+    )
+    hr = '<div class="consulta-hr"></div>'
+    head = '<div class="consulta-blockhead">Última compra</div>'
+    comp = _consulta_html_ultima_compra(resumen)
+    inner = top + split + note + hr + head + comp
+    return f'<div class="consulta-sheet-wrap"><div class="consulta-sheet">{inner}</div></div>'
 
 
 def _to_percent_text(value: float | None) -> str:
@@ -1355,13 +1733,16 @@ def _render_tab_consulta() -> None:
         st.info("Consultas pausadas mientras termina la actualización. Puedes cambiar entre pestañas libremente.")
         return
 
-    st.markdown('<div class="section-title">Búsqueda</div>', unsafe_allow_html=True)
-
-    texto_busqueda = st.text_input(
-        "Referencia principal, alterna, normalizada o texto en descripción",
-        placeholder="Ej: código de pieza, ref. alterna o palabra del nombre",
-        key="consulta_txt_busqueda",
-    )
+    st.markdown('<p class="consulta-page-lead">Buscar referencia</p>', unsafe_allow_html=True)
+    col_q, col_r, col_u = st.columns([0.65, 2.0, 0.85], gap="small")
+    with col_q:
+        texto_busqueda = st.text_input(
+            "Referencia o descripción",
+            placeholder="Código, alterna o palabra en nombre",
+            key="consulta_txt_busqueda",
+            label_visibility="visible",
+            help="Referencia original, normalizada o texto en descripción.",
+        )
 
     try:
         df_refs = buscar_referencias(texto_busqueda) if texto_busqueda else None
@@ -1369,39 +1750,65 @@ def _render_tab_consulta() -> None:
         st.error(f"No fue posible leer datos de DuckDB: {exc}")
         return
 
-    if df_refs is not None and not df_refs.empty:
-        opciones = {}
-        for _, row in df_refs.iterrows():
-            desc = str(row.get("Descripción", "") or "").strip()
-            if len(desc) > 70:
-                desc = desc[:67] + "..."
-            etiqueta = f"{row['Referencia_Original']} | {row['Referencia_Normalizada']}"
-            if desc:
-                etiqueta = f"{etiqueta} | {desc}"
-            opciones[etiqueta] = row["Referencia_Normalizada"]
+    ref_norm: str | None = None
+    with col_r:
+        if df_refs is not None and not df_refs.empty:
+            opciones = {}
+            for _, row in df_refs.iterrows():
+                desc = str(row.get("Descripción", "") or "").strip()
+                if len(desc) > 70:
+                    desc = desc[:67] + "..."
+                etiqueta = f"{row['Referencia_Original']} | {row['Referencia_Normalizada']}"
+                if desc:
+                    etiqueta = f"{etiqueta} | {desc}"
+                opciones[etiqueta] = row["Referencia_Normalizada"]
 
-        opts_keys = list(opciones.keys())
-        if "consulta_coincidencias" in st.session_state:
-            _cur = st.session_state["consulta_coincidencias"]
-            if _cur not in opciones:
-                del st.session_state["consulta_coincidencias"]
-        seleccionado = st.selectbox("Coincidencias", opts_keys, key="consulta_coincidencias")
-        ref_norm = opciones[seleccionado]
-    elif texto_busqueda:
+            opts_keys = list(opciones.keys())
+            if "consulta_coincidencias" in st.session_state:
+                _cur = st.session_state["consulta_coincidencias"]
+                if _cur not in opciones:
+                    del st.session_state["consulta_coincidencias"]
+            seleccionado = st.selectbox(
+                "Coincidencia",
+                opts_keys,
+                key="consulta_coincidencias",
+                help="Elige la fila a analizar.",
+            )
+            ref_norm = opciones[seleccionado]
+        elif texto_busqueda:
+            st.caption("Sin coincidencias")
+        else:
+            st.empty()
+
+    resumen: dict | None = None
+    if ref_norm:
+        try:
+            resumen = obtener_resumen_referencia(ref_norm)
+        except Exception as exc:
+            st.error(f"No fue posible consultar la referencia: {exc}")
+            return
+
+    with col_u:
+        if ref_norm and resumen:
+            max_disp = _consulta_max_disp_para_slider(resumen)
+            disp_umbral = st.slider(
+                "Umbral de disponibilidad (mejor precio)",
+                min_value=0.0,
+                max_value=float(max_disp),
+                step=0.5,
+                key="consulta_origen_disp_umbral",
+                help=(
+                    "Solo se comparan regiones con stock estrictamente mayor a este valor; entre ellas, "
+                    "se resalta la de menor precio. Si ninguna supera el umbral, no hay «Mejor precio»."
+                ),
+            )
+
+    if texto_busqueda and (df_refs is None or df_refs.empty):
         st.warning("No se encontraron coincidencias por referencia ni por descripción.")
-        ref_norm = None
-    else:
-        ref_norm = None
 
     save_tab_filter_prefs("consulta")
 
     if not ref_norm:
-        return
-
-    try:
-        resumen = obtener_resumen_referencia(ref_norm)
-    except Exception as exc:
-        st.error(f"No fue posible consultar la referencia: {exc}")
         return
 
     if not resumen:
@@ -1411,134 +1818,35 @@ def _render_tab_consulta() -> None:
     refs_alternas = str(resumen.get("RefsAlternas", "") or "").strip()
     ref_original = str(resumen.get("Referencia_Original", "") or "").strip().upper()
 
-    c1, c2, c3, c4 = st.columns(4, gap="small")
-    c1.metric("Referencia", str(resumen.get("Referencia_Original", "-")))
-    c2.metric(
-        "Precio prorrateo",
-        f"${resumen.get('Precio Prorrateo', 0):,.2f}"
-        if resumen.get("Precio Prorrateo") is not None
-        else "-",
-    )
-    c3.metric("Disponibilidad total", f"{resumen.get('_disp_total', 0):,.2f}")
-    c4.metric("Disponible", resumen.get("_disponible", "NO"))
-
-    st.markdown('<div class="consulta-strip-gap"></div>', unsafe_allow_html=True)
-
-    if refs_alternas:
-        refs = _parse_refs_alternas(refs_alternas)
-        if refs:
-            total_alt = len(refs)
-            refs_show = refs[:_CONSULTA_MAX_ALTERNAS]
-            chips_html: list[str] = []
-            for ref in refs_show:
-                is_selected = ref.upper() == ref_original
-                cls = "alt-chip selected" if is_selected else "alt-chip"
-                role = "Principal" if is_selected else "Alterna"
-                title_attr = html.escape(ref, quote=True)
-                chips_html.append(
-                    f'<div class="{cls}" title="{title_attr}">'
-                    f'<span class="alt-chip-role">{html.escape(role)}</span>'
-                    f'<span class="alt-chip-ref">{html.escape(ref)}</span>'
-                    f"</div>"
-                )
-            cap_extra = ""
-            if total_alt > _CONSULTA_MAX_ALTERNAS:
-                cap_extra = (
-                    f'<p class="alt-chip-note">Mostrando {_CONSULTA_MAX_ALTERNAS} de {total_alt} '
-                    "alternas registradas.</p>"
-                )
-            st.markdown(
-                '<div class="ui-card ui-card--tight">'
-                '<div class="ui-card-heading">Referencias alternas</div>'
-                '<div class="alt-chip-grid">'
-                + "".join(chips_html)
-                + "</div>"
-                + cap_extra
-                + "</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                '<div class="ui-card ui-card--tight">'
-                '<div class="ui-card-heading">Referencias alternas</div>'
-                '<p style="margin:0;color:#9ca3af;font-size:0.88rem;">Sin alternas registradas.</p>'
-                "</div>",
-                unsafe_allow_html=True,
-            )
-    else:
-        st.markdown(
-            '<div class="ui-card ui-card--tight">'
-            '<div class="ui-card-heading">Referencias alternas</div>'
-            '<p style="margin:0;color:#9ca3af;font-size:0.88rem;">Sin alternas registradas.</p>'
-            "</div>",
-            unsafe_allow_html=True,
-        )
-
-    st.markdown('<div class="section-title">Mejor precio por origen</div>', unsafe_allow_html=True)
-    candidatos = [
-        ("Brasil", _to_float(resumen.get("Precio Brasil")), _to_float(resumen.get("disp_br"))),
-        ("USA", _to_float(resumen.get("Precio Usa")), _to_float(resumen.get("disp_usa"))),
-        ("Europa", _to_float(resumen.get("Precio Europa")), _to_float(resumen.get("disp_eur"))),
-    ]
-    flags = {"Brasil": "🇧🇷", "USA": "🇺🇸", "Europa": "🇪🇺"}
-    disponibles = [
-        (origen, precio, disp)
-        for origen, precio, disp in candidatos
-        if precio is not None and disp is not None and disp > 0
-    ]
-    mejores_origenes = set()
-    if disponibles:
-        best_price = min(precio for _, precio, _ in disponibles)
-        mejores_origenes = {origen for origen, precio, _ in disponibles if precio == best_price}
-
-    origin_cells: list[str] = []
-    for origen, precio, disp in candidatos:
-        is_best_origin = origen in mejores_origenes
-        flag = flags.get(origen, "")
-        precio_s = f"${precio:,.2f}" if precio is not None else "—"
-        disp_s = f"{disp:,.2f}" if disp is not None else "—"
-        cls = "ui-card ui-card--tight ui-card--origin" + (" is-best" if is_best_origin else "")
-        pill_html = '<span class="ui-best-pill">Mejor precio</span>' if is_best_origin else ""
-        origin_cells.append(
-            f'<div class="{cls} ui-card--origin-row">'
-            f'<div><div class="ui-origin-name-line">'
-            f'<span class="ui-origin-name">{html.escape(flag)} {html.escape(origen)}</span>'
-            f"{pill_html}"
-            f"</div></div>"
-            f'<div class="ui-origin-col--px">{html.escape(precio_s)}</div>'
-            f'<div class="ui-origin-col--dp">'
-            f'<span class="ui-origin-disp-lbl">Disponibilidad</span>'
-            f'<span class="ui-origin-disp-val">{html.escape(disp_s)}</span>'
-            f"</div>"
-            f"</div>"
-        )
     st.markdown(
-        f'<div class="origin-grid-unified">{"".join(origin_cells)}</div>',
+        _consulta_build_sheet_html(resumen, refs_alternas, ref_original, float(disp_umbral)),
         unsafe_allow_html=True,
     )
-
-    if not mejores_origenes:
-        st.info("Ningún origen tiene disponibilidad para recomendar precio.")
-
-    st.markdown('<div class="section-title">Última compra registrada</div>', unsafe_allow_html=True)
-    compra_cols = st.columns(4, gap="small")
-    compra_cols[0].metric("Fecha", _fmt_consulta_fecha(resumen.get("Ult. Fecha Compra")))
-    compra_cols[1].metric("Proveedor", _fmt_consulta_display(resumen.get("Proveedor")))
-    compra_cols[2].metric("Último valor (USD)", _fmt_consulta_money(resumen.get("Último Valor (USD)")))
-    compra_cols[3].metric("Valor liq. (COP)", _fmt_consulta_money(resumen.get("Valor Liq. (COP)")))
 
     try:
         ventas = obtener_ultimas_ventas(ref_norm, limite=20)
     except Exception as exc:
         st.error(f"No fue posible consultar ventas: {exc}")
         ventas = None
-    st.markdown('<div class="section-title">Últimas ventas</div>', unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="consulta-ventas-wrap"><div class="consulta-ventas-head">Últimas ventas</div></div>',
+        unsafe_allow_html=True,
+    )
     if ventas is None:
-        st.info("Consulta de ventas no disponible en este momento.")
+        st.markdown(
+            '<p class="consulta-msg-soft">Consulta de ventas no disponible en este momento.</p>',
+            unsafe_allow_html=True,
+        )
     elif ventas.empty:
-        st.info("No hay ventas en `ventas_raw` para esta referencia.")
+        st.markdown(
+            '<p class="consulta-msg-soft">No hay ventas en <code>ventas_raw</code> para esta referencia.</p>',
+            unsafe_allow_html=True,
+        )
     else:
         st.dataframe(_renombrar_negocio(ventas), width="stretch", hide_index=True)
+
+    save_tab_filter_prefs("consulta")
 
 
 def _margen_df_con_codigo_referencia(df: pd.DataFrame, margen_col: str, precio_col: str) -> pd.DataFrame:
@@ -1580,7 +1888,7 @@ def _margen_ui_filtros_completos(df_margen: pd.DataFrame, margen_col: str, preci
         st.caption("Análisis de margen con filtros dinámicos para decisiones comerciales.")
     with _mr:
         render_reset_filters_button("margen")
-    filtros1, filtros2, filtros3 = st.columns([2.0, 1.0, 1.0], gap="large")
+    filtros1, filtros2, filtros3 = st.columns([2.0, 1.0, 1.0], gap="medium")
     with filtros1:
         sub_m1, sub_m2 = st.columns([1.35, 1.0], gap="medium")
         with sub_m1:
@@ -1613,7 +1921,7 @@ def _margen_ui_filtros_completos(df_margen: pd.DataFrame, margen_col: str, preci
         _init_multiselect_list("margen_filtro_rotacion", rotaciones)
         rot_sel = st.multiselect("Rotación", options=rotaciones, key="margen_filtro_rotacion")
 
-    filtros5, filtros6, filtros7, filtros8 = st.columns([1, 1, 1, 1], gap="large")
+    filtros5, filtros6, filtros7, filtros8 = st.columns([1, 1, 1, 1], gap="medium")
     with filtros5:
         max_precio_sel = float(df_margen[precio_col].fillna(0).max()) if precio_col in df_margen.columns else 0.0
         max_precio_sel = max(0.0, max_precio_sel)
@@ -2352,7 +2660,7 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
     with _ar:
         render_reset_filters_button("auditoria_refs")
 
-    filtros1, filtros2, filtros3 = st.columns([2.0, 1.0, 1.0], gap="large")
+    filtros1, filtros2, filtros3 = st.columns([2.0, 1.0, 1.0], gap="medium")
     with filtros1:
         sub_a1, sub_a2 = st.columns([1.35, 1.0], gap="medium")
         with sub_a1:
@@ -2396,7 +2704,7 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
     precio_lo = precio_hi = None
     ex_tot_lo = ex_tot_hi = None
 
-    filtros5, filtros6, filtros7, filtros8 = st.columns([1, 1, 1, 1], gap="large")
+    filtros5, filtros6, filtros7, filtros8 = st.columns([1, 1, 1, 1], gap="medium")
     with filtros5:
         if precio_lista_col and precio_lista_col in df.columns:
             s_pl = pd.to_numeric(df[precio_lista_col], errors="coerce").dropna()
@@ -2553,7 +2861,7 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
         st.empty()
 
     dias_lo = dias_hi = None
-    filtros9, filtros10 = st.columns([1.2, 2.8], gap="large")
+    filtros9, filtros10 = st.columns([1.2, 2.8], gap="medium")
     with filtros9:
         if dias_min_data is not None and dias_max_data is not None:
             if dias_min_data == dias_max_data:
@@ -2835,7 +3143,7 @@ def _render_tab_auditoria_referencias() -> None:
         )
         return
 
-    st.markdown("#### Auditoría referencias")
+    st.markdown('<h4 class="auditoria-tab-h">Auditoría referencias</h4>', unsafe_allow_html=True)
 
     ctx = _auditoria_inicializar_dataframe(df)
     _result = _auditoria_ui_filtros_y_df_filtrado(ctx)
@@ -2870,15 +3178,16 @@ def _render_tab_auditoria_referencias() -> None:
     pct_umbral_costo = float((df_fil["_abs_var_costo"].fillna(-1) >= float(umbral_var_costo)).mean() * 100.0)
     valor_inv_cop = _valor_inventario_cop_auditoria(df_fil, lower_map)
 
-    st.caption(
-        "**Cuadro de mando** del conjunto filtrado: cuántas filas superan cada umbral en los **dos problemas** "
-        "(variación **última vs penúltima compra** y **última vs costo prom. inv.**). "
-        "**Valor inv.** ≈ impacto económico del slice en inventario."
-    )
-    st.caption(
-        "**Semáforo** (`Semaforo_Variacion`): mide sobre todo la **alineación precio última compra vs costos extremos** "
-        "(mín./máx. por referencia), con reglas sobre `ABSVar_Costo` / `ABSVar_Costo_Pct` y cuartiles globales en SQL. "
-        "Es **distinto** de «subió mucho entre penúltima y última compra» (usa `Var_PrecioCOP` y los umbrales |Δ compra| arriba)."
+    st.markdown(
+        '<div class="auditoria-dash-blurb">'
+        "<p><strong>Cuadro de mando</strong> del conjunto filtrado: cuántas filas superan cada umbral en los "
+        "<strong>dos problemas</strong> (variación <strong>última vs penúltima compra</strong> y "
+        "<strong>última vs costo prom. inv.</strong>). <strong>Valor inv.</strong> ≈ impacto económico del slice en inventario.</p>"
+        "<p><strong>Semáforo</strong> (<code>Semaforo_Variacion</code>): alineación precio última compra vs costos extremos "
+        "(mín./máx. por referencia), con reglas sobre <code>ABSVar_Costo</code> / <code>ABSVar_Costo_Pct</code> y cuartiles en SQL. "
+        "Es **distinto** de «subió mucho entre penúltima y última compra» (<code>Var_PrecioCOP</code> y umbrales |Δ compra| arriba).</p>"
+        "</div>",
+        unsafe_allow_html=True,
     )
     k1, k2, k3, k4, k5 = st.columns(5, gap="small")
     k1.metric(
