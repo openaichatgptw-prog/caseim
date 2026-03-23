@@ -757,7 +757,7 @@ def _consulta_html_topline_kpis(resumen: dict) -> str:
     pp = resumen.get("Precio Prorrateo")
     if pp is not None:
         try:
-            pp_s = html.escape(f"${float(pp):,.2f}")
+            pp_s = html.escape(_fmt_money_usd(float(pp), decimals=2))
         except (TypeError, ValueError):
             pp_s = "—"
     else:
@@ -860,7 +860,7 @@ def _consulta_html_origins_panel(resumen: dict, disp_umbral: float) -> tuple[str
     for origen, precio, disp in candidatos:
         is_best_origin = origen in mejores_origenes
         flag = flags.get(origen, "")
-        precio_s = f"${precio:,.2f}" if precio is not None else "—"
+        precio_s = _fmt_money_usd(precio, decimals=2) if precio is not None else "—"
         disp_s = f"{disp:,.2f}" if disp is not None else "—"
         cls = "ui-card ui-card--tight ui-card--origin" + (" is-best" if is_best_origin else "")
         pill_html = '<span class="ui-best-pill">Mejor precio</span>' if is_best_origin else ""
@@ -921,10 +921,31 @@ def _fmt_consulta_fecha(val: object) -> str:
 
 
 def _fmt_consulta_money(val: object) -> str:
+    # Backward-compatible wrapper: consulta money por defecto en COP local.
+    return _fmt_money_cop_local(val, decimals=0)
+
+
+def _fmt_num_local(value: float, decimals: int = 0) -> str:
+    """Formatea número estilo es-CO: miles con '.' y decimales con ','."""
+    s = f"{abs(float(value)):,.{int(decimals)}f}"
+    s = s.replace(",", "_").replace(".", ",").replace("_", ".")
+    return f"-{s}" if float(value) < 0 else s
+
+
+def _fmt_money_cop_local(val: object, decimals: int = 0) -> str:
     if _fmt_consulta_display(val) == "—":
         return "—"
     try:
-        return f"${float(val):,.2f}"
+        return f"${_fmt_num_local(float(val), decimals=decimals)}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _fmt_money_usd(val: object, decimals: int = 2) -> str:
+    if _fmt_consulta_display(val) == "—":
+        return "—"
+    try:
+        return f"US${float(val):,.{int(decimals)}f}"
     except (TypeError, ValueError):
         return "—"
 
@@ -932,8 +953,8 @@ def _fmt_consulta_money(val: object) -> str:
 def _consulta_html_ultima_compra(resumen: dict) -> str:
     fecha = html.escape(_fmt_consulta_fecha(resumen.get("Ult. Fecha Compra")))
     prov = html.escape(_fmt_consulta_display(resumen.get("Proveedor")))
-    usd = html.escape(_fmt_consulta_money(resumen.get("Último Valor (USD)")))
-    cop = html.escape(_fmt_consulta_money(resumen.get("Valor Liq. (COP)")))
+    usd = html.escape(_fmt_money_usd(resumen.get("Último Valor (USD)"), decimals=2))
+    cop = html.escape(_fmt_money_cop_local(resumen.get("Valor Liq. (COP)"), decimals=0))
     return (
         f'<div class="consulta-compra-grid">'
         f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Fecha</span>'
@@ -984,12 +1005,12 @@ def _fmt_cop_resumido(v: float | None) -> str:
         return "—"
     av = abs(float(v))
     if av >= 1_000_000_000:
-        return f"${v/1_000_000_000:,.2f} mil M"
+        return f"COP ${_fmt_num_local(v / 1_000_000_000, decimals=2)} mil M"
     if av >= 1_000_000:
-        return f"${v/1_000_000:,.1f} M"
+        return f"COP ${_fmt_num_local(v / 1_000_000, decimals=1)} M"
     if av >= 1_000:
-        return f"${v/1_000:,.1f} mil"
-    return f"${v:,.0f}"
+        return f"COP ${_fmt_num_local(v / 1_000, decimals=1)} mil"
+    return f"COP ${_fmt_num_local(v, decimals=0)}"
 
 
 # Precio lista (COP) en widgets: slider admite preset "dollar".
@@ -1286,9 +1307,9 @@ def _auditoria_one_column_config(orig: str, label: str) -> st.column_config.Colu
             return st.column_config.NumberColumn(label, format="%.4f")
         if "pct" in lc or "_abs_var" in lc or ("_var_" in lc and "costolog" in lc):
             return st.column_config.NumberColumn(label, format="%.2f%%")
-        # Precios COP ajustados (formato moneda estándar en grid)
+        # Precios internos/ajustados: COP local.
         if "precio" in lc or "log" in lc:
-            return st.column_config.NumberColumn(label, format="dollar")
+            return st.column_config.NumberColumn(label, format="COP $ %,.0f")
         return st.column_config.NumberColumn(label, format="%.2f")
     if lc == "existencia_total":
         return st.column_config.NumberColumn(
@@ -1332,7 +1353,7 @@ def _auditoria_one_column_config(orig: str, label: str) -> st.column_config.Colu
         return st.column_config.NumberColumn(label, format="%,.2f")
     # Costo prom. inventario y montos COP/USD (igual que Cruces / detalle margen: $ sin decimales)
     if "costo" in lc and "prom" in lc and "inst" in lc:
-        return st.column_config.NumberColumn(label, format="$%,.0f")
+        return st.column_config.NumberColumn(label, format="COP $ %,.0f")
     if any(
         x in lc
         for x in (
@@ -1343,11 +1364,13 @@ def _auditoria_one_column_config(orig: str, label: str) -> st.column_config.Colu
             "lista_04",
         )
     ) and "pct" not in lc:
-        return st.column_config.NumberColumn(label, format="dollar")
+        if "usd" in lc:
+            return st.column_config.NumberColumn(label, format="US$ %,.2f")
+        return st.column_config.NumberColumn(label, format="COP $ %,.0f")
     if any(x in lc for x in ("valor_inventario", "absvar_costo")) and "pct" not in lc:
-        return st.column_config.NumberColumn(label, format="$%,.0f")
+        return st.column_config.NumberColumn(label, format="COP $ %,.0f")
     if any(x in lc for x in ("costo_min", "costo_max", "costo_intermedio")) and "var_" not in lc:
-        return st.column_config.NumberColumn(label, format="$%,.0f")
+        return st.column_config.NumberColumn(label, format="COP $ %,.0f")
     if lc.startswith("var_"):
         return st.column_config.NumberColumn(label, format="%.2f%%")
     if any(x in lc for x in ("existencia", "disponible", "dias", "nrobod", "numcostos")):
@@ -1356,11 +1379,11 @@ def _auditoria_one_column_config(orig: str, label: str) -> st.column_config.Colu
         return st.column_config.NumberColumn(label, format="%,.0f")
     # Rescate: cualquier otro campo de precio (no variación %)
     if "precio" in lc and not lc.startswith("var_"):
-        return st.column_config.NumberColumn(label, format="dollar")
+        return st.column_config.NumberColumn(label, format="US$ %,.2f")
     if "costo" in lc and not lc.startswith("var_") and "bodega" not in lc:
         if "pct" in lc:
             return st.column_config.NumberColumn(label, format="%.2f%%")
-        return st.column_config.NumberColumn(label, format="$%,.0f")
+        return st.column_config.NumberColumn(label, format="COP $ %,.0f")
     return st.column_config.TextColumn(label, width="medium")
 
 
@@ -2469,14 +2492,7 @@ def _render_tab_margen() -> None:
             costo_prom_bod = None
 
         def _fmt_short_money(v: float | None) -> str:
-            if v is None:
-                return "-"
-            av = abs(float(v))
-            if av >= 1_000_000:
-                return f"${v/1_000_000:,.1f} mill."
-            if av >= 1_000:
-                return f"${v/1_000:,.1f} mil"
-            return f"${v:,.0f}"
+            return _fmt_cop_resumido(v)
 
         st.markdown(
             _margen_html_kpi_strip(
@@ -2572,11 +2588,11 @@ def _render_tab_margen() -> None:
             for col in ["Costo_Prom_Inst", "Valor_Inventario"]:
                 label = _label_negocio(col)
                 if label in df_show.columns:
-                    column_config[label] = st.column_config.NumberColumn(label, format="$%,.0f")
+                    column_config[label] = st.column_config.NumberColumn(label, format="COP $ %,.0f")
             for col in ["Precio_Lista_09", "Precio_Lista_04"]:
                 label = _label_negocio(col)
                 if label in df_show.columns:
-                    column_config[label] = st.column_config.NumberColumn(label, format="dollar")
+                    column_config[label] = st.column_config.NumberColumn(label, format="COP $ %,.0f")
             for col in ["Existencia", "Dias_Desde_Fecha_Max"]:
                 label = _label_negocio(col)
                 if label in df_show.columns:
@@ -2624,7 +2640,37 @@ def _render_tab_margen() -> None:
                 agg["Pct_Negativos"] = (agg["Negativos"] / agg["Registros"]) * 100.0
                 agg = agg.sort_values(by="Valor_Inventario", ascending=False).head(int(top_n))
                 agg_show = _renombrar_negocio(agg)
-                st.dataframe(agg_show, width="stretch", hide_index=True)
+                st.dataframe(
+                    agg_show,
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        _label_negocio("Registros"): st.column_config.NumberColumn(
+                            _label_negocio("Registros"), format="%,.0f"
+                        ),
+                        _label_negocio("Margen_Promedio"): st.column_config.NumberColumn(
+                            _label_negocio("Margen_Promedio"), format="%.2f%%"
+                        ),
+                        _label_negocio("Margen_Mediano"): st.column_config.NumberColumn(
+                            _label_negocio("Margen_Mediano"), format="%.2f%%"
+                        ),
+                        _label_negocio("Min_Margen"): st.column_config.NumberColumn(
+                            _label_negocio("Min_Margen"), format="%.2f%%"
+                        ),
+                        _label_negocio("Max_Margen"): st.column_config.NumberColumn(
+                            _label_negocio("Max_Margen"), format="%.2f%%"
+                        ),
+                        _label_negocio("Negativos"): st.column_config.NumberColumn(
+                            _label_negocio("Negativos"), format="%,.0f"
+                        ),
+                        _label_negocio("Valor_Inventario"): st.column_config.NumberColumn(
+                            _label_negocio("Valor_Inventario"), format="COP $ %,.0f"
+                        ),
+                        _label_negocio("Pct_Negativos"): st.column_config.NumberColumn(
+                            _label_negocio("Pct_Negativos"), format="%.2f%%"
+                        ),
+                    },
+                )
     with marg_tab_graf:
         st.markdown("##### Reporte gráfico")
         st.caption("Mismos filtros de arriba; gráficos sobre el subconjunto filtrado actual.")
