@@ -165,6 +165,114 @@ st.markdown(
         font-size: 0.88rem;
         margin-top: 0.2rem;
     }
+    /* Aire entre gráfico Plotly y pie de figura (simetría con márgenes internos del chart) */
+    div[data-testid="stPlotlyChart"] {
+        margin-bottom: 0.55rem;
+    }
+    .fig-caption {
+        color: #94a3b8;
+        font-size: 0.82rem;
+        line-height: 1.45;
+        margin: 0.85rem 0 0.45rem 0;
+        padding: 0.45rem 0.55rem 0.5rem 0.55rem;
+        border-left: 2px solid #334155;
+        background: rgba(15, 23, 42, 0.45);
+        border-radius: 0 8px 8px 0;
+    }
+    .fig-caption__label {
+        color: #cbd5e1;
+        font-weight: 600;
+        font-size: 0.84rem;
+    }
+    /* Bloque único — ratio costo/lista (auditoría CAP3) */
+    .audit-ratio-unit-header {
+        margin: 0 0 0.15rem 0;
+        padding: 0 0 0.65rem 0;
+        border-bottom: 1px solid #25314d;
+    }
+    .audit-ratio-unit-header__kicker {
+        display: block;
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #38bdf8;
+        margin-bottom: 0.25rem;
+    }
+    .audit-ratio-unit-header__title {
+        font-size: 1.02rem;
+        font-weight: 650;
+        color: #f8fafc;
+        margin: 0;
+        letter-spacing: 0.02em;
+    }
+    .audit-ratio-side-title {
+        font-size: 0.74rem;
+        font-weight: 650;
+        color: #94a3b8;
+        margin: 0 0 0.45rem 0;
+        letter-spacing: 0.03em;
+    }
+    /* Resumen ejecutivo (Eje 1 / Eje 2): panel más estrecho + tipografía protagonista */
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.audit-exec-kpi-inner) {
+        max-width: 680px !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.audit-exec-kpi-inner) > div[data-testid="stVerticalBlock"] {
+        gap: 0.6rem !important;
+        padding: 0.4rem 0.5rem 0.5rem 0.5rem !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.audit-exec-kpi-inner) div[data-testid="stHorizontalBlock"] {
+        gap: 0.55rem !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.audit-exec-kpi-inner) div[data-testid="stMetric"] {
+        padding: 0.42rem 0.5rem 0.48rem 0.5rem !important;
+        min-height: 4.35rem;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.audit-exec-kpi-inner) div[data-testid="stMetric"] label p {
+        font-size: 0.82rem !important;
+        line-height: 1.22 !important;
+        font-weight: 620 !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.audit-exec-kpi-inner) div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        font-size: 1.22rem !important;
+        font-weight: 780 !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.audit-exec-kpi-inner) div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
+        font-size: 0.76rem !important;
+    }
+    /* Solo bloque ratio CAP3: tres KPI misma anchura y altura (rejilla 33/33/33) */
+    div[data-testid="column"]:has(p.audit-ratio-side-title) div[data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        align-items: stretch !important;
+        width: 100% !important;
+        flex-wrap: nowrap !important;
+    }
+    div[data-testid="column"]:has(p.audit-ratio-side-title) div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+        flex: 1 1 33.33% !important;
+        min-width: 0 !important;
+        max-width: 33.33% !important;
+        width: 33.33% !important;
+    }
+    div[data-testid="column"]:has(p.audit-ratio-side-title) div[data-testid="stHorizontalBlock"] > div[data-testid="column"] div[data-testid="stMetric"] {
+        min-height: 6.25rem;
+        width: 100% !important;
+        max-width: 100%;
+        box-sizing: border-box;
+    }
+    div[data-testid="column"]:has(p.audit-ratio-side-title) div[data-testid="stHorizontalBlock"] > div[data-testid="column"] div[data-testid="stMetric"] label p {
+        font-size: 0.72rem !important;
+        line-height: 1.2 !important;
+        white-space: normal !important;
+        overflow-wrap: anywhere;
+    }
+    div[data-testid="column"]:has(p.audit-ratio-side-title) div[data-testid="stHorizontalBlock"] > div[data-testid="column"] div[data-testid="stMetric"] > div {
+        height: 100%;
+        justify-content: center;
+    }
     div[data-testid="stTextInput"] input,
     div[data-testid="stSelectbox"] > div > div {
         background: #101a31 !important;
@@ -3874,15 +3982,30 @@ def _plotly_theme() -> dict:
         "paper_bgcolor": "#111a2e",
         "plot_bgcolor": "#0f172a",
         "font": {"color": "#e5e7eb", "size": 12},
-        "margin": {"l": 50, "r": 30, "t": 56, "b": 46},
+        # b alineado con t: más aire bajo el eje X antes del borde del chart (simetría con título arriba)
+        "margin": {"l": 50, "r": 30, "t": 56, "b": 58},
     }
 
 
-def _plotly_show(fig) -> None:
+def _plotly_show(fig, caption: str | None = None, *, fig_scope: str = "default") -> None:
+    """Muestra un gráfico Plotly y, opcionalmente, un pie de figura breve (Fig. n · interpretación)."""
     if not _HAS_PLOTLY or px is None:
         return
     fig.update_layout(**_plotly_theme())
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True, "scrollZoom": True})
+    if caption:
+        _render_fig_caption(fig_scope, caption)
+
+
+def _render_fig_caption(fig_scope: str, caption: str) -> None:
+    """Pie de figura numerado (mismo contador que _plotly_show con caption)."""
+    k = f"_fig_seq_{fig_scope}"
+    st.session_state[k] = st.session_state.get(k, 0) + 1
+    n = st.session_state[k]
+    st.markdown(
+        f'<p class="fig-caption"><span class="fig-caption__label">Fig. {n}</span> · {html.escape(caption)}</p>',
+        unsafe_allow_html=True,
+    )
 
 
 def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) -> None:
@@ -3890,6 +4013,7 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
     if not _HAS_PLOTLY or px is None:
         st.warning("Instala **Plotly** para ver gráficos: `pip install plotly` (mismo venv que Streamlit).")
         return
+    st.session_state["_fig_seq_margen"] = 0
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
@@ -3967,7 +4091,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
         median_m = float(df[margen_col].median())
         fig_hist.add_vline(x=median_m, line_dash="dash", line_color="#facc15",
                            annotation_text=f"Mediana {median_m:.1f}%")
-        _plotly_show(fig_hist)
+        _plotly_show(
+            fig_hist,
+            "El histograma cuenta referencias por tramo de margen (%); las bandas sombreadas y la mediana muestran si el portafolio se concentra en márgenes sanos o en colas de riesgo.",
+            fig_scope="margen",
+        )
 
     with r1c2:
         if existencia_col and "Costo_Prom_Inst" in df.columns:
@@ -3983,7 +4111,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
             )
             fig_zona.update_traces(textposition="outside")
             fig_zona.update_layout(showlegend=False)
-            _plotly_show(fig_zona)
+            _plotly_show(
+                fig_zona,
+                "Barras: valor de inventario (COP mill.) por banda de margen; la altura indica cuánto capital está expuesto en cada zona de riesgo.",
+                fig_scope="margen",
+            )
         else:
             st.caption("Sin datos de existencia/costo para análisis de riesgo.")
 
@@ -4037,7 +4169,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
             )
             fig_pareto.update_yaxes(title_text="Valor inv. (COP mill.)", secondary_y=False)
             fig_pareto.update_yaxes(title_text="% acumulado", secondary_y=True)
-            _plotly_show(fig_pareto)
+            _plotly_show(
+                fig_pareto,
+                "Pareto de referencias por valor de inventario; la curva amarilla muestra el % acumulado y la regla del 80/20 localiza pocas refs con mucho peso financiero.",
+                fig_scope="margen",
+            )
     else:
         st.caption("Sin datos de inventario para Pareto.")
 
@@ -4061,7 +4197,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
                     labels={"valor_mill": "Valor inv. (COP mill.)", "Sistema_Precio": "Sistema precio", "refs": "Refs"},
                 )
                 fig_neg.update_traces(textposition="outside")
-                _plotly_show(fig_neg)
+                _plotly_show(
+                    fig_neg,
+                    "Inventario con margen negativo por sistema de precio; barras más largas = mayor exposición monetaria en ese sistema.",
+                    fig_scope="margen",
+                )
             else:
                 st.caption("No hay referencias con margen negativo en el filtro actual.")
         else:
@@ -4095,7 +4235,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
                 )
                 fig_top.update_traces(textposition="outside")
                 fig_top.update_layout(height=max(450, len(top_anom) * 22), yaxis=dict(autorange="reversed"))
-                _plotly_show(fig_top)
+                _plotly_show(
+                    fig_top,
+                    "Top 20 referencias anómalas por valor de inventario; el color indica la banda de margen y el texto resume margen típico y cobertura en bodegas.",
+                    fig_scope="margen",
+                )
             else:
                 st.success("Todas las referencias están en la banda normal (30–50 %).")
 
@@ -4124,7 +4268,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
             fig_sc.update_traces(marker=dict(size=5), selector=dict(type="scatter"))
             fig_sc.add_hline(y=0, line_dash="dot", line_color="#ef4444", annotation_text="Margen = 0")
             fig_sc.update_xaxes(tickformat="$,.0f")
-            _plotly_show(fig_sc)
+            _plotly_show(
+                fig_sc,
+                "Cada punto es una referencia: precio lista frente a margen; las gráficas marginales muestran la forma de cada variable y la nube revela si hay relación entre precio y margen.",
+                fig_scope="margen",
+            )
         else:
             st.caption(f"Sin `{precio_col}` para dispersión.")
 
@@ -4150,7 +4298,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
                 fig_trend.update_layout(title="Tendencia de margen por decil de precio lista",
                                         xaxis_title="Decil de precio", yaxis_title="Margen (%)",
                                         xaxis_tickangle=-40, legend=dict(orientation="h", y=-0.25))
-                _plotly_show(fig_trend)
+                _plotly_show(
+                    fig_trend,
+                    "Media, mediana y P25 del margen por decil de precio lista; indica si el margen mejora o empeora al subir el precio de lista.",
+                    fig_scope="margen",
+                )
 
     if "Rotacion" in df.columns and existencia_col:
         rot_agg = (
@@ -4174,7 +4326,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
                 labels={"media_margen": "Margen medio (%)", "mediana_margen": "Mediana", "exist_total": "Exist. total"},
             )
             fig_bub.add_hline(y=0, line_dash="dot", line_color="#ef4444")
-            _plotly_show(fig_bub)
+            _plotly_show(
+                fig_bub,
+                "Burbuja por categoría de rotación: posición vertical = margen medio, tamaño = existencia total; el color refuerza la mediana de margen para detectar focos de riesgo.",
+                fig_scope="margen",
+            )
 
     # ════════════════════════════════════════════════════════════════════
     #  CAP 4 — Segmentos: ¿dónde se concentran los problemas?
@@ -4204,7 +4360,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
                 title="Mediana de margen por bodega — color = % refs negativas",
                 labels={"mediana": "Mediana margen (%)", "pct_neg": "% negativas", "n": "Refs"},
             )
-            _plotly_show(fig_bod)
+            _plotly_show(
+                fig_bod,
+                "Mediana de margen por bodega (orden ascendente); el color muestra el % de referencias con margen negativo en cada bodega.",
+                fig_scope="margen",
+            )
         else:
             st.caption("Sin columna `Bodega`.")
 
@@ -4221,7 +4381,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
                     title="Mediana de margen: sistema × rotación (top combinaciones)",
                     labels={"color": "Mediana margen (%)"},
                 )
-                _plotly_show(fig_hm)
+                _plotly_show(
+                    fig_hm,
+                    "Mapa de calor: mediana de margen en el cruce sistema × rotación; celdas más cálidas o verdes señalan segmentos con peor o mejor margen.",
+                    fig_scope="margen",
+                )
             else:
                 st.caption("Sin datos para heatmap sistema×rotación.")
         else:
@@ -4244,7 +4408,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
                 title="Valor de inventario (COP mill.) — banda de margen → bodega",
             )
             fig_tree.update_layout(margin=dict(t=50, l=10, r=10, b=10))
-            _plotly_show(fig_tree)
+            _plotly_show(
+                fig_tree,
+                "Treemap jerárquico: banda de margen → bodega; el área es proporcional al valor de inventario para ver dónde se concentra el dinero en cada banda.",
+                fig_scope="margen",
+            )
 
     # ════════════════════════════════════════════════════════════════════
     #  CAP 5 — Anomalías: detección de inconsistencias
@@ -4296,7 +4464,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
                     xaxis_title="Margen (%)", yaxis_title="Referencia",
                     height=max(400, min(25, len(inconsist)) * 28),
                 )
-                _plotly_show(fig_inc)
+                _plotly_show(
+                    fig_inc,
+                    "Por referencia: trazo de margen mínimo, mediano y máximo entre bodegas; dispersión amplia sugiere inconsistencia de costos o precios entre ubicaciones.",
+                    fig_scope="margen",
+                )
 
             with ic2:
                 fig_rng = px.scatter(
@@ -4312,7 +4484,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
                         fig_rng.add_vline(x=lo, line_dash="dot", line_color=color, opacity=0.5,
                                           annotation_text=label.split(" ")[0] if lo > 0 else "")
                 fig_rng.add_hline(y=20, line_dash="dot", line_color="#64748b", annotation_text="Umbral 20 pp")
-                _plotly_show(fig_rng)
+                _plotly_show(
+                    fig_rng,
+                    "Cada punto es una referencia: mediana de margen en el eje X vs rango entre bodegas (max−min); hacia arriba y derecha hay más inconsistencia operativa.",
+                    fig_scope="margen",
+                )
 
             st.markdown(f"**{len(inconsist)} referencias** con dispersión > 20 pp entre bodegas.")
         else:
@@ -4333,7 +4509,11 @@ def _margen_plotly_charts(df: pd.DataFrame, margen_col: str, precio_col: str) ->
                 labels={"refs": "Refs únicas", "Bodega": "Bodega", "_banda": "Banda"},
             )
             fig_an.update_xaxes(tickangle=-35)
-            _plotly_show(fig_an)
+            _plotly_show(
+                fig_an,
+                "Barras agrupadas: referencias con margen crítico o muy alto por bodega; prioriza auditorías donde hay más piezas en zonas extremas.",
+                fig_scope="margen",
+            )
         else:
             st.success("No hay referencias en zonas extremas con el filtro actual.")
 
@@ -4357,11 +4537,110 @@ def _auditoria_prepare_chart_df(df_fil: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _auditoria_histogram_ratio_costo_lista_vlines(fig, df_clip: pd.DataFrame, col: str = "_ratio") -> None:
+    """Líneas de referencia sobre el histograma de ratio costo/P.Lista.
+
+    Líneas secundarias (P5, P95, Q1, Q3, Tukey) sin etiqueta — fondo, menos ruido visual.
+    Etiquetas solo en μ, Md, Mo (si aplica) y umbrales 85 % / 100 %.
+    """
+    ser = pd.to_numeric(df_clip[col], errors="coerce").dropna()
+    if ser.empty or len(ser) < 2:
+        return
+    mean_r = float(ser.mean())
+    med_r = float(ser.median())
+    q1 = float(ser.quantile(0.25))
+    q3 = float(ser.quantile(0.75))
+    p5 = float(ser.quantile(0.05))
+    p95 = float(ser.quantile(0.95))
+    iqr = q3 - q1
+    fence_lo = q1 - 1.5 * iqr
+    fence_hi = q3 + 1.5 * iqr
+    x_lo = float(ser.min())
+    x_hi = float(ser.max())
+    try:
+        nb = min(40, max(10, len(ser) // 8))
+        mode_bin = pd.cut(ser, bins=nb, duplicates="drop").value_counts().idxmax()
+        mode_r = float(mode_bin.mid)
+    except Exception:
+        rm = ser.round(1).mode()
+        mode_r = float(rm.iloc[0]) if not rm.empty else med_r
+
+    def _shape_v(x: float, color: str, dash: str = "dot", w: int = 1, opacity: float = 0.42) -> None:
+        fig.add_shape(
+            type="line",
+            xref="x",
+            yref="paper",
+            x0=x,
+            x1=x,
+            y0=0,
+            y1=1,
+            line=dict(color=color, width=w, dash=dash),
+            opacity=opacity,
+            layer="below",
+        )
+
+    def _vl(
+        x: float,
+        txt: str,
+        color: str,
+        dash: str = "solid",
+        w: float = 1.2,
+        opacity: float = 1.0,
+        pos: str = "top",
+    ) -> None:
+        fig.add_vline(
+            x=x,
+            line_dash=dash,
+            line_color=color,
+            line_width=w,
+            opacity=opacity,
+            annotation_text=txt,
+            annotation_position=pos,
+        )
+
+    # Referencia estadística (sin texto — panel lateral explica el significado)
+    if p95 - p5 > 2.5:
+        _shape_v(p5, "#64748b", "dot", 1, 0.4)
+        _shape_v(p95, "#64748b", "dot", 1, 0.4)
+    _shape_v(q1, "#475569", "dot", 1, 0.45)
+    _shape_v(q3, "#475569", "dot", 1, 0.45)
+    if iqr > 0 and abs(fence_hi - p95) > 2 and x_lo - 5 <= fence_hi <= x_hi + 5:
+        _shape_v(fence_hi, "#6366f1", "dash", 1, 0.38)
+    if iqr > 0 and abs(fence_lo - p5) > 2 and x_lo - 5 <= fence_lo <= x_hi + 5:
+        _shape_v(fence_lo, "#6366f1", "dash", 1, 0.38)
+
+    # Lectura rápida: tendencia central y negocio (etiquetas cortas, posiciones alternas)
+    _vl(mean_r, f"μ {mean_r:.0f}%", "#22d3ee", "solid", 1.5, 1.0, "top right")
+    _vl(med_r, f"Md {med_r:.0f}%", "#facc15", "dash", 1.5, 1.0, "bottom left")
+    if abs(mode_r - med_r) > 2.0:
+        _vl(mode_r, f"Mo {mode_r:.0f}%", "#c084fc", "solid", 1.2, 1.0, "top left")
+    fig.add_vline(
+        x=85,
+        line_dash="dot",
+        line_color="#f59e0b",
+        line_width=1.3,
+        annotation_text="85%",
+        annotation_position="bottom right",
+    )
+    fig.add_vline(
+        x=100,
+        line_dash="solid",
+        line_color="#ef4444",
+        line_width=1.5,
+        annotation_text="100%",
+        annotation_position="top right",
+    )
+    ann = getattr(fig.layout, "annotations", None)
+    if ann:
+        fig.update_annotations(font=dict(size=10, color="#e5e7eb"))
+
+
 def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
     """Eje Semáforo — storytelling: resumen → panorama → anatomía → concentración → plan."""
     if not _HAS_PLOTLY or px is None:
         st.warning("Instala **Plotly** para ver gráficos: `pip install plotly`.")
         return
+    st.session_state["_fig_seq_audit_sem"] = 0
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
@@ -4394,14 +4673,19 @@ def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
     valor_inv = _valor_inventario_cop_auditoria(df, lower_map)
     media_var_costo = float(df["_g_abs_var_costo"].dropna().mean()) if df["_g_abs_var_costo"].notna().any() else 0.0
 
-    s1, s2, s3 = st.columns(3, gap="small")
-    s1.metric("Filtradas", f"{n_total:,}")
-    s2.metric("Crítico", f"{n_critico:,}", delta=f"{n_critico/max(n_total,1)*100:.1f}%", delta_color="inverse")
-    s3.metric("Mod-alto", f"{n_mod_alto:,}", delta=f"{n_mod_alto/max(n_total,1)*100:.1f}%", delta_color="inverse")
-    s4, s5, s6 = st.columns(3, gap="small")
-    s4.metric("≥ umbral costo", f"{pct_umbral_costo:.1f}%")
-    s5.metric("Media |Δ costo|", f"{media_var_costo:.1f}%")
-    s6.metric("Inv. expuesto", _fmt_cop_resumido(valor_inv) if valor_inv is not None else "N/D")
+    with st.container(border=True):
+        st.markdown(
+            '<span class="audit-exec-kpi-inner" aria-hidden="true"></span>',
+            unsafe_allow_html=True,
+        )
+        s1, s2, s3 = st.columns(3, gap="medium")
+        s1.metric("Filtradas", f"{n_total:,}")
+        s2.metric("Crítico", f"{n_critico:,}", delta=f"{n_critico/max(n_total,1)*100:.1f}%", delta_color="inverse")
+        s3.metric("Mod-alto", f"{n_mod_alto:,}", delta=f"{n_mod_alto/max(n_total,1)*100:.1f}%", delta_color="inverse")
+        s4, s5, s6 = st.columns(3, gap="medium")
+        s4.metric("Media |Δ costo|", f"{media_var_costo:.1f}%")
+        s5.metric("≥ umbral costo", f"{pct_umbral_costo:.1f}%")
+        s6.metric("Inv. expuesto", _fmt_cop_resumido(valor_inv) if valor_inv is not None else "N/D")
 
     # ── CAP 2 · Panorama ─────────────────────────────────────────────────
     st.markdown("---")
@@ -4428,7 +4712,11 @@ def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                          color_discrete_map=color_map, title="Distribución del semáforo",
                          labels={"Semáforo_ui": "Semáforo", "n": "N° refs"})
             fig.update_layout(showlegend=False, **_CL)
-            _plotly_show(fig)
+            _plotly_show(
+                fig,
+                "Barras: número de referencias por categoría de semáforo; la altura muestra el peso de cada severidad en el portafolio filtrado.",
+                fig_scope="audit_sem",
+            )
     with p2:
         if not sub_s.empty and _score_clip is not None and _score_med is not None and _score_p90 is not None:
             fig = px.histogram(sub_s[sub_s["_g_score"] <= _score_clip], x="_g_score", nbins=50,
@@ -4436,7 +4724,11 @@ def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
             fig.add_vline(x=_score_p90, line_dash="dash", line_color="#ef4444", annotation_text=f"P90={_score_p90:.1f}")
             fig.add_vline(x=_score_med, line_dash="dot", line_color="#facc15", annotation_text=f"Med={_score_med:.1f}")
             fig.update_layout(**_CL)
-            _plotly_show(fig)
+            _plotly_show(
+                fig,
+                "Histograma del score compuesto de riesgo; las líneas marcan mediana y P90 para situar la cola de mayor alerta.",
+                fig_scope="audit_sem",
+            )
 
     p3, p4 = st.columns(2, gap="medium")
     with p3:
@@ -4452,7 +4744,11 @@ def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                          title="Severidad |Δ vs costo| por semáforo",
                          labels={"_sem_ui": "Semáforo", "_g_abs_var_costo": "|Δ vs costo| %"})
             fig.update_layout(showlegend=False, **_CL)
-            _plotly_show(fig)
+            _plotly_show(
+                fig,
+                "Diagrama de caja: distribución de |Δ vs costo| por semáforo; compara medianas, dispersión y valores atípicos entre severidades.",
+                fig_scope="audit_sem",
+            )
     with p4:
         if sem_col and sem_col in df.columns and rot_col and rot_col in df.columns:
             rot_sem = pd.crosstab(df[rot_col].astype(str), df[sem_col].fillna("SIN_DATO").astype(str))
@@ -4464,7 +4760,11 @@ def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                                 title="Rotación × semáforo (% fila)",
                                 labels={"color": "%"})
                 fig.update_layout(**_CL)
-                _plotly_show(fig)
+                _plotly_show(
+                    fig,
+                    "Mapa de calor: dentro de cada fila (rotación), qué % de referencias cae en cada semáforo; detecta rotaciones que concentran alertas.",
+                    fig_scope="audit_sem",
+                )
 
     if not sub_s.empty and _score_max is not None and _score_med is not None and _score_p90 is not None:
         st.caption("Resumen del score de riesgo (misma muestra que el histograma).")
@@ -4476,10 +4776,12 @@ def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
     # ── CAP 3 · Anatomía ─────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("#### 3 · Anatomía — ¿de dónde vienen los desalineamientos?")
-    st.caption("Heatmap sistema × semáforo, scatter de cobertura precio lista y distribución del ratio costo/lista.")
+    st.caption(
+        "Heatmap sistema × semáforo, scatter cobertura precio lista y bloque integrado de ratio costo/lista (histograma + KPIs)."
+    )
 
-    a1, a2 = st.columns(2, gap="medium")
-    with a1:
+    cap3_r1a, cap3_r1b = st.columns(2, gap="medium")
+    with cap3_r1a:
         if sem_col and sistema_precio_col and sistema_precio_col in df.columns and sem_col in df.columns:
             top_sys = df[sistema_precio_col].astype(str).value_counts().head(10).index
             df_hm = df[df[sistema_precio_col].astype(str).isin(top_sys)]
@@ -4489,9 +4791,13 @@ def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                 fig = px.imshow(piv, text_auto=True, aspect="auto", color_continuous_scale="YlOrRd",
                                 title="Sistema × semáforo (top 10)", labels={"color": "Refs"})
                 fig.update_layout(**_CL)
-                _plotly_show(fig)
+                _plotly_show(
+                    fig,
+                    "Conteos por cruce sistema de precio × semáforo (top sistemas); el color indica volumen de referencias en cada celda.",
+                    fig_scope="audit_sem",
+                )
 
-    with a2:
+    with cap3_r1b:
         if precio_ult_cop_col and precio_lista_col and precio_ult_cop_col in df.columns and precio_lista_col in df.columns:
             df_sc_pl = df[[precio_ult_cop_col, precio_lista_col]].dropna()
             df_sc_pl = df_sc_pl[(df_sc_pl[precio_lista_col] > 0) & (df_sc_pl[precio_ult_cop_col] > 0)].copy()
@@ -4510,56 +4816,103 @@ def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                                          name="100% = sin margen", showlegend=True))
                 fig.update_traces(marker=dict(size=4), selector=dict(type="scatter"))
                 fig.update_layout(**_CL)
-                _plotly_show(fig)
+                _plotly_show(
+                    fig,
+                    "Dispersión precio lista vs costo de compra; el color es el ratio costo/lista (%) y la diagonal roja es el punto sin margen (100 %).",
+                    fig_scope="audit_sem",
+                )
 
-    a3, a4 = st.columns(2, gap="medium")
-    with a3:
-        if precio_ult_cop_col and precio_lista_col and precio_ult_cop_col in df.columns and precio_lista_col in df.columns:
-            df_pl = df[[precio_ult_cop_col, precio_lista_col]].dropna()
-            df_pl = df_pl[(df_pl[precio_lista_col] > 0) & (df_pl[precio_ult_cop_col] > 0)].copy()
-            if not df_pl.empty:
-                df_pl["_ratio"] = df_pl[precio_ult_cop_col] / df_pl[precio_lista_col] * 100
-                p95_r = float(df_pl["_ratio"].quantile(0.95))
-                df_clip = df_pl[df_pl["_ratio"] <= max(p95_r * 1.1, 100)]
-                fig = px.histogram(df_clip, x="_ratio", nbins=50,
-                                   title="Distribución costo/precio lista (%)",
-                                   labels={"_ratio": "Costo / P.Lista (%)"},
-                                   color_discrete_sequence=["#38bdf8"])
-                fig.add_vline(x=100, line_dash="solid", line_color="#ef4444", annotation_text="100%")
-                fig.add_vline(x=85, line_dash="dot", line_color="#f59e0b", annotation_text="85%")
-                med_r = float(df_clip["_ratio"].median())
-                fig.add_vline(x=med_r, line_dash="dash", line_color="#facc15", annotation_text=f"Med {med_r:.0f}%")
-                fig.update_layout(**_CL)
-                _plotly_show(fig)
-    with a4:
-        if precio_ult_cop_col and precio_lista_col and precio_ult_cop_col in df.columns and precio_lista_col in df.columns:
-            df_pl2 = df[[precio_ult_cop_col, precio_lista_col]].dropna()
-            df_pl2 = df_pl2[(df_pl2[precio_lista_col] > 0) & (df_pl2[precio_ult_cop_col] > 0)].copy()
-            if not df_pl2.empty:
-                df_pl2["_ratio"] = df_pl2[precio_ult_cop_col] / df_pl2[precio_lista_col] * 100
-                n85 = int((df_pl2["_ratio"] >= 85).sum())
-                n100 = int((df_pl2["_ratio"] >= 100).sum())
-                n_compr = 0
-                if var_c and var_c in df.columns:
-                    df_pl2["_var_c"] = pd.to_numeric(df.loc[df_pl2.index, var_c], errors="coerce")
-                    n_compr = len(df_pl2[(df_pl2["_ratio"] >= 80) & (df_pl2["_var_c"] > 0)])
-                am1, am2, am3 = st.columns(3, gap="small")
-                am1.metric(
-                    "Costo ≥ 85% P.Lista",
-                    f"{n85:,}",
-                    delta=f"{n85/max(len(df_pl2),1)*100:.1f}%",
-                    delta_color="inverse",
+    # Fila 2: un solo bloque de análisis — ratio costo/lista (histograma + KPIs + lectura)
+    _precio_ok = (
+        precio_ult_cop_col
+        and precio_lista_col
+        and precio_ult_cop_col in df.columns
+        and precio_lista_col in df.columns
+    )
+    if _precio_ok:
+        df_pl = df[[precio_ult_cop_col, precio_lista_col]].dropna()
+        df_pl = df_pl[(df_pl[precio_lista_col] > 0) & (df_pl[precio_ult_cop_col] > 0)].copy()
+        if not df_pl.empty:
+            df_pl["_ratio"] = df_pl[precio_ult_cop_col] / df_pl[precio_lista_col] * 100
+            p95_r = float(df_pl["_ratio"].quantile(0.95))
+            df_clip = df_pl[df_pl["_ratio"] <= max(p95_r * 1.1, 100)]
+            n85 = int((df_pl["_ratio"] >= 85).sum())
+            n100 = int((df_pl["_ratio"] >= 100).sum())
+            n_compr = 0
+            if var_c and var_c in df.columns:
+                _vc = pd.to_numeric(df.loc[df_pl.index, var_c], errors="coerce")
+                n_compr = int(((df_pl["_ratio"] >= 80) & (_vc.fillna(0) > 0)).sum())
+            n_pop = max(len(df_pl), 1)
+            with st.container(border=True):
+                st.markdown(
+                    '<div class="audit-ratio-unit-header">'
+                    '<span class="audit-ratio-unit-header__kicker">Anatomía · Análisis integrado</span>'
+                    '<p class="audit-ratio-unit-header__title">Ratio costo de compra ÷ precio de lista</p>'
+                    '<p class="hint-text" style="margin:0.4rem 0 0 0;font-size:0.82rem;line-height:1.45;">'
+                    "Una sola lectura: el histograma muestra la <strong>forma</strong> del ratio; "
+                    "las tarjetas cuantifican <strong>riesgo</strong> sobre el mismo universo filtrado; "
+                    "el texto resume cómo interpretar líneas y umbrales.</p>"
+                    "</div>",
+                    unsafe_allow_html=True,
                 )
-                am2.metric(
-                    "Costo ≥ 100% (margen neg.)",
-                    f"{n100:,}",
-                    delta=f"{n100/max(len(df_pl2),1)*100:.1f}%",
-                    delta_color="inverse",
-                )
-                am3.metric(
-                    "Comprimidas (≥80% + subió)",
-                    f"{n_compr:,}",
-                    help="Costo alto + precio subió = cambio urgente de P.Lista",
+                cap3_r2a, cap3_r2b = st.columns([1.78, 0.9], gap="medium")
+                with cap3_r2a:
+                    fig = px.histogram(
+                        df_clip,
+                        x="_ratio",
+                        nbins=50,
+                        title="Distribución del ratio (%)",
+                        labels={"_ratio": "Costo / P.Lista (%)"},
+                        color_discrete_sequence=["#38bdf8"],
+                    )
+                    _auditoria_histogram_ratio_costo_lista_vlines(fig, df_clip)
+                    fig.update_layout(**_CL)
+                    fig.update_layout(title=dict(font=dict(size=14)))
+                    _plotly_show(fig, caption=None, fig_scope="audit_sem")
+                    rat = df_clip["_ratio"]
+                    st.caption(
+                        f"**Muestra del histograma:** μ {rat.mean():.1f}% · Md {rat.median():.1f}% · σ {rat.std():.1f}% · "
+                        f"IQR {float(rat.quantile(0.75) - rat.quantile(0.25)):.1f} pp · n = **{len(rat):,}**"
+                    )
+                with cap3_r2b:
+                    st.markdown(
+                        '<p class="audit-ratio-side-title">Indicadores de riesgo (población filtrada)</p>',
+                        unsafe_allow_html=True,
+                    )
+                    am1, am2, am3 = st.columns(3, gap="small")
+                    with am1:
+                        st.metric(
+                            "≥ 85 % lista",
+                            f"{n85:,}",
+                            delta=f"{n85/n_pop*100:.1f}%",
+                            delta_color="inverse",
+                            help="Costo de compra ≥ 85 % del precio de lista: margen muy ajustado.",
+                        )
+                    with am2:
+                        st.metric(
+                            "≥ 100 %",
+                            f"{n100:,}",
+                            delta=f"{n100/n_pop*100:.1f}%",
+                            delta_color="inverse",
+                            help="Costo ≥ precio de lista: margen nulo o negativo.",
+                        )
+                    with am3:
+                        st.metric(
+                            "≥80 % + Δ > 0",
+                            f"{n_compr:,}",
+                            help="Ratio ≥ 80 % del precio lista y variación de compra positiva: revisar P.Lista o proveedor.",
+                        )
+                    st.markdown(
+                        '<p class="hint-text" style="margin-top:0.55rem;line-height:1.5;">'
+                        "<strong>Cómo leer el gráfico:</strong> el eje es <em>costo ÷ precio lista</em> (%): "
+                        "a la izquierda hay más margen; a la derecha el costo absorbe más del precio público. "
+                        "Las líneas tenues de fondo son P5, P95, cuartiles y Tukey; <strong>μ</strong>, <strong>Md</strong> y <strong>Mo</strong> (si sale) marcan la tendencia central. "
+                        "Naranja ~85 % y roja 100 % son umbrales; las tarjetas cuentan refs en riesgo con la <strong>misma muestra</strong> que el histograma.</p>",
+                        unsafe_allow_html=True,
+                    )
+                _render_fig_caption(
+                    "audit_sem",
+                    "Distribución del ratio costo ÷ precio lista (%): lectura integrada con las tarjetas de riesgo y el mismo filtro de referencias.",
                 )
 
     # ── CAP 4 · Concentración ─────────────────────────────────────────────
@@ -4583,7 +4936,11 @@ def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                              labels={"score_media": "Score medio", "score_max": "Score máx", "refs": "Refs"})
             fig.update_traces(textposition="top center", textfont_size=8)
             fig.update_layout(**_CL)
-            _plotly_show(fig)
+            _plotly_show(
+                fig,
+                "Burbujas por sistema: score medio frente a score máximo; el tamaño es el número de referencias y el color refuerza el score medio para priorizar sistemas.",
+                fig_scope="audit_sem",
+            )
 
     with co2:
         modelo_col = ctx.get("modelo_col")
@@ -4601,7 +4958,11 @@ def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                          labels={"media_costo": "Media |Δ costo|%", modelo_col: "Modelo", "pct_crit": "%>=umbral"})
             fig.update_traces(textposition="outside")
             fig.update_layout(**_CL)
-            _plotly_show(fig)
+            _plotly_show(
+                fig,
+                "Barras horizontales: modelos con mayor |Δ vs costo| medio; el color muestra el % de referencias que superan el umbral de costo.",
+                fig_scope="audit_sem",
+            )
 
     co3, co4 = st.columns(2, gap="medium")
     with co3:
@@ -4663,7 +5024,11 @@ def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                                   xaxis_title="Rank", legend=dict(orientation="h", y=-0.2), **_CL)
                 fig.update_yaxes(title_text="COP mill.", secondary_y=False)
                 fig.update_yaxes(title_text="% acum.", secondary_y=True)
-                _plotly_show(fig)
+                _plotly_show(
+                    fig,
+                    "Pareto de inventario expuesto por referencia: barras = valor (COP mill.), curva = % acumulado; rojo = score de riesgo alto en esa ref.",
+                    fig_scope="audit_sem",
+                )
         else:
             st.caption("Sin datos de inventario para Pareto.")
 
@@ -4684,7 +5049,11 @@ def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                                  title="Rotación vs |Δ costo| medio",
                                  labels={rot_col: "Rotación", "media_costo": "Media |Δ costo|%", "pct_crit": "%>=umbral"})
                 fig.update_layout(**_CL)
-                _plotly_show(fig)
+                _plotly_show(
+                    fig,
+                    "Dispersión rotación vs |Δ costo| medio; el tamaño es el nº de refs y el color el % de referencias críticas respecto al umbral.",
+                    fig_scope="audit_sem",
+                )
 
     # ── CAP 5 · Plan de acción ────────────────────────────────────────────
     st.markdown("---")
@@ -4738,7 +5107,11 @@ def _auditoria_charts_semaforo_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                 title="Top 20 — prioridad por desalineación vs costo inv.",
                 xaxis_title="Índice de prioridad", yaxis_title="Referencia",
                 height=max(400, len(top) * 22), yaxis=dict(autorange="reversed"))
-            _plotly_show(fig)
+            _plotly_show(
+                fig,
+                "Barras horizontales: top 20 referencias por índice de prioridad de desalineación frente al costo de inventario; el texto resume Δ costo y Δ compra.",
+                fig_scope="audit_sem",
+            )
 
 
 def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
@@ -4746,6 +5119,7 @@ def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
     if not _HAS_PLOTLY or px is None:
         st.warning("Instala **Plotly** para ver gráficos: `pip install plotly`.")
         return
+    st.session_state["_fig_seq_audit_var"] = 0
     import plotly.graph_objects as go
 
     _CL = dict(height=440)
@@ -4785,14 +5159,19 @@ def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
     media_abs = float(df["_g_abs_var_compra"].dropna().mean()) if df["_g_abs_var_compra"].notna().any() else 0.0
     med_abs = float(df["_g_abs_var_compra"].dropna().median()) if df["_g_abs_var_compra"].notna().any() else 0.0
 
-    v1, v2, v3 = st.columns(3, gap="small")
-    v1.metric("Filtradas", f"{n_total:,}")
-    v2.metric("Subió > umbral", f"{n_sube:,}", delta=f"{n_sube/max(n_total,1)*100:.1f}%", delta_color="inverse")
-    v3.metric("Bajó > umbral", f"{n_baja:,}", delta=f"{n_baja/max(n_total,1)*100:.1f}%", delta_color="off")
-    v4, v5, v6 = st.columns(3, gap="small")
-    v4.metric("Doble problema", f"{n_doble:,}", delta=f"{n_doble/max(n_total,1)*100:.1f}%", delta_color="inverse")
-    v5.metric("Media |Δ compra|", f"{media_abs:.1f}%")
-    v6.metric("Mediana |Δ compra|", f"{med_abs:.1f}%")
+    with st.container(border=True):
+        st.markdown(
+            '<span class="audit-exec-kpi-inner" aria-hidden="true"></span>',
+            unsafe_allow_html=True,
+        )
+        v1, v2, v3 = st.columns(3, gap="medium")
+        v1.metric("Filtradas", f"{n_total:,}")
+        v2.metric("Subió > umbral", f"{n_sube:,}", delta=f"{n_sube/max(n_total,1)*100:.1f}%", delta_color="inverse")
+        v3.metric("Bajó > umbral", f"{n_baja:,}", delta=f"{n_baja/max(n_total,1)*100:.1f}%", delta_color="off")
+        v4, v5, v6 = st.columns(3, gap="medium")
+        v4.metric("Media |Δ compra|", f"{media_abs:.1f}%")
+        v5.metric("Mediana |Δ compra|", f"{med_abs:.1f}%")
+        v6.metric("Doble problema", f"{n_doble:,}", delta=f"{n_doble/max(n_total,1)*100:.1f}%", delta_color="inverse")
 
     # ── CAP 2 · Panorama ─────────────────────────────────────────────────
     st.markdown("---")
@@ -4815,7 +5194,11 @@ def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                 fig.add_vline(x=umbral_c, line_dash="dash", line_color="#ef4444", annotation_text=f"+{umbral_c}%")
                 fig.add_vline(x=-umbral_c, line_dash="dash", line_color="#22c55e", annotation_text=f"-{umbral_c}%")
                 fig.update_layout(**_CL)
-                _plotly_show(fig)
+                _plotly_show(
+                    fig,
+                    "Histograma del cambio % entre última y penúltima compra; el centro es sin cambio y las líneas marcan ± el umbral configurado.",
+                    fig_scope="audit_var",
+                )
 
     with p2:
         if precio_ult_cop_col and precio_pen_cop_col and precio_ult_cop_col in df.columns and precio_pen_cop_col in df.columns:
@@ -4834,7 +5217,11 @@ def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                                          showlegend=False))
                 fig.update_traces(marker=dict(size=4), selector=dict(type="scatter"))
                 fig.update_layout(**_CL)
-                _plotly_show(fig)
+                _plotly_show(
+                    fig,
+                    "Comparación directa de precios penúltima vs última compra; sobre la diagonal subió el precio, bajo la diagonal bajó; el color intensifica el |Δ %|.",
+                    fig_scope="audit_var",
+                )
 
     # ── CAP 3 · Anatomía ─────────────────────────────────────────────────
     st.markdown("---")
@@ -4873,7 +5260,11 @@ def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
             fig.add_vrect(x0=umbral_c, x1=xm, y0=umbral_v, y1=ym, fillcolor="red", opacity=0.06,
                           annotation_text="Doble problema")
             fig.update_layout(**_CL)
-            _plotly_show(fig)
+            _plotly_show(
+                fig,
+                "Cada punto es una referencia: |Δ compra| vs |Δ costo|; la zona sombreada destaca el doble problema (ambas magnitudes por encima del umbral).",
+                fig_scope="audit_var",
+            )
 
     with a2:
         has_both_f = df["_g_abs_var_compra"].notna() & df["_g_abs_var_costo"].notna()
@@ -4890,7 +5281,11 @@ def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                          color_discrete_map=cmap_q, title="Distribución por cuadrante",
                          labels={"n": "Refs"})
             fig.update_layout(showlegend=False, **_CL)
-            _plotly_show(fig)
+            _plotly_show(
+                fig,
+                "Barras: cuántas referencias caen en cada cuadrante (solo compra, solo costo, doble problema o bajo ambos).",
+                fig_scope="audit_var",
+            )
 
     a3, a4 = st.columns(2, gap="medium")
     with a3:
@@ -4908,7 +5303,11 @@ def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                                  labels={dias_col: "Días", "_g_abs_var_compra": "|Δ compra|%"})
                 fig.update_traces(marker=dict(size=4), selector=dict(type="scatter"))
                 fig.update_layout(**_CL)
-                _plotly_show(fig)
+                _plotly_show(
+                    fig,
+                    "Relación entre días entre compras y magnitud de |Δ compra|; el color puede ser el score de riesgo cuando hay dato.",
+                    fig_scope="audit_var",
+                )
 
     with a4:
         if (precio_ult_cop_col and precio_pen_cop_col and sistema_precio_col
@@ -4936,7 +5335,11 @@ def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                              title=f"Dirección por sistema (±{umbral_c}%)",
                              labels={"n": "Refs", sistema_precio_col: "Sistema"})
                 fig.update_layout(**_CL)
-                _plotly_show(fig)
+                _plotly_show(
+                    fig,
+                    "Barras apiladas por sistema: cuántas referencias subieron, bajaron o quedaron estables frente al umbral de variación de compra.",
+                    fig_scope="audit_var",
+                )
 
     # ── CAP 4 · Concentración ─────────────────────────────────────────────
     st.markdown("---")
@@ -4959,7 +5362,11 @@ def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                          labels={"media_var": "Media |Δ|%", modelo_col: "Modelo", "pct_sobre": "%≥umbral"})
             fig.update_traces(textposition="outside")
             fig.update_layout(**_CL)
-            _plotly_show(fig)
+            _plotly_show(
+                fig,
+                "Modelos con mayor |Δ compra| medio; el color indica el % de referencias que superan el umbral de variación de compra.",
+                fig_scope="audit_var",
+            )
 
     with co2:
         if pais_ult_col and pais_ult_col in df.columns and df["_g_abs_var_compra"].notna().any():
@@ -4978,7 +5385,11 @@ def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                              labels={"media_var": "Media |Δ|%", pais_ult_col: "País", "pct_sobre": "%≥umbral"})
                 fig.update_traces(textposition="outside")
                 fig.update_layout(**_CL)
-                _plotly_show(fig)
+                _plotly_show(
+                    fig,
+                    "País de origen con mayor variación media de compra; prioriza orígenes con más inestabilidad de precio.",
+                    fig_scope="audit_var",
+                )
 
     if rot_col and rot_col in df.columns and df["_g_abs_var_compra"].notna().any():
         rot_agg = (
@@ -4998,7 +5409,11 @@ def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                                  labels={rot_col: "Rotación", "media_var": "Media |Δ|%", "pct_crit": "%≥umbral"})
                 fig.add_hline(y=umbral_c, line_dash="dot", line_color="#ef4444")
                 fig.update_layout(**_CL)
-                _plotly_show(fig)
+                _plotly_show(
+                    fig,
+                    "Rotación vs |Δ compra| medio; el tamaño es el nº de referencias y la línea horizontal marca el umbral de compra.",
+                    fig_scope="audit_var",
+                )
             with ro2:
                 if dias_col and dias_col in df.columns and df["_g_abs_var_compra"].notna().any():
                     d4 = df.dropna(subset=[dias_col, "_g_abs_var_compra"])
@@ -5021,7 +5436,11 @@ def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                                           xaxis_title="Días (octil)", yaxis_title="|Δ compra|%",
                                           xaxis_tickangle=-35, legend=dict(orientation="h", y=-0.25),
                                           **_CL)
-                        _plotly_show(fig)
+                        _plotly_show(
+                            fig,
+                            "Tendencia de |Δ compra| según tramos de días entre compras (octiles); media y P75 muestran si el cambio crece con el tiempo sin comprar.",
+                            fig_scope="audit_var",
+                        )
 
     # ── CAP 5 · Plan de acción ────────────────────────────────────────────
     st.markdown("---")
@@ -5073,7 +5492,11 @@ def _auditoria_charts_variacion_st(df_fil: pd.DataFrame, ctx: dict) -> None:
                 title="Top 20 — prioridad por variación de compra",
                 xaxis_title="Índice de prioridad", yaxis_title="Referencia",
                 height=max(400, len(top) * 22), yaxis=dict(autorange="reversed"))
-            _plotly_show(fig)
+            _plotly_show(
+                fig,
+                "Top 20 referencias por índice de prioridad de variación de compra; el texto muestra Δ compra y Δ costo para acción inmediata.",
+                fig_scope="audit_var",
+            )
 
 
 
