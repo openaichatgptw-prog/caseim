@@ -2906,7 +2906,7 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
     with _ar:
         render_reset_filters_button("auditoria_refs")
 
-    filtros1, filtros2, filtros3 = st.columns([2.0, 1.0, 1.0], gap="medium")
+    filtros1, filtros2, filtros3, filtros4 = st.columns([1.75, 1.0, 1.0, 1.0], gap="medium")
     with filtros1:
         sub_a1, sub_a2 = st.columns([1.35, 1.0], gap="medium")
         with sub_a1:
@@ -2946,11 +2946,19 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
         else:
             rot_sel = []
             st.caption("Sin clasificación rotación.")
+    with filtros4:
+        if sistema_precio_col and sistema_precio_col in df.columns:
+            sistemas = sorted([str(x) for x in df[sistema_precio_col].dropna().unique()])
+            _init_multiselect_list("aud_refs_sistema_sel", sistemas)
+            sistema_sel = st.multiselect("Sistema precio", options=sistemas, key="aud_refs_sistema_sel")
+        else:
+            sistema_sel = []
+            st.caption("Sin sistema precio.")
 
     precio_lo = precio_hi = None
     ex_tot_lo = ex_tot_hi = None
 
-    filtros5, filtros6, filtros7, filtros8 = st.columns([1, 1, 1, 1], gap="medium")
+    filtros5, filtros6, filtros7 = st.columns([1, 1, 1], gap="medium")
     with filtros5:
         if precio_lista_col and precio_lista_col in df.columns:
             s_pl = pd.to_numeric(df[precio_lista_col], errors="coerce").dropna()
@@ -2999,23 +3007,25 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
                 p1, p2 = st.columns(2, gap="small")
                 with p1:
                     st.number_input(
-                        f"Desde {precio_lista_col} (COP)",
+                        "Desde (COP)",
                         min_value=0.0,
                         max_value=max_precio_slider,
                         step=1.0,
                         format=_FMT_PRECIO_LISTA_NUM_INPUT,
                         key="aud_precio_desde",
                         on_change=_sync_aud_precio_from_inputs,
+                        help=f"Límite inferior del rango ({precio_lista_col}).",
                     )
                 with p2:
                     st.number_input(
-                        f"Hasta {precio_lista_col} (COP)",
+                        "Hasta (COP)",
                         min_value=0.0,
                         max_value=max_precio_slider,
                         step=1.0,
                         format=_FMT_PRECIO_LISTA_NUM_INPUT,
                         key="aud_precio_hasta",
                         on_change=_sync_aud_precio_from_inputs,
+                        help=f"Límite superior del rango ({precio_lista_col}).",
                     )
                 precio_lo = float(st.session_state["aud_precio_desde"])
                 precio_hi = float(st.session_state["aud_precio_hasta"])
@@ -3095,20 +3105,8 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
         else:
             st.caption("Sin existencia total.")
 
-    with filtros7:
-        sistemas = (
-            sorted([str(x) for x in df[sistema_precio_col].dropna().unique()])
-            if sistema_precio_col and sistema_precio_col in df.columns
-            else []
-        )
-        _init_multiselect_list("aud_refs_sistema_sel", sistemas)
-        sistema_sel = st.multiselect("Sistema precio", options=sistemas, key="aud_refs_sistema_sel")
-    with filtros8:
-        st.empty()
-
     dias_lo = dias_hi = None
-    filtros9, filtros10 = st.columns([1.2, 2.8], gap="medium")
-    with filtros9:
+    with filtros7:
         if dias_min_data is not None and dias_max_data is not None:
             if dias_min_data == dias_max_data:
                 dias_lo = dias_hi = dias_min_data
@@ -3176,17 +3174,35 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
         else:
             st.caption("Sin datos de días entre compras.")
 
-    with filtros10:
-        solo_significativas = st.checkbox(
-            "Solo variación fuerte (Eje 2)",
-            value=False,
-            key="aud_solo_significativas",
-            help="Filtra refs para tablas y Eje 2. El Eje 1 (Semáforo) siempre ve todas las refs.",
-        )
+    st.divider()
+    with st.container():
+        st.caption("Variación fuerte (Eje 2) — umbrales; el checkbox activa el filtro.")
+        r_um = st.columns([1.05, 1.35, 1.35, 0.85], gap="medium")
+        with r_um[0]:
+            solo_significativas = st.checkbox(
+                "Solo variación fuerte (Eje 2)",
+                value=False,
+                key="aud_solo_significativas",
+                help="Filtra refs para tablas y Eje 2. El Eje 1 (Semáforo) siempre ve todas las refs.",
+            )
         sliders_activos = solo_significativas
-        u1, u2, u3 = st.columns(3, gap="medium")
+        u1, u2, u3 = r_um[1], r_um[2], r_um[3]
         with u1:
-            umbral_var_compra = st.slider(
+            st.session_state.setdefault(
+                "aud_umbral_var_compra_num",
+                float(st.session_state.get("aud_umbral_var_compra", 20.0)),
+            )
+
+            def _sync_aud_umbral_compra_from_slider() -> None:
+                st.session_state["aud_umbral_var_compra_num"] = float(st.session_state["aud_umbral_var_compra"])
+
+            def _sync_aud_umbral_compra_from_input() -> None:
+                v = float(st.session_state["aud_umbral_var_compra_num"])
+                v = max(0.0, min(300.0, v))
+                st.session_state["aud_umbral_var_compra_num"] = v
+                st.session_state["aud_umbral_var_compra"] = v
+
+            st.slider(
                 "Umbral |Δ compra| (%)",
                 min_value=0.0,
                 max_value=300.0,
@@ -3194,11 +3210,37 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
                 step=1.0,
                 key="aud_umbral_var_compra",
                 disabled=not sliders_activos,
+                on_change=_sync_aud_umbral_compra_from_slider,
                 help="Valor absoluto de variación % entre última y penúltima compra. "
                 + ("Activo." if sliders_activos else "Desactivado — marca «Solo variación fuerte» para filtrar."),
             )
+            st.number_input(
+                "Escribir |Δ compra| (%)",
+                min_value=0.0,
+                max_value=300.0,
+                step=1.0,
+                format="%.2f",
+                key="aud_umbral_var_compra_num",
+                disabled=not sliders_activos,
+                on_change=_sync_aud_umbral_compra_from_input,
+                help="Ajuste numérico; se sincroniza con el slider.",
+            )
         with u2:
-            umbral_var_costo = st.slider(
+            st.session_state.setdefault(
+                "aud_umbral_var_costo_num",
+                float(st.session_state.get("aud_umbral_var_costo", 15.0)),
+            )
+
+            def _sync_aud_umbral_costo_from_slider() -> None:
+                st.session_state["aud_umbral_var_costo_num"] = float(st.session_state["aud_umbral_var_costo"])
+
+            def _sync_aud_umbral_costo_from_input() -> None:
+                v = float(st.session_state["aud_umbral_var_costo_num"])
+                v = max(0.0, min(300.0, v))
+                st.session_state["aud_umbral_var_costo_num"] = v
+                st.session_state["aud_umbral_var_costo"] = v
+
+            st.slider(
                 "Umbral |Δ vs costo inv.| (%)",
                 min_value=0.0,
                 max_value=300.0,
@@ -3206,8 +3248,20 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
                 step=1.0,
                 key="aud_umbral_var_costo",
                 disabled=not sliders_activos,
+                on_change=_sync_aud_umbral_costo_from_slider,
                 help="Variación % de última compra frente a costo prom. inventario. "
                 + ("Activo." if sliders_activos else "Desactivado — marca «Solo variación fuerte» para filtrar."),
+            )
+            st.number_input(
+                "Escribir |Δ costo| (%)",
+                min_value=0.0,
+                max_value=300.0,
+                step=1.0,
+                format="%.2f",
+                key="aud_umbral_var_costo_num",
+                disabled=not sliders_activos,
+                on_change=_sync_aud_umbral_costo_from_input,
+                help="Ajuste numérico; se sincroniza con el slider.",
             )
         with u3:
             if not sliders_activos:
@@ -3231,6 +3285,9 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
                 "**Truco:** Subir un slider al máximo (300 %) lo desactiva — p. ej. costo al 300 % → "
                 "filtras solo por variación entre compras; compra al 300 % → solo por desalineación vs inventario."
             )
+
+    umbral_var_compra = float(st.session_state.get("aud_umbral_var_compra", 20.0))
+    umbral_var_costo = float(st.session_state.get("aud_umbral_var_costo", 15.0))
 
     with st.expander("Factores logísticos (última compra)", expanded=False):
         st.caption(
