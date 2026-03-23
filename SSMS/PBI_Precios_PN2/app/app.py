@@ -1389,6 +1389,10 @@ def _auditoria_column_order_full(df: pd.DataFrame, lower_map: dict[str, str], co
         if c not in seen:
             out.append(c)
             seen.add(c)
+    # ABSVar_Costo_Pct y _abs_var_costo comparten etiqueta de negocio; Arrow no admite nombres duplicados tras rename.
+    _apct = lower_map.get("absvar_costo_pct")
+    if _apct and "_abs_var_costo" in out and _apct in out:
+        out = [c for c in out if c != _apct]
     return out
 
 
@@ -3692,7 +3696,7 @@ def _render_tab_auditoria_referencias() -> None:
                     vpc_sql if vpc_sql and vpc_sql != var_compra_col else None,
                     "_abs_var_compra",
                     costo_inv_col,
-                    lower_map.get("absvar_costo_pct"),
+                    # No incluir absvar_costo_pct: mismo alias que _abs_var_costo en BUSINESS_LABELS → duplicado en Arrow.
                     "_abs_var_costo",
                     lower_map.get("var_costomin_preciocop"),
                     precio_lista_col,
@@ -3719,7 +3723,7 @@ def _render_tab_auditoria_referencias() -> None:
     
             st.caption(
                 "**Orden:** identificación → **score** → **problema 1** (días, var. precios entre compras, |Δ compra|) → "
-                "**problema 2** (costo prom. inv., var. vs costo SQL, |Δ vs costo|) → magnitud (lista, stock, costos) → contexto."
+                "**problema 2** (costo prom. inv., |Δ vs costo|) → magnitud (lista, stock, costos) → contexto."
             )
             st.dataframe(
                 df_top,
