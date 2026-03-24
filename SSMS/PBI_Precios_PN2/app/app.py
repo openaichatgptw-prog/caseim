@@ -4,6 +4,7 @@ import html
 import io
 import math
 import re
+from datetime import datetime
 from typing import Final
 
 import pandas as pd
@@ -570,6 +571,33 @@ st.markdown(
         font-weight: 650;
         color: #e5e7eb;
     }
+    .consulta-kpi-lbl-row {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 0.14rem;
+    }
+    .consulta-kpi-help-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 0.92rem;
+        height: 0.92rem;
+        margin-bottom: 0.06rem;
+        border-radius: 999px;
+        border: 1px solid rgba(125, 211, 252, 0.42);
+        font-size: 0.58rem;
+        font-weight: 750;
+        font-style: normal;
+        line-height: 1;
+        color: #7dd3fc;
+        cursor: help;
+        flex-shrink: 0;
+        user-select: none;
+    }
+    .consulta-kpi-help-icon:hover {
+        border-color: rgba(125, 211, 252, 0.75);
+        background: rgba(56, 189, 248, 0.08);
+    }
     .consulta-split {
         display: grid;
         grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
@@ -858,6 +886,19 @@ def _parse_refs_alternas(raw_refs: str) -> list[str]:
 
 _CONSULTA_MAX_ALTERNAS: Final[int] = 10
 
+def _consulta_help_prorrateo() -> str:
+    """Texto de ayuda alineado al cálculo del pipeline (incluye rango dinámico)."""
+    hoy = datetime.now()
+    fecha_desde = f"{hoy.year - 1}-01-01"
+    fecha_hasta = hoy.strftime("%Y-%m-%d")
+    return (
+        "Precio sugerido en dólares (USD) que resume los precios de lista de Brasil, USA y Europa. "
+        f"Participación tomada en el periodo {fecha_desde} a {fecha_hasta}. "
+        "Si hay participación de ventas por región (partes de Brasil, USA y Europa), se calcula como "
+        "precio de cada país × su participación, y se suman —un solo valor que refleja dónde más se ha vendido. "
+        "Si no aplica esa mezcla, se usa el precio de la región que quede disponible o un promedio entre regiones."
+    )
+
 
 def _consulta_html_topline_kpis(resumen: dict) -> str:
     """Referencia + KPIs en una sola franja horizontal (menos altura que bloques separados)."""
@@ -872,8 +913,14 @@ def _consulta_html_topline_kpis(resumen: dict) -> str:
         pp_s = "—"
     disp_t = html.escape(f"{resumen.get('_disp_total', 0):,.2f}")
     disp_ok = html.escape(str(resumen.get("_disponible", "NO")))
+    help_pr = html.escape(_consulta_help_prorrateo(), quote=True)
     items = (
-        f'<span class="consulta-kpi-inline-item"><span class="consulta-kpi-lbl">Prorrateo</span>'
+        f'<span class="consulta-kpi-inline-item">'
+        f'<span class="consulta-kpi-lbl-row">'
+        f'<span class="consulta-kpi-lbl">Prorrateo</span>'
+        f'<span class="consulta-kpi-help-icon" title="{help_pr}" '
+        f'aria-label="{help_pr}" role="img">i</span>'
+        f"</span>"
         f'<span class="consulta-kpi-val">{pp_s}</span></span>'
         f'<span class="consulta-kpi-inline-item"><span class="consulta-kpi-lbl">Disp. total</span>'
         f'<span class="consulta-kpi-val">{disp_t}</span></span>'
