@@ -30,6 +30,7 @@ from services.data_access import (
     obtener_ultimas_ventas,
     sync_read_db,
 )
+from services import data_access as data_access_service
 from services.filter_prefs import load_filter_prefs_into_session, render_reset_filters_button, save_tab_filter_prefs
 from services.pipeline_runner import ejecutar_pipelines
 from services.sql_reports_loader import SQL_001_KEY, SQL_002_KEY, SQL_003_KEY
@@ -1724,6 +1725,7 @@ BUSINESS_LABELS: Final[dict[str, str]] = {
     "Var_TRM": "Var TRM (%)",
     "Var_CostoMin_PrecioCOP": "Var vs costo mín (%)",
     "Var_CostoMax_PrecioCOP": "Var vs costo máx (%)",
+    "Valor Liquido COP": "Valor liquidado COP",
     "Margen_Objetivo_Sistema": "Margen sistema",
     "Valor": "Valor",
     "Pct_sobre_margen": "% sobre margen",
@@ -2084,6 +2086,15 @@ def _render_tab_consulta() -> None:
         st.info("Consultas pausadas mientras termina la actualización. Puedes cambiar entre pestañas libremente.")
         return
 
+    tab_individual, tab_masiva = st.tabs(["Consulta individual", "Consulta masiva (CSV)"])
+    with tab_individual:
+        _render_tab_consulta_individual()
+    with tab_masiva:
+        _render_tab_consulta_masiva()
+
+
+def _render_tab_consulta_individual() -> None:
+
     st.markdown('<p class="consulta-page-lead">Buscar referencia</p>', unsafe_allow_html=True)
     col_q, col_r, col_u = st.columns([0.65, 2.0, 0.85], gap="small")
     with col_q:
@@ -2198,6 +2209,469 @@ def _render_tab_consulta() -> None:
         st.dataframe(_renombrar_negocio(ventas), width="stretch", hide_index=True)
 
     save_tab_filter_prefs("consulta")
+
+
+def _render_tab_consulta_masiva() -> None:
+    st.markdown('<p class="consulta-page-lead">Consulta masiva de referencias</p>', unsafe_allow_html=True)
+    st.caption("Carga un CSV con una columna de referencias (principales o alternas) para resolverlas en lote.")
+    uploaded = st.file_uploader(
+        "Archivo CSV",
+        type=["csv"],
+        key="consulta_masiva_csv",
+        help="El archivo debe contener al menos una columna con códigos de referencia.",
+    )
+    if uploaded is None:
+        st.info("Sube un CSV para comenzar.")
+        return
+
+    raw = uploaded.getvalue()
+    if not raw:
+        st.warning("El archivo está vacío.")
+        return
+
+    try:
+        text_csv = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text_csv = raw.decode("latin-1")
+
+    # Referencias se manejan siempre como texto para evitar conversiones tipo 12345 -> 12345.0
+    # Evitamos `sep=None` porque en archivos de 1 sola columna puede inferir separadores erróneos.
+    non_empty_lines = [ln.strip() for ln in text_csv.splitlines() if ln.strip()]
+    if not non_empty_lines:
+        st.warning("El CSV no contiene datos.")
+        return
+    sample = non_empty_lines[0]
+    has_common_delim = any(d in sample for d in [",", ";", "\t", "|"])
+    try:
+        if has_common_delim:
+            df_csv = pd.read_csv(
+                io.StringIO(text_csv),
+                sep=None,
+                engine="python",
+                dtype=str,
+                keep_default_na=False,
+            )
+        else:
+            # CSV de una sola columna y sin encabezado.
+            df_csv = pd.DataFrame({"Referencia": non_empty_lines})
+    except Exception as exc:
+        st.error(f"No fue posible leer el CSV: {exc}")
+        return
+
+    if df_csv.empty or len(df_csv.columns) == 0:
+        st.warning("El CSV no contiene datos.")
+        return
+
+    cols = [str(c) for c in df_csv.columns]
+    default_idx = 0
+    for i, c in enumerate(cols):
+        if str(c).strip().lower() in {"referencia", "referencias", "ref", "codigo", "código"}:
+            default_idx = i
+            break
+    col_ref = st.selectbox(
+        "Columna con referencias",
+        options=cols,
+        index=default_idx,
+        key="consulta_masiva_col_ref",
+    )
+
+    serie = df_csv[col_ref].astype(str).str.strip()
+
+    def _normalizar_ref_csv(val: str) -> str:
+        s = str(val or "").strip()
+        if not s:
+            return ""
+        # Limpia ruido común de Excel cuando un código texto se guarda/carga como float.
+        if re.fullmatch(r"\d+\.0+", s):
+            return s.split(".", 1)[0]
+        return s
+
+    refs = [_normalizar_ref_csv(x) for x in serie.tolist()]
+    refs = [x for x in refs if x]
+    if not refs:
+        st.warning("No se encontraron referencias válidas en la columna seleccionada.")
+        return
+
+    refs_unicas = list(dict.fromkeys(refs))
+    st.caption(f"Referencias detectadas: {len(refs_unicas):,}")
+
+    c1, c2, c3 = st.columns(3, gap="small")
+    with c1:
+        if "consulta_masiva_disp_umbral_num" not in st.session_state:
+            st.session_state["consulta_masiva_disp_umbral_num"] = float(
+                st.session_state.get("consulta_masiva_disp_umbral", 0.0)
+            )
+
+        def _sync_umbral_slider_to_num() -> None:
+            st.session_state["consulta_masiva_disp_umbral_num"] = float(
+                st.session_state["consulta_masiva_disp_umbral"]
+            )
+
+        def _sync_umbral_num_to_slider() -> None:
+            st.session_state["consulta_masiva_disp_umbral"] = float(
+                st.session_state["consulta_masiva_disp_umbral_num"]
+            )
+
+        disp_umbral_masivo = st.slider(
+            "Umbral de disponibilidad (mejor precio)",
+            min_value=0.0,
+            max_value=5000.0,
+            value=float(st.session_state.get("consulta_masiva_disp_umbral", 0.0)),
+            step=0.5,
+            key="consulta_masiva_disp_umbral",
+            on_change=_sync_umbral_slider_to_num,
+            help="Solo compite un origen si su disponibilidad es estrictamente mayor al umbral.",
+        )
+        disp_umbral_masivo = st.number_input(
+            "Valor (umbral)",
+            min_value=0.0,
+            max_value=5000.0,
+            step=0.5,
+            key="consulta_masiva_disp_umbral_num",
+            on_change=_sync_umbral_num_to_slider,
+        )
+
+    with c2:
+        if "consulta_masiva_factor_usabr_num" not in st.session_state:
+            st.session_state["consulta_masiva_factor_usabr_num"] = float(
+                st.session_state.get("consulta_masiva_factor_usabr", 1.35)
+            )
+
+        def _sync_usabr_slider_to_num() -> None:
+            st.session_state["consulta_masiva_factor_usabr_num"] = float(
+                st.session_state["consulta_masiva_factor_usabr"]
+            )
+
+        def _sync_usabr_num_to_slider() -> None:
+            st.session_state["consulta_masiva_factor_usabr"] = float(
+                st.session_state["consulta_masiva_factor_usabr_num"]
+            )
+
+        factor_usabr = st.slider(
+            "Factor importación USA/BR",
+            min_value=1.2,
+            max_value=1.5,
+            value=float(st.session_state.get("consulta_masiva_factor_usabr", 1.35)),
+            step=0.01,
+            key="consulta_masiva_factor_usabr",
+            on_change=_sync_usabr_slider_to_num,
+            help="Multiplica Precio Brasil y Precio USA para comparar mejor origen.",
+        )
+        factor_usabr = st.number_input(
+            "Valor (USA/BR)",
+            min_value=1.2,
+            max_value=1.5,
+            step=0.01,
+            key="consulta_masiva_factor_usabr_num",
+            on_change=_sync_usabr_num_to_slider,
+        )
+
+    with c3:
+        if "consulta_masiva_factor_euro_num" not in st.session_state:
+            st.session_state["consulta_masiva_factor_euro_num"] = float(
+                st.session_state.get("consulta_masiva_factor_euro", 1.55)
+            )
+
+        def _sync_euro_slider_to_num() -> None:
+            st.session_state["consulta_masiva_factor_euro_num"] = float(
+                st.session_state["consulta_masiva_factor_euro"]
+            )
+
+        def _sync_euro_num_to_slider() -> None:
+            st.session_state["consulta_masiva_factor_euro"] = float(
+                st.session_state["consulta_masiva_factor_euro_num"]
+            )
+
+        factor_euro = st.slider(
+            "Factor importación EURO",
+            min_value=1.4,
+            max_value=1.7,
+            value=float(st.session_state.get("consulta_masiva_factor_euro", 1.55)),
+            step=0.01,
+            key="consulta_masiva_factor_euro",
+            on_change=_sync_euro_slider_to_num,
+            help="Multiplica Precio Europa para comparar mejor origen.",
+        )
+        factor_euro = st.number_input(
+            "Valor (EURO)",
+            min_value=1.4,
+            max_value=1.7,
+            step=0.01,
+            key="consulta_masiva_factor_euro_num",
+            on_change=_sync_euro_num_to_slider,
+        )
+
+    if not st.button("Procesar consulta masiva", key="consulta_masiva_run", type="primary"):
+        return
+
+    try:
+        resolver_masivo = getattr(data_access_service, "obtener_resumen_referencias_masivo", None)
+        if resolver_masivo is None:
+            df_out = _consulta_masiva_fallback(refs_unicas)
+            st.info(
+                "Se usó modo compatibilidad para consulta masiva (sin método masivo en data_access)."
+            )
+        else:
+            df_out = resolver_masivo(refs_unicas)
+    except Exception as exc:
+        st.error(f"No fue posible ejecutar la consulta masiva: {exc}")
+        return
+
+    if df_out.empty:
+        st.warning("No se obtuvieron resultados.")
+        return
+
+    df_out = _consulta_masiva_calcular_mejor_origen(
+        df_out,
+        disp_umbral=float(disp_umbral_masivo),
+        factor_usabr=float(factor_usabr),
+        factor_euro=float(factor_euro),
+    )
+    df_out = _consulta_masiva_ajustar_decimales(df_out)
+    if "Mejor_Origen" in df_out.columns and "Mejor_Precio_Sin_Factor" in df_out.columns:
+        cols = [c for c in df_out.columns if c != "Mejor_Precio_Sin_Factor"]
+        idx = cols.index("Mejor_Origen") + 1
+        cols = cols[:idx] + ["Mejor_Precio_Sin_Factor"] + cols[idx:]
+        df_out = df_out[cols]
+    if "Precio Prorrateo" in df_out.columns:
+        orden_cols = [c for c in df_out.columns if c != "Precio Prorrateo"] + ["Precio Prorrateo"]
+        df_out = df_out[orden_cols]
+
+    n_ok = int((df_out["Estado"] == "OK").sum()) if "Estado" in df_out.columns else 0
+    n_no = int((df_out["Estado"] != "OK").sum()) if "Estado" in df_out.columns else 0
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total referencias", f"{len(df_out):,}")
+    m2.metric("Con coincidencia", f"{n_ok:,}")
+    m3.metric("Sin coincidencia", f"{n_no:,}")
+
+    df_show = _renombrar_negocio(df_out)
+    fmt_map = _consulta_masiva_build_format_map(df_show)
+    st.dataframe(
+        df_show.style.format(fmt_map).apply(_consulta_masiva_style_mejor_origen, axis=1),
+        width="stretch",
+        hide_index=True,
+    )
+    csv_out = df_out.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "Descargar resultado CSV",
+        data=csv_out,
+        file_name="consulta_masiva_resultado.csv",
+        mime="text/csv",
+        key="consulta_masiva_download",
+    )
+
+
+def _consulta_masiva_calcular_mejor_origen(
+    df_out: pd.DataFrame,
+    disp_umbral: float,
+    factor_usabr: float,
+    factor_euro: float,
+) -> pd.DataFrame:
+    out = df_out.copy()
+    for c in ("Precio Brasil", "Precio Usa", "Precio Europa", "disp_br", "disp_usa", "disp_eur"):
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+
+    def _resolver_fila(row: pd.Series) -> tuple[str | None, float | None, float | None, float | None]:
+        candidatos: list[tuple[str, float, float, float]] = []
+        p_br = row.get("Precio Brasil")
+        d_br = row.get("disp_br")
+        p_usa = row.get("Precio Usa")
+        d_usa = row.get("disp_usa")
+        p_eur = row.get("Precio Europa")
+        d_eur = row.get("disp_eur")
+
+        if pd.notna(p_br) and pd.notna(d_br) and float(d_br) > disp_umbral:
+            candidatos.append(("Brasil", float(d_br), float(p_br), float(p_br) * factor_usabr))
+        if pd.notna(p_usa) and pd.notna(d_usa) and float(d_usa) > disp_umbral:
+            candidatos.append(("USA", float(d_usa), float(p_usa), float(p_usa) * factor_usabr))
+        if pd.notna(p_eur) and pd.notna(d_eur) and float(d_eur) > disp_umbral:
+            candidatos.append(("Europa", float(d_eur), float(p_eur), float(p_eur) * factor_euro))
+
+        if not candidatos:
+            return None, None, None, None
+        best = min(candidatos, key=lambda x: x[3])  # menor precio ajustado
+        return best[0], best[1], best[2], best[3]
+
+    resultados = out.apply(_resolver_fila, axis=1)
+    out["Mejor_Origen"] = resultados.apply(lambda x: x[0])
+    out["Mejor_Disponibilidad"] = resultados.apply(lambda x: x[1])
+    out["Mejor_Precio_Sin_Factor"] = resultados.apply(lambda x: x[2])
+    out["Mejor_Precio_Ajustado"] = resultados.apply(lambda x: x[3])
+    return out
+
+
+def _consulta_masiva_ajustar_decimales(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    price_cols = [
+        "Precio Brasil",
+        "Precio Usa",
+        "Precio Europa",
+        "Ultimo Valor USD",
+        "Valor Liquido COP",
+        "Mejor_Precio_Sin_Factor",
+        "Mejor_Precio_Ajustado",
+        "Precio Prorrateo",
+    ]
+    avail_cols = ["disp_br", "disp_usa", "disp_eur", "_disp_total", "Mejor_Disponibilidad"]
+
+    for c in price_cols:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce").round(2)
+    for c in avail_cols:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce").round(0).astype("Int64")
+    return out
+
+
+def _consulta_masiva_build_format_map(df_show: pd.DataFrame) -> dict[str, str]:
+    # En pantalla: precios en USD con 2 decimales, disponibilidades enteras.
+    price_like = {
+        "Precio Brasil",
+        "Precio Usa",
+        "Precio Europa",
+        "Ultimo Valor USD",
+        "Valor liquidado COP",
+        "Mejor Precio Sin Factor",
+        "Mejor Precio Ajustado",
+        "Precio Prorrateo",
+    }
+    avail_like = {
+        "disp br",
+        "disp usa",
+        "disp eur",
+        "disp total",
+        "Mejor Disponibilidad",
+    }
+    fmt: dict[str, str] = {}
+    for c in df_show.columns:
+        name = str(c)
+        if name in price_like:
+            fmt[name] = "{:,.2f}"
+        elif name in avail_like:
+            fmt[name] = "{:,.0f}"
+    return fmt
+
+
+def _consulta_masiva_style_mejor_origen(row: pd.Series) -> list[str]:
+    origen = str(row.get("Mejor_Origen", row.get("Mejor Origen", "")) or "").strip().lower()
+    if origen == "brasil":
+        style = "background-color: rgba(20, 184, 166, 0.26); color: #e5e7eb;"
+    elif origen == "usa":
+        style = "background-color: rgba(56, 189, 248, 0.24); color: #e5e7eb;"
+    elif origen == "europa":
+        style = "background-color: rgba(99, 102, 241, 0.24); color: #e5e7eb;"
+    else:
+        style = ""
+    target_cols = {
+        "Mejor_Origen",
+        "Mejor_Disponibilidad",
+        "Mejor_Precio_Sin_Factor",
+        "Mejor_Precio_Ajustado",
+        "Mejor Origen",
+        "Mejor Disponibilidad",
+        "Mejor Precio Sin Factor",
+        "Mejor Precio Ajustado",
+    }
+    return [style if str(c) in target_cols else "" for c in row.index]
+
+
+def _consulta_masiva_fallback(referencias: list[str]) -> pd.DataFrame:
+    """
+    Fallback en app.py para ambientes con cache de módulos.
+    Resuelve cada referencia por búsqueda (principal/normalizada/alterna) y trae resumen.
+    """
+    cols = [
+        "Referencia_Entrada",
+        "Estado",
+        "Tipo_Coincidencia",
+        "Referencia_Original",
+        "Referencia_Normalizada",
+        "Descripción",
+        "RefsAlternas",
+        "Precio Prorrateo",
+        "Precio Brasil",
+        "Precio Usa",
+        "Precio Europa",
+        "disp_br",
+        "disp_usa",
+        "disp_eur",
+        "_disp_total",
+        "_disponible",
+        "Ult. Fecha Compra",
+        "Proveedor",
+        "Ultimo Valor USD",
+        "Valor Liquido COP",
+    ]
+    rows: list[dict] = []
+    for ref in referencias:
+        entrada = str(ref or "").strip()
+        if not entrada:
+            continue
+        item = {
+            "Referencia_Entrada": entrada,
+            "Estado": "Sin coincidencia",
+            "Tipo_Coincidencia": None,
+            "Referencia_Original": None,
+            "Referencia_Normalizada": None,
+            "Descripción": None,
+            "RefsAlternas": None,
+            "Precio Prorrateo": None,
+            "Precio Brasil": None,
+            "Precio Usa": None,
+            "Precio Europa": None,
+            "disp_br": None,
+            "disp_usa": None,
+            "disp_eur": None,
+            "_disp_total": None,
+            "_disponible": None,
+            "Ult. Fecha Compra": None,
+            "Proveedor": None,
+            "Ultimo Valor USD": None,
+            "Valor Liquido COP": None,
+        }
+        try:
+            df_hit = buscar_referencias(entrada, limite=1)
+            if df_hit is not None and not df_hit.empty:
+                ref_norm = str(df_hit.iloc[0].get("Referencia_Normalizada", "") or "").strip()
+                ref_orig = str(df_hit.iloc[0].get("Referencia_Original", "") or "").strip()
+                if ref_norm:
+                    resumen = obtener_resumen_referencia(ref_norm)
+                    if resumen:
+                        item["Estado"] = "OK"
+                        item["Referencia_Original"] = resumen.get("Referencia_Original")
+                        item["Referencia_Normalizada"] = resumen.get("Referencia_Normalizada")
+                        item["Descripción"] = resumen.get("Descripción")
+                        item["RefsAlternas"] = resumen.get("RefsAlternas")
+                        item["Precio Prorrateo"] = resumen.get("Precio Prorrateo")
+                        item["Precio Brasil"] = resumen.get("Precio Brasil")
+                        item["Precio Usa"] = resumen.get("Precio Usa")
+                        item["Precio Europa"] = resumen.get("Precio Europa")
+                        item["disp_br"] = resumen.get("disp_br")
+                        item["disp_usa"] = resumen.get("disp_usa")
+                        item["disp_eur"] = resumen.get("disp_eur")
+                        item["_disp_total"] = resumen.get("_disp_total")
+                        item["_disponible"] = resumen.get("_disponible")
+                        item["Ult. Fecha Compra"] = resumen.get("Ult. Fecha Compra")
+                        item["Proveedor"] = resumen.get("Proveedor")
+                        item["Ultimo Valor USD"] = resumen.get("Ultimo Valor USD")
+                        item["Valor Liquido COP"] = resumen.get("Valor Liquido COP")
+                        ent_up = entrada.upper()
+                        if ent_up == ref_orig.upper():
+                            item["Tipo_Coincidencia"] = "Principal"
+                        elif ent_up == ref_norm.upper():
+                            item["Tipo_Coincidencia"] = "Normalizada"
+                        else:
+                            item["Tipo_Coincidencia"] = "Alterna"
+        except Exception:
+            pass
+        rows.append(item)
+
+    out = pd.DataFrame(rows)
+    for c in cols:
+        if c not in out.columns:
+            out[c] = None
+    return out[cols]
 
 
 def _margen_df_con_codigo_referencia(df: pd.DataFrame, margen_col: str, precio_col: str) -> pd.DataFrame:

@@ -35,16 +35,24 @@ def _resolve_master_db_path() -> Path:
 
 def _publish_work_db(work_db: Path, master_db: Path) -> None:
     """Publica solo las tablas que existen en la BD de trabajo hacia la maestra (merge, no reemplazo)."""
+    if not work_db.exists():
+        raise FileNotFoundError(f"No existe la base temporal de trabajo: {work_db}")
+    master_db.parent.mkdir(parents=True, exist_ok=True)
+
     last_error: Exception | None = None
-    for attempt in range(6):
+    max_attempts = 20
+    for attempt in range(1, max_attempts + 1):
         try:
             with duckdb.connect(str(master_db)) as con:
-                con.execute(f"ATTACH '{work_db}' AS work (READ_ONLY)")
+                work_db_sql = str(work_db).replace("'", "''")
+                con.execute(f"ATTACH '{work_db_sql}' AS work (READ_ONLY)")
                 tables = [
                     row[0]
                     for row in con.execute(
-                        "SELECT table_name FROM work.information_schema.tables "
-                        "WHERE table_schema = 'main'"
+                        "SELECT table_name "
+                        "FROM information_schema.tables "
+                        "WHERE table_catalog = 'work' "
+                        "  AND table_schema = 'main'"
                     ).fetchall()
                 ]
                 for t in tables:
@@ -53,9 +61,12 @@ def _publish_work_db(work_db: Path, master_db: Path) -> None:
             return
         except Exception as exc:
             last_error = exc
-            time.sleep(0.5 * (attempt + 1))
+            # Windows/OneDrive puede mantener locks breves; reintentamos con backoff.
+            wait_secs = min(3.0, 0.4 * attempt)
+            time.sleep(wait_secs)
     raise RuntimeError(
-        f"No fue posible publicar tablas de trabajo en {master_db}."
+        f"No fue posible publicar tablas de trabajo en {master_db}. "
+        f"Último error: {last_error}"
     ) from last_error
 
 

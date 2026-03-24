@@ -271,6 +271,210 @@ def obtener_resumen_referencia(ref_norm: str) -> dict[str, Any] | None:
     return row
 
 
+def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
+    """
+    Devuelve un resumen por cada referencia de entrada (principal, normalizada o alterna).
+    Mantiene el orden de entrada y marca filas sin coincidencia.
+    """
+    base_cols = [
+        "Referencia_Entrada",
+        "Estado",
+        "Tipo_Coincidencia",
+        "Referencia_Original",
+        "Referencia_Normalizada",
+        "Descripción",
+        "RefsAlternas",
+        "Precio Prorrateo",
+        "Precio Brasil",
+        "Precio Usa",
+        "Precio Europa",
+        "disp_br",
+        "disp_usa",
+        "disp_eur",
+        "_disp_total",
+        "_disponible",
+        "Ult. Fecha Compra",
+        "Proveedor",
+        "Ultimo Valor USD",
+        "Valor Liquido COP",
+    ]
+    if not referencias:
+        return pd.DataFrame(columns=base_cols)
+
+    cleaned: list[str] = []
+    for x in referencias:
+        s = str(x or "").strip()
+        if s:
+            cleaned.append(s)
+    if not cleaned:
+        return pd.DataFrame(columns=base_cols)
+
+    df_input = pd.DataFrame(
+        {
+            "orden": list(range(len(cleaned))),
+            "referencia_entrada": cleaned,
+        }
+    )
+
+    with _connect() as con:
+        if not _table_exists(con, "resultado_precios_lista"):
+            out = df_input.rename(columns={"referencia_entrada": "Referencia_Entrada"})[
+                ["Referencia_Entrada"]
+            ].copy()
+            out["Estado"] = "Sin datos en resultado_precios_lista"
+            out["Tipo_Coincidencia"] = None
+            for c in base_cols:
+                if c not in out.columns:
+                    out[c] = None
+            return out[base_cols]
+
+        has_refs_alt = _table_has_column(con, "resultado_precios_lista", "RefsAlternas")
+        rpl_cols = [r[0] for r in con.execute("DESCRIBE resultado_precios_lista").fetchall()]
+        rpl_col_set = {str(c).strip().lower(): c for c in rpl_cols}
+
+        def _pick_rpl_col(*cands: str) -> str | None:
+            for cand in cands:
+                key = str(cand).strip().lower()
+                if key in rpl_col_set:
+                    return str(rpl_col_set[key])
+            return None
+
+        def _sel_or_null(alias: str, *cands: str) -> str:
+            col = _pick_rpl_col(*cands)
+            if not col:
+                return f"CAST(NULL AS VARCHAR) AS \"{alias}\""
+            return f"p.{_duck_quote_ident(col)} AS \"{alias}\""
+
+        sel_desc = _sel_or_null("Descripción", "Descripción", "Descripci�n", "Descripcion")
+        sel_ult_usd = _sel_or_null(
+            "Ultimo Valor USD",
+            "Ultimo Valor USD",
+            "Último Valor (USD)",
+            "�ltimo Valor (USD)",
+            "Ultimo Valor (USD)",
+        )
+        sel_vlr_liq = _sel_or_null(
+            "Valor Liquido COP",
+            "Valor Liquido COP",
+            "Valor Líquido COP",
+            "Valor Liq. (COP)",
+            "Valor L�q. (COP)",
+        )
+        con.register("tmp_refs_input", df_input)
+        try:
+            join_alt = ""
+            rank_alt = ""
+            tipo_alt = ""
+            if has_refs_alt:
+                join_alt = (
+                    "OR (',' || regexp_replace(upper(COALESCE(CAST(r.RefsAlternas AS VARCHAR), '')), "
+                    "'[\\s;()]+', ',', 'g') || ',') "
+                    "LIKE ('%,' || upper(trim(i.referencia_entrada)) || ',%')"
+                )
+                rank_alt = (
+                    "WHEN (',' || regexp_replace(upper(COALESCE(CAST(r.RefsAlternas AS VARCHAR), '')), "
+                    "'[\\s;()]+', ',', 'g') || ',') "
+                    "LIKE ('%,' || upper(trim(i.referencia_entrada)) || ',%') THEN 3"
+                )
+                tipo_alt = "WHEN 3 THEN 'Alterna'"
+
+            sql = f"""
+                WITH inp AS (
+                    SELECT
+                        orden,
+                        trim(CAST(referencia_entrada AS VARCHAR)) AS referencia_entrada
+                    FROM tmp_refs_input
+                    WHERE trim(CAST(referencia_entrada AS VARCHAR)) <> ''
+                ),
+                cand AS (
+                    SELECT
+                        i.orden,
+                        i.referencia_entrada,
+                        r.*,
+                        CASE
+                            WHEN upper(trim(CAST(r.Referencia_Original AS VARCHAR))) = upper(trim(i.referencia_entrada)) THEN 1
+                            WHEN upper(trim(CAST(r.Referencia_Normalizada AS VARCHAR))) = upper(trim(i.referencia_entrada)) THEN 2
+                            {rank_alt}
+                            ELSE 99
+                        END AS match_rank
+                    FROM inp i
+                    JOIN resultado_precios_lista r
+                      ON upper(trim(CAST(r.Referencia_Original AS VARCHAR))) = upper(trim(i.referencia_entrada))
+                      OR upper(trim(CAST(r.Referencia_Normalizada AS VARCHAR))) = upper(trim(i.referencia_entrada))
+                      {join_alt}
+                ),
+                pick AS (
+                    SELECT
+                        *,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY referencia_entrada
+                            ORDER BY
+                                match_rank,
+                                (
+                                    COALESCE(try_cast(disp_br AS DOUBLE), 0)
+                                    + COALESCE(try_cast(disp_usa AS DOUBLE), 0)
+                                    + COALESCE(try_cast(disp_eur AS DOUBLE), 0)
+                                ) DESC,
+                                Referencia_Original
+                        ) AS rn
+                    FROM cand
+                )
+                SELECT
+                    i.orden,
+                    i.referencia_entrada AS Referencia_Entrada,
+                    CASE WHEN p.referencia_entrada IS NULL THEN 'Sin coincidencia' ELSE 'OK' END AS Estado,
+                    CASE p.match_rank
+                        WHEN 1 THEN 'Principal'
+                        WHEN 2 THEN 'Normalizada'
+                        {tipo_alt}
+                        ELSE NULL
+                    END AS Tipo_Coincidencia,
+                    p.Referencia_Original,
+                    p.Referencia_Normalizada,
+                    {sel_desc},
+                    p.RefsAlternas,
+                    p."Precio Prorrateo" AS "Precio Prorrateo",
+                    p."Precio Brasil" AS "Precio Brasil",
+                    p."Precio Usa" AS "Precio Usa",
+                    p."Precio Europa" AS "Precio Europa",
+                    p.disp_br,
+                    p.disp_usa,
+                    p.disp_eur,
+                    p."Ult. Fecha Compra" AS "Ult. Fecha Compra",
+                    p.Proveedor,
+                    {sel_ult_usd},
+                    {sel_vlr_liq}
+                FROM inp i
+                LEFT JOIN pick p
+                  ON p.referencia_entrada = i.referencia_entrada
+                 AND p.rn = 1
+                ORDER BY i.orden
+            """
+            out = con.execute(sql).df()
+        finally:
+            try:
+                con.unregister("tmp_refs_input")
+            except Exception:
+                pass
+
+    for c in ("disp_br", "disp_usa", "disp_eur"):
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+    out["_disp_total"] = (
+        out.get("disp_br", 0).fillna(0)
+        + out.get("disp_usa", 0).fillna(0)
+        + out.get("disp_eur", 0).fillna(0)
+    )
+    out["_disponible"] = out["_disp_total"].apply(lambda v: "SI" if pd.notna(v) and float(v) > 0 else "NO")
+
+    if "orden" in out.columns:
+        out = out.drop(columns=["orden"])
+    for c in base_cols:
+        if c not in out.columns:
+            out[c] = None
+    return out[base_cols]
+
+
 def obtener_ultimas_ventas(ref_norm: str, limite: int = 20) -> pd.DataFrame:
     sql = """
         SELECT *
