@@ -673,7 +673,10 @@ def paso3_cruzar_y_exportar():
             m.Cliente,
             m.Fecha_import                           AS "Ult. Fecha Compra",
             m.f421_precio_unitario                   AS "Último Valor (USD)",
-            m.Precio_init_COP                        AS "Valor Liq. (COP)",
+            -- Misma lógica que AFAS_VENTAS_Base_Precios (precio lista.txt):
+            -- Valor liquidado COP = costo importación por unidad (no Precio_init_COP de ventas).
+            m.Vr_unit_local                          AS "Valor Liq. (COP)",
+            m.Precio_init_COP                        AS "Precio venta COP",
             m.Factor                                 AS "Factor Import.",
             m.Proveedor,
             m.Cant_Brasil                            AS "Cant. Brasil",

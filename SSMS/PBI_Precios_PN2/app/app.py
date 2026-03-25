@@ -46,6 +46,38 @@ SQL_003_OPCION: Final[str] = "SQL 003 — Auditoría refs (auditoria_raw)"
 SQL_OPCIONES: Final[list[str]] = [SQL_001_OPCION, SQL_002_OPCION, SQL_003_OPCION]
 
 
+def _todas_opciones_actualizacion() -> list[str]:
+    return list(PIPELINE_OPCIONES) + list(SQL_OPCIONES)
+
+
+def _seleccion_actualizacion_desde_session_state() -> list[str]:
+    """
+    Reconstruye qué ejecutar solo desde st.session_state.
+    Rápida / Completa son atajos fijos; Personalizada usa dos listas (Python vs SQL 00).
+    """
+    todas = _todas_opciones_actualizacion()
+    preset = st.session_state.get("upd_preset", "Completa")
+    if preset == "Rápida":
+        return list(PIPELINE_OPCIONES)
+    if preset == "Completa":
+        return list(todas)
+    pl = [x for x in (st.session_state.get("upd_multiselect_pipelines") or []) if x in PIPELINE_OPCIONES]
+    sq = [x for x in (st.session_state.get("upd_multiselect_sql") or []) if x in SQL_OPCIONES]
+    return pl + sq
+
+
+def _resumen_actualizacion_texto(seleccion: list[str]) -> str:
+    """Texto corto para que el usuario vea qué va a correr."""
+    pl = [p for p in seleccion if p in PIPELINE_OPCIONES]
+    sq = [s for s in seleccion if s in SQL_OPCIONES]
+    partes: list[str] = []
+    if pl:
+        partes.append("Pipelines: " + ", ".join(p.replace(".py", "") for p in pl))
+    if sq:
+        partes.append("SQL 00: " + ", ".join(s.split("—")[0].strip() for s in sq))
+    return " · ".join(partes) if partes else "(nada seleccionado)"
+
+
 def _init_multiselect_list(key: str, options: list[str]) -> None:
     """Evita default=[] + valor en session_state (p. ej. desde user_filter_prefs.json)."""
     opt_set = set(options)
@@ -1106,11 +1138,18 @@ def _fmt_money_usd(val: object, decimals: int = 2) -> str:
         return "—"
 
 
+def _valor_liq_cop_desde_resumen(resumen: dict) -> object:
+    for k in ("Valor Liq. (COP)", "Valor Liquido COP", "Valor liquidado COP"):
+        if k in resumen and resumen.get(k) is not None:
+            return resumen.get(k)
+    return None
+
+
 def _consulta_html_ultima_compra(resumen: dict) -> str:
     fecha = html.escape(_fmt_consulta_fecha(resumen.get("Ult. Fecha Compra")))
     prov = html.escape(_fmt_consulta_display(resumen.get("Proveedor")))
     usd = html.escape(_fmt_money_usd(resumen.get("Último Valor (USD)"), decimals=2))
-    cop = html.escape(_fmt_money_cop_local(resumen.get("Valor Liq. (COP)"), decimals=0))
+    cop = html.escape(_fmt_money_cop_local(_valor_liq_cop_desde_resumen(resumen), decimals=0))
     return (
         f'<div class="consulta-compra-grid">'
         f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Fecha</span>'
@@ -1119,7 +1158,7 @@ def _consulta_html_ultima_compra(resumen: dict) -> str:
         f'<span class="consulta-kpi-val">{prov}</span></div>'
         f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Último valor (USD)</span>'
         f'<span class="consulta-kpi-val">{usd}</span></div>'
-        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Valor líquido (COP)</span>'
+        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Valor Liq. (COP)</span>'
         f'<span class="consulta-kpi-val">{cop}</span></div>'
         f"</div>"
     )
@@ -1861,6 +1900,9 @@ def _render_header_y_actualizacion() -> None:
     st.session_state.setdefault("_log_visible", False)
     st.session_state.setdefault("_log_text", "")
     st.session_state.setdefault("_log_status", "")
+    st.session_state.setdefault("upd_preset", "Completa")
+    st.session_state.setdefault("upd_multiselect_pipelines", list(PIPELINE_OPCIONES))
+    st.session_state.setdefault("upd_multiselect_sql", [])
 
     st.markdown(
         """
@@ -1885,35 +1927,44 @@ def _render_header_y_actualizacion() -> None:
         with control_cols[0]:
             with st.popover("Actualizar datos", use_container_width=True):
                 st.markdown("**Configuración de actualización**")
-                preset = st.radio(
+                st.radio(
                     "Modo",
                     ["Rápida", "Completa", "Personalizada"],
                     horizontal=True,
-                    index=1,
+                    key="upd_preset",
+                    help="Rápida y Completa son atajos. Personalizada permite combinar scripts Python y consultas SQL 00 por separado.",
                 )
-                todas_opciones = PIPELINE_OPCIONES + SQL_OPCIONES
-                if preset == "Rápida":
-                    seleccion = PIPELINE_OPCIONES.copy()
-                    st.caption("Rápida: actualiza 01, 02 y 03 (sin SQL 00).")
-                elif preset == "Completa":
-                    seleccion = todas_opciones.copy()
-                    st.caption("Completa: actualiza 01, 02, 03 y las 3 consultas SQL 00.")
+                preset_actual = st.session_state.get("upd_preset", "Completa")
+                if preset_actual == "Rápida":
+                    st.caption(
+                        "**Rápida:** solo scripts **01, 02 y 03** (DuckDB desde Excels/precios). "
+                        "No ejecuta SQL 00 desde SQL Server."
+                    )
+                elif preset_actual == "Completa":
+                    st.caption(
+                        "**Completa:** **01 + 02 + 03** y además las **tres consultas SQL 00** "
+                        "(margen, atributos, auditoría desde SQL Server)."
+                    )
                 else:
-                    selec_todas = st.checkbox("Seleccionar todas", value=True)
-                    if selec_todas:
-                        seleccion = todas_opciones.copy()
-                    else:
-                        seleccion = st.multiselect(
-                            "Consultas/procesos",
-                            options=todas_opciones,
-                            default=PIPELINE_OPCIONES,
-                        )
-                forzar_actualizar = st.checkbox(
-                    "Forzar actualización (cerrar lecturas)",
-                    value=False,
-                )
+                    st.caption(
+                        "**Personalizada:** elige por separado qué **pipelines Python** corren y "
+                        "qué **consultas SQL 00** corren. Vacío en ambos = no hay nada que ejecutar."
+                    )
+                    st.multiselect(
+                        "Scripts Python (pipelines)",
+                        options=list(PIPELINE_OPCIONES),
+                        key="upd_multiselect_pipelines",
+                        help="01 = precios lista, 02 = ventas, 03 = maestro histórico.",
+                    )
+                    st.multiselect(
+                        "Consultas SQL 00 (desde SQL Server → DuckDB)",
+                        options=list(SQL_OPCIONES),
+                        key="upd_multiselect_sql",
+                        help="Cada opción carga una tabla raw en DuckDB. SQL 003 puede filtrarse por bodegas abajo.",
+                    )
+                seleccion = _seleccion_actualizacion_desde_session_state()
+                st.caption(f"**Vista previa:** {_resumen_actualizacion_texto(seleccion)}")
                 incluye_sql_003 = SQL_003_OPCION in seleccion
-                incluye_algun_sql = any(op in seleccion for op in SQL_OPCIONES)
                 if incluye_sql_003:
                     st.divider()
                     h_bod, btn_bod = st.columns([4, 1], gap="small")
@@ -2011,12 +2062,11 @@ def _render_header_y_actualizacion() -> None:
     if not ejecutar_actualizacion:
         return
 
+    seleccion = _seleccion_actualizacion_desde_session_state()
+
     if not seleccion:
         st.warning("Selecciona al menos un proceso para actualizar.")
         return
-
-    if forzar_actualizar:
-        st.info("Modo forzado activo: se ejecutarán también las consultas SQL 00 seleccionadas.")
 
     st.session_state["_actualizando"] = True
     st.session_state["_log_visible"] = True
@@ -2047,12 +2097,12 @@ def _render_header_y_actualizacion() -> None:
         ejecutar_sql = len(sql_keys_sel) > 0
         pipelines_seleccionados = [p for p in PIPELINE_OPCIONES if p in seleccion]
         bodegas_aud = None
-        if SQL_003_OPCION in seleccion or forzar_actualizar:
+        if SQL_003_OPCION in seleccion:
             bodegas_aud = list(st.session_state.get("auditoria_bodegas_sel") or [])
-        with st.spinner("Ejecutando pipelines..."):
+        with st.spinner("Ejecutando actualización..."):
             ok, _ = ejecutar_pipelines(
                 log_callback=_on_log_update,
-                ejecutar_reportes_sql=(ejecutar_sql or forzar_actualizar),
+                ejecutar_reportes_sql=ejecutar_sql,
                 pipelines_a_ejecutar=pipelines_seleccionados,
                 auditoria_bodegas=bodegas_aud,
                 sql_queries=sql_keys_sel if sql_keys_sel else None,
@@ -2509,6 +2559,7 @@ def _consulta_masiva_ajustar_decimales(df: pd.DataFrame) -> pd.DataFrame:
         "Precio Europa",
         "Ultimo Valor USD",
         "Valor Liquido COP",
+        "Valor Liq. (COP)",
         "Mejor_Precio_Sin_Factor",
         "Mejor_Precio_Ajustado",
         "Precio Prorrateo",
@@ -2532,6 +2583,7 @@ def _consulta_masiva_build_format_map(df_show: pd.DataFrame) -> dict[str, str]:
         "Precio Europa",
         "Ultimo Valor USD",
         "Valor liquidado COP",
+        "Valor Liq. (COP)",
         "Mejor Precio Sin Factor",
         "Mejor Precio Ajustado",
         "Precio Prorrateo",
@@ -2655,7 +2707,7 @@ def _consulta_masiva_fallback(referencias: list[str]) -> pd.DataFrame:
                         item["Ult. Fecha Compra"] = resumen.get("Ult. Fecha Compra")
                         item["Proveedor"] = resumen.get("Proveedor")
                         item["Ultimo Valor USD"] = resumen.get("Ultimo Valor USD")
-                        item["Valor Liquido COP"] = resumen.get("Valor Liquido COP")
+                        item["Valor Liquido COP"] = _valor_liq_cop_desde_resumen(resumen)
                         ent_up = entrada.upper()
                         if ent_up == ref_orig.upper():
                             item["Tipo_Coincidencia"] = "Principal"
