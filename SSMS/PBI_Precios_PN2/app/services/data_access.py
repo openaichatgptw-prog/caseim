@@ -271,6 +271,83 @@ def obtener_resumen_referencia(ref_norm: str) -> dict[str, Any] | None:
     return row
 
 
+def _align_df_columns_to_expected(df: pd.DataFrame, expected: list[str]) -> pd.DataFrame:
+    """
+    DuckDB puede devolver alias en minúsculas (p. ej. referencia_cruce en vez de Referencia_Cruce).
+    Sin esto, base_cols no reconoce la columna y se rellena toda con None.
+    """
+    if df.empty:
+        return df
+    lower_map: dict[str, str] = {}
+    for c in df.columns:
+        lower_map[str(c).lower()] = str(c)
+    ren: dict[str, str] = {}
+    for want in expected:
+        if want in df.columns:
+            continue
+        lw = want.lower()
+        if lw in lower_map:
+            actual = lower_map[lw]
+            if actual != want:
+                ren[actual] = want
+    return df.rename(columns=ren) if ren else df
+
+
+def _blank_ref_val(x: Any) -> bool:
+    if x is None:
+        return True
+    if isinstance(x, float) and pd.isna(x):
+        return True
+    s = str(x).strip()
+    return s == "" or s.lower() in ("none", "nan")
+
+
+def _refill_referencia_cruce(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Garantiza Referencia_Cruce cuando el SELECT devolvió NULL (p. ej. alias DuckDB) o vacío.
+
+    - Principal: prioriza Referencia_Original.
+    - Normalizada: prioriza Referencia_Normalizada.
+    - Alterna: ref. maestra del renglón (normalizada u original).
+    """
+    if df.empty or "Referencia_Cruce" not in df.columns:
+        return df
+    out = df.copy()
+    has_tipo = "Tipo_Coincidencia" in out.columns
+    has_ro = "Referencia_Original" in out.columns
+    has_rn = "Referencia_Normalizada" in out.columns
+
+    for idx in out.index:
+        tc = str(out.loc[idx, "Tipo_Coincidencia"]).strip() if has_tipo else ""
+        ro = out.loc[idx, "Referencia_Original"] if has_ro else None
+        rn = out.loc[idx, "Referencia_Normalizada"] if has_rn else None
+        # Alterna: ref. maestra del renglón (sin sufijo de entrada)
+        if tc == "Alterna":
+            master = rn if not _blank_ref_val(rn) else ro
+            if _blank_ref_val(master):
+                continue
+            out.loc[idx, "Referencia_Cruce"] = str(master).strip()
+            continue
+
+        cur = out.loc[idx, "Referencia_Cruce"]
+        if not _blank_ref_val(cur):
+            continue
+
+        if tc == "Principal":
+            master = ro if not _blank_ref_val(ro) else rn
+        elif tc == "Normalizada":
+            master = rn if not _blank_ref_val(rn) else ro
+        else:
+            master = rn if not _blank_ref_val(rn) else ro
+
+        if _blank_ref_val(master):
+            continue
+
+        out.loc[idx, "Referencia_Cruce"] = str(master).strip()
+
+    return out
+
+
 def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
     """
     Devuelve un resumen por cada referencia de entrada (principal, normalizada o alterna).
@@ -299,6 +376,10 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
         "Ultimo Valor USD",
         "Valor Liquido COP",
         "Costo_Min",
+        "Bodega_CostoMin",
+        "Costo_Max",
+        "Bodega_CostoMax",
+        "Costo_Prom_Inst",
         "Existencia_Total",
         "Tipo_Origen",
         "Precio_Lista_09",
@@ -413,6 +494,11 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
             if _pick_rpl_col("Costo_Min")
             else "NULL"
         )
+        p_costo_prom_expr = (
+            f'try_cast(p.{_duck_quote_ident(_pick_rpl_col("Costo_Prom_Inst"))} AS DOUBLE)'
+            if _pick_rpl_col("Costo_Prom_Inst")
+            else "NULL"
+        )
         p_existencia_total_expr = (
             f'try_cast(p.{_duck_quote_ident(_pick_rpl_col("Existencia_Total"))} AS DOUBLE)'
             if _pick_rpl_col("Existencia_Total")
@@ -429,9 +515,29 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
             if _pick_rpl_col("Precio_Lista_09")
             else "NULL"
         )
+        p_costo_max_expr = (
+            f'try_cast(p.{_duck_quote_ident(_pick_rpl_col("Costo_Max"))} AS DOUBLE)'
+            if _pick_rpl_col("Costo_Max")
+            else "NULL"
+        )
+        _bod_cmin_rpl = _pick_rpl_col("Bodega_CostoMin", "Bodega Costo Min")
+        p_bod_cmin_expr = (
+            f"NULLIF(trim(CAST(p.{_duck_quote_ident(_bod_cmin_rpl)} AS VARCHAR)), '')"
+            if _bod_cmin_rpl
+            else "NULL"
+        )
+        _bod_cmax_rpl = _pick_rpl_col("Bodega_CostoMax", "Bodega Costo Max")
+        p_bod_cmax_expr = (
+            f"NULLIF(trim(CAST(p.{_duck_quote_ident(_bod_cmax_rpl)} AS VARCHAR)), '')"
+            if _bod_cmax_rpl
+            else "NULL"
+        )
 
         aud_ref_col = _pick_aud_col("Referencia_Normalizada", "Referencia", "Referencia_Original")
         aud_costo_min_col = _pick_aud_col("Costo_Min")
+        aud_costo_max_col = _pick_aud_col("Costo_Max")
+        aud_bod_cmin_col = _pick_aud_col("Bodega_CostoMin", "Bodega Costo Min")
+        aud_bod_cmax_col = _pick_aud_col("Bodega_CostoMax", "Bodega Costo Max")
         aud_existencia_total_col = _pick_aud_col("Existencia_Total")
         aud_tipo_origen_col = _pick_aud_col("Tipo_Origen", "Tipo Origen")
         aud_precio_lista_col = _pick_aud_col("Precio_Lista_09")
@@ -472,6 +578,9 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
         aud_cte = ""
         aud_join = ""
         aud_costo_expr = "NULL"
+        aud_costo_max_expr = "CAST(NULL AS DOUBLE)"
+        aud_bod_cmin_expr = "CAST(NULL AS VARCHAR)"
+        aud_bod_cmax_expr = "CAST(NULL AS VARCHAR)"
         aud_exist_expr = "NULL"
         aud_tipo_expr = "NULL"
         aud_pl_expr = "NULL"
@@ -483,6 +592,9 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
                     SELECT
                         upper(trim(CAST({aud_ref_q} AS VARCHAR))) AS ref_norm_key,
                         {_aud_any_value(aud_costo_min_col)} AS "Costo_Min_AUD",
+                        {_aud_any_double(aud_costo_max_col)} AS "Costo_Max_AUD",
+                        {_aud_any_varchar(aud_bod_cmin_col)} AS "Bodega_CostoMin_AUD",
+                        {_aud_any_varchar(aud_bod_cmax_col)} AS "Bodega_CostoMax_AUD",
                         {_aud_any_value(aud_existencia_total_col)} AS "Existencia_Total_AUD",
                         {_aud_any_value(aud_tipo_origen_col, "VARCHAR")} AS "Tipo_Origen_AUD",
                         {_aud_any_value(aud_precio_lista_col)} AS "Precio_Lista_09_AUD",
@@ -503,6 +615,9 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
                   ON upper(trim(CAST(p.Referencia_Normalizada AS VARCHAR))) = aud.ref_norm_key
             """
             aud_costo_expr = 'try_cast(aud."Costo_Min_AUD" AS DOUBLE)'
+            aud_costo_max_expr = 'try_cast(aud."Costo_Max_AUD" AS DOUBLE)'
+            aud_bod_cmin_expr = 'NULLIF(trim(CAST(aud."Bodega_CostoMin_AUD" AS VARCHAR)), \'\')'
+            aud_bod_cmax_expr = 'NULLIF(trim(CAST(aud."Bodega_CostoMax_AUD" AS VARCHAR)), \'\')'
             aud_exist_expr = 'try_cast(aud."Existencia_Total_AUD" AS DOUBLE)'
             aud_tipo_expr = 'NULLIF(trim(CAST(aud."Tipo_Origen_AUD" AS VARCHAR)), \'\')'
             aud_pl_expr = 'try_cast(aud."Precio_Lista_09_AUD" AS DOUBLE)'
@@ -596,8 +711,14 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
                     i.referencia_entrada AS Referencia_Entrada,
                     CASE
                         WHEN p.match_rank IS NULL THEN NULL
-                        WHEN p.match_rank = 1 THEN NULLIF(trim(CAST(p.Referencia_Original AS VARCHAR)), '')
-                        WHEN p.match_rank IN (2, 3) THEN NULLIF(trim(CAST(p.Referencia_Normalizada AS VARCHAR)), '')
+                        WHEN p.match_rank = 1 THEN COALESCE(
+                            NULLIF(trim(CAST(p.Referencia_Original AS VARCHAR)), ''),
+                            NULLIF(trim(CAST(p.Referencia_Normalizada AS VARCHAR)), '')
+                        )
+                        WHEN p.match_rank IN (2, 3) THEN COALESCE(
+                            NULLIF(trim(CAST(p.Referencia_Normalizada AS VARCHAR)), ''),
+                            NULLIF(trim(CAST(p.Referencia_Original AS VARCHAR)), '')
+                        )
                         ELSE NULL
                     END AS Referencia_Cruce,
                     CASE WHEN p.referencia_entrada IS NULL THEN 'Sin coincidencia' ELSE 'OK' END AS Estado,
@@ -623,6 +744,10 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
                     {sel_ult_usd},
                     {sel_vlr_liq},
                     COALESCE({p_costo_min_expr}, {aud_costo_expr}) AS "Costo_Min",
+                    COALESCE({p_bod_cmin_expr}, {aud_bod_cmin_expr}) AS "Bodega_CostoMin",
+                    COALESCE({p_costo_max_expr}, {aud_costo_max_expr}) AS "Costo_Max",
+                    COALESCE({p_bod_cmax_expr}, {aud_bod_cmax_expr}) AS "Bodega_CostoMax",
+                    COALESCE({p_costo_prom_expr}, CAST(NULL AS DOUBLE)) AS "Costo_Prom_Inst",
                     COALESCE({p_existencia_total_expr}, {aud_exist_expr}) AS "Existencia_Total",
                     COALESCE({p_tipo_origen_expr}, {aud_tipo_expr}, {o3_tipo_expr}) AS "Tipo_Origen",
                     COALESCE({p_precio_lista_09_expr}, {aud_pl_expr}) AS "Precio_Lista_09",
@@ -644,6 +769,8 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
                 ORDER BY i.orden
             """
             out = con.execute(sql).df()
+            out = _align_df_columns_to_expected(out, base_cols)
+            out = _refill_referencia_cruce(out)
         finally:
             try:
                 con.unregister("tmp_refs_input")
