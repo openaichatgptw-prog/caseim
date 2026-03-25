@@ -275,21 +275,57 @@ SELECT
     ui.Fecha_import,
     ui.pais                                                      AS f011_descripcion,
     ui.f41851_rowid,
-    ((ISNULL(c.[2],0)+ISNULL(c.[3],0)+ISNULL(c.[4],0)+ISNULL(c.[5],0))
-      / NULLIF(c.[1],0)) * 100                                   AS Factor,
-    (ISNULL(c.[1],0)+ISNULL(c.[2],0)+ISNULL(c.[3],0)
-     +ISNULL(c.[4],0)+ISNULL(c.[5],0))
-      / NULLIF(ui.f41851_cant_entrada,0)                         AS Vr_unit_local,
+    TRY_CONVERT(DECIMAL(38,10),
+        CASE
+            WHEN NULLIF(TRY_CONVERT(DECIMAL(38,10), c.[1]), 0) IS NULL THEN NULL
+            ELSE
+                (
+                    (COALESCE(TRY_CONVERT(DECIMAL(38,10), c.[2]), 0)
+                     + COALESCE(TRY_CONVERT(DECIMAL(38,10), c.[3]), 0)
+                     + COALESCE(TRY_CONVERT(DECIMAL(38,10), c.[4]), 0)
+                     + COALESCE(TRY_CONVERT(DECIMAL(38,10), c.[5]), 0))
+                    / NULLIF(TRY_CONVERT(DECIMAL(38,10), c.[1]), 0)
+                ) * 100
+        END
+    )                                                           AS Factor,
+    TRY_CONVERT(DECIMAL(38,10),
+        CASE
+            WHEN NULLIF(TRY_CONVERT(DECIMAL(38,10), ui.f41851_cant_entrada), 0) IS NULL THEN NULL
+            ELSE
+                (
+                    COALESCE(TRY_CONVERT(DECIMAL(38,10), c.[1]), 0)
+                    + COALESCE(TRY_CONVERT(DECIMAL(38,10), c.[2]), 0)
+                    + COALESCE(TRY_CONVERT(DECIMAL(38,10), c.[3]), 0)
+                    + COALESCE(TRY_CONVERT(DECIMAL(38,10), c.[4]), 0)
+                    + COALESCE(TRY_CONVERT(DECIMAL(38,10), c.[5]), 0)
+                ) / NULLIF(TRY_CONVERT(DECIMAL(38,10), ui.f41851_cant_entrada), 0)
+        END
+    )                                                           AS Vr_unit_local,
     ui.Proveedor,
     ISNULL(p.Cant_Brasil,0)                                      AS Cant_Brasil,
     ISNULL(p.Cant_Usa,   0)                                      AS Cant_Usa,
     ISNULL(p.Cant_Europa,0)                                      AS Cant_Europa,
-    IIF(ISNULL(p.Total,0)=0, 0,
-        CAST(ISNULL(p.Cant_Brasil,0) AS DECIMAL(6,2))/p.Total)   AS [Part. Brasil],
-    IIF(ISNULL(p.Total,0)=0, 0,
-        CAST(ISNULL(p.Cant_Usa,   0) AS DECIMAL(6,2))/p.Total)   AS [Part. Usa],
-    IIF(ISNULL(p.Total,0)=0, 0,
-        CAST(ISNULL(p.Cant_Europa,0) AS DECIMAL(6,2))/p.Total)   AS [Part. Europa],
+    TRY_CONVERT(DECIMAL(38,10),
+        CASE
+            WHEN NULLIF(TRY_CONVERT(DECIMAL(38,10), p.Total), 0) IS NULL THEN 0
+            ELSE COALESCE(TRY_CONVERT(DECIMAL(38,10), p.Cant_Brasil), 0)
+                 / NULLIF(TRY_CONVERT(DECIMAL(38,10), p.Total), 0)
+        END
+    )                                                           AS [Part. Brasil],
+    TRY_CONVERT(DECIMAL(38,10),
+        CASE
+            WHEN NULLIF(TRY_CONVERT(DECIMAL(38,10), p.Total), 0) IS NULL THEN 0
+            ELSE COALESCE(TRY_CONVERT(DECIMAL(38,10), p.Cant_Usa), 0)
+                 / NULLIF(TRY_CONVERT(DECIMAL(38,10), p.Total), 0)
+        END
+    )                                                           AS [Part. Usa],
+    TRY_CONVERT(DECIMAL(38,10),
+        CASE
+            WHEN NULLIF(TRY_CONVERT(DECIMAL(38,10), p.Total), 0) IS NULL THEN 0
+            ELSE COALESCE(TRY_CONVERT(DECIMAL(38,10), p.Cant_Europa), 0)
+                 / NULLIF(TRY_CONVERT(DECIMAL(38,10), p.Total), 0)
+        END
+    )                                                           AS [Part. Europa],
     ISNULL(p.Total,0)                                            AS Total
 FROM       t120_mc_items i
 JOIN       t121_mc_items_extensiones ie  ON i.f120_rowid = ie.f121_rowid_item
@@ -357,8 +393,15 @@ def leer_hoja(path, sheet, cols):
     return (
         df.select(
             [norm_pl(pl.col(n[cols[a0]])).alias(a0)] +
-            [pl.col(n[v]).cast(pl.Float64, strict=False).alias(k)
-             for k, v in list(cols.items())[1:]]
+            [
+                # DNET suele venir como texto; mantenerlo como string para parsearlo luego.
+                (
+                    pl.col(n[v]).cast(pl.Utf8, strict=False).alias(k)
+                    if str(k).strip().upper().startswith("DNET")
+                    else pl.col(n[v]).cast(pl.Float64, strict=False).alias(k)
+                )
+                for k, v in list(cols.items())[1:]
+            ]
         )
         .filter(pl.col(a0).is_not_null() & (pl.col(a0) != ""))
         .unique(subset=[a0], keep="first")
@@ -366,14 +409,30 @@ def leer_hoja(path, sheet, cols):
 
             
 def exportar_excel(df, path, sheet):
-    with pd.ExcelWriter(path, engine="xlsxwriter") as w:
-        df.to_excel(w, index=False, sheet_name=sheet)
-        ws = w.sheets[sheet]
-        for i, c in enumerate(df.columns):
-            serie_str = df[c].astype("string").fillna("")
-            ancho = serie_str.map(len).max()
-            ancho = 0 if pd.isna(ancho) else int(ancho)
-            ws.set_column(i, i, min(max(ancho, len(str(c))) + 2, 50))
+    out_path = Path(path)
+    try:
+        with pd.ExcelWriter(out_path, engine="xlsxwriter") as w:
+            df.to_excel(w, index=False, sheet_name=sheet)
+            ws = w.sheets[sheet]
+            for i, c in enumerate(df.columns):
+                serie_str = df[c].astype("string").fillna("")
+                ancho = serie_str.map(len).max()
+                ancho = 0 if pd.isna(ancho) else int(ancho)
+                ws.set_column(i, i, min(max(ancho, len(str(c))) + 2, 50))
+        return
+    except PermissionError:
+        # Típico: el archivo destino está abierto en Excel/OneDrive.
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        alt = out_path.with_name(f"{out_path.stem}_{ts}{out_path.suffix}")
+        with pd.ExcelWriter(alt, engine="xlsxwriter") as w:
+            df.to_excel(w, index=False, sheet_name=sheet)
+            ws = w.sheets[sheet]
+            for i, c in enumerate(df.columns):
+                serie_str = df[c].astype("string").fillna("")
+                ancho = serie_str.map(len).max()
+                ancho = 0 if pd.isna(ancho) else int(ancho)
+                ws.set_column(i, i, min(max(ancho, len(str(c))) + 2, 50))
+        print(f"[WARN] No se pudo escribir '{out_path.name}' (archivo en uso). Se guardó como: {alt.name}")
 
 
 # ===========================================================================
@@ -391,12 +450,36 @@ def paso1_precios_excel():
     df_br   = leer_hoja(EXCEL_PREC, "BRASIL", {"r": 0, "precio_br":  8})
     df_eur  = leer_hoja(EXCEL_PREC, "EUR",    {"r": 0, "precio_eur": 8})
     df_disp = leer_hoja(EXCEL_DISP, "LISTA AGCS",
-                        {"r": 0, "disp_br": 8, "disp_eur": 11, "disp_usa": 12})
+                        {
+                            "r": 0,
+                            # Disponibilidad por origen (conteos)
+                            "disp_br": 8,
+                            "disp_eur": 11,
+                            "disp_usa": 12,
+                            # Columnas adicionales solicitadas (DNET)
+                            "DNET BRA USD": 5,
+                            "DNET USA USD": 6,
+                            "DNET EUR EURO": 7,
+                        })
+    # LISTA AGCS trae PN repetidos; vigente = fila más reciente por Fecha (orden Excel).
+    # Aseguramos ese criterio con sort explícito y luego unique(first).
+    df_disp = (
+        df_disp
+        .with_columns(
+            pl.col("Fecha").cast(pl.Date, strict=False).alias("_fecha_agcs")
+            if "Fecha" in df_disp.columns
+            else pl.lit(None).cast(pl.Date).alias("_fecha_agcs")
+        )
+        .sort(["r", "_fecha_agcs"], descending=[False, True])
+        .unique(subset=["r"], keep="first")
+        .drop(["_fecha_agcs"])
+    )
 
     todas_refs = pl.concat([
         df_usa.select("r"),
         df_br.select("r"),
         df_eur.select("r"),
+        df_disp.select("r"),
     ]).unique()
 
     df = (
@@ -413,6 +496,25 @@ def paso1_precios_excel():
             pl.col("disp_br").cast(pl.Int64,  strict=False),
             pl.col("disp_eur").cast(pl.Int64, strict=False),
             pl.col("disp_usa").cast(pl.Int64, strict=False),
+            # DNET viene frecuentemente como texto (comas/símbolos); limpiamos y convertimos.
+            pl.col("DNET BRA USD")
+              .cast(pl.Utf8, strict=False)
+              .str.replace_all(",", ".")
+              .str.replace_all(r"[^0-9.\-]", "")
+              .cast(pl.Float64, strict=False)
+              .round(2),
+            pl.col("DNET USA USD")
+              .cast(pl.Utf8, strict=False)
+              .str.replace_all(",", ".")
+              .str.replace_all(r"[^0-9.\-]", "")
+              .cast(pl.Float64, strict=False)
+              .round(2),
+            pl.col("DNET EUR EURO")
+              .cast(pl.Utf8, strict=False)
+              .str.replace_all(",", ".")
+              .str.replace_all(r"[^0-9.\-]", "")
+              .cast(pl.Float64, strict=False)
+              .round(2),
             norm_pl(pl.col("referencia")).alias("ref_norm"),
         ])
         .sort("referencia")
@@ -573,6 +675,9 @@ def paso3_cruzar_y_exportar():
                 c.Referencia_Alterna,
                 p.precio_br,  p.precio_usa,  p.precio_eur,
                 p.disp_br,    p.disp_usa,    p.disp_eur,
+                p."DNET BRA USD"             AS dnet_bra_usd,
+                p."DNET USA USD"             AS dnet_usa_usd,
+                p."DNET EUR EURO"            AS dnet_eur_euro,
                 COALESCE(p.disp_usa, 0) + COALESCE(p.disp_br, 0)
                     + COALESCE(p.disp_eur, 0)                     AS suma_disp,
                 COALESCE(p.precio_usa, 0) + COALESCE(p.precio_br, 0)
@@ -618,6 +723,7 @@ def paso3_cruzar_y_exportar():
                 cp.ref_candidata,
                 cp.precio_br,  cp.precio_usa,  cp.precio_eur,
                 cp.disp_br,    cp.disp_usa,    cp.disp_eur,
+                cp.dnet_bra_usd, cp.dnet_usa_usd, cp.dnet_eur_euro,
                 cp.suma_prec,  cp.suma_disp,
                 f.num_refs,    f.ratio,
                 f.RefsAlternas, f.Precios_BR_USA_EURO, f.Dispon_BR_USA_EURO,
@@ -640,6 +746,9 @@ def paso3_cruzar_y_exportar():
             ROUND(precio_br,  2)        AS precio_br,
             ROUND(precio_eur, 2)        AS precio_eur,
             disp_usa, disp_br, disp_eur,
+            ROUND(dnet_bra_usd, 2)      AS DNET_BRA_USD,
+            ROUND(dnet_usa_usd, 2)      AS DNET_USA_USD,
+            ROUND(dnet_eur_euro, 2)     AS DNET_EUR_EURO,
             ROUND(suma_prec, 2)         AS suma_precios,
             suma_disp                   AS suma_disponibilidad,
             num_refs                    AS num_ref_activas,
@@ -695,6 +804,9 @@ def paso3_cruzar_y_exportar():
             pf.disp_br,
             pf.disp_usa,
             pf.disp_eur,
+            pf.DNET_BRA_USD                           AS "DNET BRA USD",
+            pf.DNET_USA_USD                           AS "DNET USA USD",
+            pf.DNET_EUR_EURO                          AS "DNET EUR EURO",
             pf.suma_precios,
             pf.suma_disponibilidad,
             pf.num_ref_activas,

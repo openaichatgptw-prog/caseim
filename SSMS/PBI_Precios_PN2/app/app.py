@@ -1767,6 +1767,9 @@ BUSINESS_LABELS: Final[dict[str, str]] = {
     "Dias_Desde_Fecha_Max": "Días desde últ. mov.",
     "Margen09": "Margen 09 (%)",
     "Margen04": "Margen 04 (%)",
+    "DNET BRA USD": "DNET BRA (USD)",
+    "DNET USA USD": "DNET USA (USD)",
+    "DNET EUR EURO": "DNET EUR (EUR)",
     "Margen_Pct": "Margen (%)",
     "Margen09_Max": "Margen 09 máx (%)",
     "Registros": "Registros",
@@ -1807,10 +1810,8 @@ BUSINESS_LABELS: Final[dict[str, str]] = {
     # Auditoría referencias (SQL 00)
     "U.M.": "U.M.",
     "Costo_Min": "Costo mín.",
-    "Bodega_CostoMin": "Bod. costo mín.",
     "Costo_Intermedio": "Costo interm.",
     "Costo_Max": "Costo máx.",
-    "Bodega_CostoMax": "Bod. costo máx.",
     "Existencia_Min": "Exist. mín.",
     "Existencia_Intermedio": "Exist. interm.",
     "Existencia_Max": "Exist. máx.",
@@ -2640,6 +2641,8 @@ def _consulta_masiva_cotizador_format_map(df: pd.DataFrame) -> dict[str, str]:
             "TRM (cot.)",
         ):
             fmt[n] = "{:,.0f}"
+        elif n in ("DNET BRA (USD)", "DNET USA (USD)", "DNET EUR (EUR)"):
+            fmt[n] = "{:,.2f}"
         elif n in ("Guía Δ lista vs repo (%)", "Guía Δ venta vs repo (%)"):
             fmt[n] = "{:,.1f}"
         elif n == "USD base (cotiz.)":
@@ -3184,31 +3187,32 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
         extras = extras.rename(columns={c: f"_extra_{c}" for c in cols_extra_sel if c in df_cot.columns})
         df_cot = df_cot.merge(extras, on=list(base_keys), how="left")
 
-    # Orden profesional: identificación -> decisión -> drivers -> control.
+    # Orden profesional: identificación -> decisión -> fundamentos -> control.
     cot_core_pref = [
         "Referencia_Entrada",
         "Referencia_Cruce",
-        "Estado",
+        "Mejor_Origen",
         "Estado_cotizacion",
         "P_recomendado_COP",
-        "Regla_precio",
-        "P_piso_inventario_COP",
         "P_venta_experto_COP",
+        "P_piso_inventario_COP",
         "USD_base",
-        "USD_base_fuente",
         "USD_base_unidades_disp",
         "Costo_Min",
-        "Margen_pct_cot",
-        "TRM_cot",
-        "Alertas_detalle",
+        "Existencia_Total",
     ]
     cot_analitica_pref = [
+        "Estado",
         "Costo_Max",
-        "Existencia_Total",
         "Precio_Lista_09",
         "Ult_venta_guia",
         "Guia_lista09_vs_repo_pct",
         "Guia_venta_vs_repo_pct",
+        "Margen_pct_cot",
+        "TRM_cot",
+        "USD_base_fuente",
+        "Regla_precio",
+        "Alertas_detalle",
     ]
     cot_core = [c for c in cot_core_pref if c in df_cot.columns]
     cot_analitica = [c for c in cot_analitica_pref if c in df_cot.columns]
@@ -3351,6 +3355,12 @@ def _consulta_masiva_build_format_map(df_show: pd.DataFrame) -> dict[str, str]:
         "Valor Liq. (COP)",
         "Costo mín.",
         "Costo máx.",
+        "DNET BRA USD",
+        "DNET USA USD",
+        "DNET EUR EURO",
+        "DNET BRA (USD)",
+        "DNET USA (USD)",
+        "DNET EUR (EUR)",
         "Precio lista 09 (COP)",
         "Valor últ. venta",
         "Últ compra (USD)",
@@ -3433,7 +3443,6 @@ def _consulta_masiva_fallback(referencias: list[str]) -> pd.DataFrame:
         "Valor Liquido COP",
         "Costo_Min",
         "Costo_Max",
-        "Costo_Prom_Inst",
         "Existencia_Total",
         "Tipo_Origen",
         "Precio_Lista_09",
@@ -3476,7 +3485,6 @@ def _consulta_masiva_fallback(referencias: list[str]) -> pd.DataFrame:
             "Valor Liquido COP": None,
             "Costo_Min": None,
             "Costo_Max": None,
-            "Costo_Prom_Inst": None,
             "Existencia_Total": None,
             "Tipo_Origen": None,
             "Precio_Lista_09": None,
@@ -3518,7 +3526,6 @@ def _consulta_masiva_fallback(referencias: list[str]) -> pd.DataFrame:
                         item["Valor Liquido COP"] = _valor_liq_cop_desde_resumen(resumen)
                         item["Costo_Min"] = resumen.get("Costo_Min")
                         item["Costo_Max"] = resumen.get("Costo_Max")
-                        item["Costo_Prom_Inst"] = resumen.get("Costo_Prom_Inst")
                         item["Existencia_Total"] = resumen.get("Existencia_Total")
                         item["Tipo_Origen"] = resumen.get("Tipo_Origen") or resumen.get("Tipo Origen")
                         item["Precio_Lista_09"] = resumen.get("Precio_Lista_09")
