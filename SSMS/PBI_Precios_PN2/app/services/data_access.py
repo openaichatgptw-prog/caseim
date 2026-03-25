@@ -278,6 +278,7 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
     """
     base_cols = [
         "Referencia_Entrada",
+        "Referencia_Cruce",
         "Estado",
         "Tipo_Coincidencia",
         "Referencia_Original",
@@ -297,6 +298,19 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
         "Proveedor",
         "Ultimo Valor USD",
         "Valor Liquido COP",
+        "Costo_Min",
+        "Existencia_Total",
+        "Tipo_Origen",
+        "Precio_Lista_09",
+        "Ult. Precio Venta",
+        "Fecha Ult. Venta",
+        "Fecha_Ultima_Compra",
+        "Pais_Ultima",
+        "Proveedor_Ultima",
+        "Comprador_Ultima",
+        "Precio_USD_Ultima",
+        "Precio_COP_Ultima",
+        "TRM_Ultima",
     ]
     if not referencias:
         return pd.DataFrame(columns=base_cols)
@@ -332,11 +346,29 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
         rpl_cols = [r[0] for r in con.execute("DESCRIBE resultado_precios_lista").fetchall()]
         rpl_col_set = {str(c).strip().lower(): c for c in rpl_cols}
 
+        has_aud = _table_exists(con, "auditoria_raw")
+        aud_col_set: dict[str, str] = {}
+        if has_aud:
+            aud_cols = [r[0] for r in con.execute("DESCRIBE auditoria_raw").fetchall()]
+            aud_col_set = {str(c).strip().lower(): c for c in aud_cols}
+
+        # Maestro histórico (script 03): Tipo_Origen por ref. normalizada en columna REF.
+        has_o3_tab = _table_exists(con, "origen_precios_tablero")
+        has_o3_ref = _table_has_column(con, "origen_precios_tablero", "REF") if has_o3_tab else False
+        has_o3_tipo = _table_has_column(con, "origen_precios_tablero", "Tipo_Origen") if has_o3_tab else False
+
         def _pick_rpl_col(*cands: str) -> str | None:
             for cand in cands:
                 key = str(cand).strip().lower()
                 if key in rpl_col_set:
                     return str(rpl_col_set[key])
+            return None
+
+        def _pick_aud_col(*cands: str) -> str | None:
+            for cand in cands:
+                key = str(cand).strip().lower()
+                if key in aud_col_set:
+                    return str(aud_col_set[key])
             return None
 
         def _sel_or_null(alias: str, *cands: str) -> str:
@@ -360,6 +392,145 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
             "Valor Liq. (COP)",
             "Valor L�q. (COP)",
         )
+        sel_costo_min = _sel_or_null("Costo_Min", "Costo_Min")
+        sel_existencia_total = _sel_or_null("Existencia_Total", "Existencia_Total")
+        sel_tipo_origen = _sel_or_null("Tipo_Origen", "Tipo_Origen", "Tipo Origen")
+        sel_precio_lista_09 = _sel_or_null("Precio_Lista_09", "Precio_Lista_09")
+        sel_ult_precio_venta = _sel_or_null(
+            "Ult. Precio Venta",
+            "Ult. Precio Venta",
+            "Ultimo Valor Venta",
+            "Valor Ult. Venta",
+        )
+        sel_fecha_ult_venta = _sel_or_null(
+            "Fecha Ult. Venta",
+            "Fecha Ult. Venta",
+            "Fecha_Ultima_Venta",
+            "Fecha Última Venta",
+        )
+        p_costo_min_expr = (
+            f'try_cast(p.{_duck_quote_ident(_pick_rpl_col("Costo_Min"))} AS DOUBLE)'
+            if _pick_rpl_col("Costo_Min")
+            else "NULL"
+        )
+        p_existencia_total_expr = (
+            f'try_cast(p.{_duck_quote_ident(_pick_rpl_col("Existencia_Total"))} AS DOUBLE)'
+            if _pick_rpl_col("Existencia_Total")
+            else "NULL"
+        )
+        _tipo_col_rpl = _pick_rpl_col("Tipo_Origen", "Tipo Origen")
+        p_tipo_origen_expr = (
+            f"NULLIF(trim(CAST(p.{_duck_quote_ident(_tipo_col_rpl)} AS VARCHAR)), '')"
+            if _tipo_col_rpl
+            else "NULL"
+        )
+        p_precio_lista_09_expr = (
+            f'try_cast(p.{_duck_quote_ident(_pick_rpl_col("Precio_Lista_09"))} AS DOUBLE)'
+            if _pick_rpl_col("Precio_Lista_09")
+            else "NULL"
+        )
+
+        aud_ref_col = _pick_aud_col("Referencia_Normalizada", "Referencia", "Referencia_Original")
+        aud_costo_min_col = _pick_aud_col("Costo_Min")
+        aud_existencia_total_col = _pick_aud_col("Existencia_Total")
+        aud_tipo_origen_col = _pick_aud_col("Tipo_Origen", "Tipo Origen")
+        aud_precio_lista_col = _pick_aud_col("Precio_Lista_09")
+        aud_fecha_ult_compra_col = _pick_aud_col("Fecha_Ultima_Compra")
+        aud_pais_ult_col = _pick_aud_col("Pais_Ultima")
+        aud_prov_ult_col = _pick_aud_col("Proveedor_Ultima")
+        aud_comp_ult_col = _pick_aud_col("Comprador_Ultima")
+        aud_usd_ult_col = _pick_aud_col("Precio_USD_Ultima")
+        aud_cop_ult_col = _pick_aud_col("Precio_COP_Ultima")
+        aud_trm_ult_col = _pick_aud_col("TRM_Ultima")
+
+        def _aud_any_value(col_name: str | None, cast_sql: str = "") -> str:
+            if not col_name:
+                return "CAST(NULL AS VARCHAR)"
+            q = _duck_quote_ident(col_name)
+            if cast_sql:
+                return f"ANY_VALUE(CAST({q} AS {cast_sql}))"
+            return f"ANY_VALUE({q})"
+
+        def _aud_any_ts(col_name: str | None) -> str:
+            if not col_name:
+                return "ANY_VALUE(CAST(NULL AS TIMESTAMP))"
+            q = _duck_quote_ident(col_name)
+            return f"ANY_VALUE(try_cast({q} AS TIMESTAMP))"
+
+        def _aud_any_double(col_name: str | None) -> str:
+            if not col_name:
+                return "ANY_VALUE(CAST(NULL AS DOUBLE))"
+            q = _duck_quote_ident(col_name)
+            return f"ANY_VALUE(try_cast({q} AS DOUBLE))"
+
+        def _aud_any_varchar(col_name: str | None) -> str:
+            if not col_name:
+                return "ANY_VALUE(CAST(NULL AS VARCHAR))"
+            q = _duck_quote_ident(col_name)
+            return f"ANY_VALUE(NULLIF(trim(CAST({q} AS VARCHAR)), ''))"
+
+        aud_cte = ""
+        aud_join = ""
+        aud_costo_expr = "NULL"
+        aud_exist_expr = "NULL"
+        aud_tipo_expr = "NULL"
+        aud_pl_expr = "NULL"
+        if has_aud and aud_ref_col:
+            aud_ref_q = _duck_quote_ident(aud_ref_col)
+            aud_cte = f"""
+                ,
+                aud AS (
+                    SELECT
+                        upper(trim(CAST({aud_ref_q} AS VARCHAR))) AS ref_norm_key,
+                        {_aud_any_value(aud_costo_min_col)} AS "Costo_Min_AUD",
+                        {_aud_any_value(aud_existencia_total_col)} AS "Existencia_Total_AUD",
+                        {_aud_any_value(aud_tipo_origen_col, "VARCHAR")} AS "Tipo_Origen_AUD",
+                        {_aud_any_value(aud_precio_lista_col)} AS "Precio_Lista_09_AUD",
+                        {_aud_any_ts(aud_fecha_ult_compra_col)} AS "Fecha_Ultima_Compra_AUD",
+                        {_aud_any_varchar(aud_pais_ult_col)} AS "Pais_Ultima_AUD",
+                        {_aud_any_varchar(aud_prov_ult_col)} AS "Proveedor_Ultima_AUD",
+                        {_aud_any_varchar(aud_comp_ult_col)} AS "Comprador_Ultima_AUD",
+                        {_aud_any_double(aud_usd_ult_col)} AS "Precio_USD_Ultima_AUD",
+                        {_aud_any_double(aud_cop_ult_col)} AS "Precio_COP_Ultima_AUD",
+                        {_aud_any_double(aud_trm_ult_col)} AS "TRM_Ultima_AUD"
+                    FROM auditoria_raw
+                    WHERE {aud_ref_q} IS NOT NULL
+                    GROUP BY 1
+                )
+            """
+            aud_join = """
+                LEFT JOIN aud
+                  ON upper(trim(CAST(p.Referencia_Normalizada AS VARCHAR))) = aud.ref_norm_key
+            """
+            aud_costo_expr = 'try_cast(aud."Costo_Min_AUD" AS DOUBLE)'
+            aud_exist_expr = 'try_cast(aud."Existencia_Total_AUD" AS DOUBLE)'
+            aud_tipo_expr = 'NULLIF(trim(CAST(aud."Tipo_Origen_AUD" AS VARCHAR)), \'\')'
+            aud_pl_expr = 'try_cast(aud."Precio_Lista_09_AUD" AS DOUBLE)'
+            aud_fecha_ult_expr = 'aud."Fecha_Ultima_Compra_AUD"'
+            aud_pais_ult_expr = 'aud."Pais_Ultima_AUD"'
+            aud_prov_ult_expr = 'aud."Proveedor_Ultima_AUD"'
+            aud_comp_ult_expr = 'aud."Comprador_Ultima_AUD"'
+            aud_usd_ult_expr = 'aud."Precio_USD_Ultima_AUD"'
+            aud_cop_ult_expr = 'aud."Precio_COP_Ultima_AUD"'
+            aud_trm_ult_expr = 'aud."TRM_Ultima_AUD"'
+        else:
+            aud_fecha_ult_expr = "CAST(NULL AS TIMESTAMP)"
+            aud_pais_ult_expr = "CAST(NULL AS VARCHAR)"
+            aud_prov_ult_expr = "CAST(NULL AS VARCHAR)"
+            aud_comp_ult_expr = "CAST(NULL AS VARCHAR)"
+            aud_usd_ult_expr = "CAST(NULL AS DOUBLE)"
+            aud_cop_ult_expr = "CAST(NULL AS DOUBLE)"
+            aud_trm_ult_expr = "CAST(NULL AS DOUBLE)"
+
+        join_o3 = ""
+        o3_tipo_expr = "NULL"
+        if has_o3_ref and has_o3_tipo:
+            join_o3 = """
+                LEFT JOIN origen_precios_tablero o3
+                  ON upper(trim(CAST(o3."REF" AS VARCHAR))) = upper(trim(CAST(p.Referencia_Normalizada AS VARCHAR)))
+            """
+            o3_tipo_expr = 'NULLIF(trim(CAST(o3."Tipo_Origen" AS VARCHAR)), \'\')'
+
         con.register("tmp_refs_input", df_input)
         try:
             join_alt = ""
@@ -419,9 +590,16 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
                         ) AS rn
                     FROM cand
                 )
+                {aud_cte}
                 SELECT
                     i.orden,
                     i.referencia_entrada AS Referencia_Entrada,
+                    CASE
+                        WHEN p.match_rank IS NULL THEN NULL
+                        WHEN p.match_rank = 1 THEN NULLIF(trim(CAST(p.Referencia_Original AS VARCHAR)), '')
+                        WHEN p.match_rank IN (2, 3) THEN NULLIF(trim(CAST(p.Referencia_Normalizada AS VARCHAR)), '')
+                        ELSE NULL
+                    END AS Referencia_Cruce,
                     CASE WHEN p.referencia_entrada IS NULL THEN 'Sin coincidencia' ELSE 'OK' END AS Estado,
                     CASE p.match_rank
                         WHEN 1 THEN 'Principal'
@@ -443,11 +621,26 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
                     p."Ult. Fecha Compra" AS "Ult. Fecha Compra",
                     p.Proveedor,
                     {sel_ult_usd},
-                    {sel_vlr_liq}
+                    {sel_vlr_liq},
+                    COALESCE({p_costo_min_expr}, {aud_costo_expr}) AS "Costo_Min",
+                    COALESCE({p_existencia_total_expr}, {aud_exist_expr}) AS "Existencia_Total",
+                    COALESCE({p_tipo_origen_expr}, {aud_tipo_expr}, {o3_tipo_expr}) AS "Tipo_Origen",
+                    COALESCE({p_precio_lista_09_expr}, {aud_pl_expr}) AS "Precio_Lista_09",
+                    {sel_ult_precio_venta},
+                    {sel_fecha_ult_venta},
+                    {aud_fecha_ult_expr} AS "Fecha_Ultima_Compra",
+                    {aud_pais_ult_expr} AS "Pais_Ultima",
+                    {aud_prov_ult_expr} AS "Proveedor_Ultima",
+                    {aud_comp_ult_expr} AS "Comprador_Ultima",
+                    {aud_usd_ult_expr} AS "Precio_USD_Ultima",
+                    {aud_cop_ult_expr} AS "Precio_COP_Ultima",
+                    {aud_trm_ult_expr} AS "TRM_Ultima"
                 FROM inp i
                 LEFT JOIN pick p
                   ON p.referencia_entrada = i.referencia_entrada
                  AND p.rn = 1
+                {aud_join}
+                {join_o3}
                 ORDER BY i.orden
             """
             out = con.execute(sql).df()

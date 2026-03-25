@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import html
 import io
 import math
@@ -922,7 +923,7 @@ _CONSULTA_MAX_ALTERNAS: Final[int] = 10
 def _consulta_help_prorrateo() -> str:
     """Texto de ayuda alineado al cálculo del pipeline (incluye rango dinámico)."""
     hoy = datetime.now()
-    fecha_desde = f"{hoy.year - 1}-01-01"
+    fecha_desde = f"{hoy.year - 2}-01-01"
     fecha_hasta = hoy.strftime("%Y-%m-%d")
     return (
         "Precio sugerido en dólares (USD) que resume los precios de lista de Brasil, USA y Europa. "
@@ -1596,11 +1597,16 @@ def _auditoria_build_column_config(orig_cols: list[str], alias_cols: dict[str, s
 
 def _auditoria_vista_bloques(
     lower_map: dict[str, str],
-) -> list[tuple[str, list[str]]]:
-    """Bloques alineados al objetivo: priorizar refs con Δ última vs penúltima y Δ última vs costo prom. inv."""
+) -> list[tuple[str, str, list[str]]]:
+    """Bloques operativos: (título, contexto para el analista, claves SQL en lower_map).
+
+    El texto de contexto explica qué decisiones o validaciones aporta cada tabla.
+    """
     return [
         (
             "Identificación y política",
+            "Catálogo y reglas de precio del ítem: unidad, línea, sistema de precio, equipo/modelo CNH, rotación y margen "
+            "objetivo. Úsalo para saber si el desvío encaja con la política del segmento antes de escalar.",
             [
                 "referencia",
                 "referencias_alternas",
@@ -1616,6 +1622,8 @@ def _auditoria_vista_bloques(
         ),
         (
             "Semáforo y prioridad (score)",
+            "Resumen de riesgo: el **semáforo** resume reglas de negocio; el **score** mezcla |Δ compra| (55 %) y "
+            "|Δ vs costo inv.| (45 %) como en la vista estratégica. Prioriza filas con score alto y semáforo crítico/moderado.",
             [
                 "semaforo_variacion",
                 "_score_alerta",
@@ -1623,6 +1631,8 @@ def _auditoria_vista_bloques(
         ),
         (
             "Problema 1 — variación última vs penúltima compra",
+            "Aquí validas **volatilidad entre dos facturas**: días entre compras, variación en USD y en COP, y efecto TRM. "
+            "Si COP se mueve pero USD no (o al revés), sospecha de tipo de cambio o redondeos; si ambos saltan, revisa proveedor o condición comercial.",
             [
                 "pais_ultima",
                 "pais_penultima",
@@ -1637,6 +1647,8 @@ def _auditoria_vista_bloques(
         ),
         (
             "Problema 2 — variación última vs costo prom. inventario",
+            "Desalineación **precio de compra vs costo promedio de inventario** (y variantes SQL). Es la segunda pata del filtro "
+            "“variación fuerte” y del score. Valores extremos suelen indicar compras fuera de curva, costo de inventario desactualizado o mezcla de lotes.",
             [
                 "var_costomin_preciocop",
                 "var_costomax_preciocop",
@@ -1651,6 +1663,8 @@ def _auditoria_vista_bloques(
         ),
         (
             "Costos en bodega, existencias y precio lista",
+            "**Magnitud operativa**: costos y existencias por nivel de bodega, disponible, precio lista y márgenes. "
+            "Sirve para decidir si el ajuste vale la pena (stock alto + desvío = mayor exposición en COP).",
             [
                 "costo_min",
                 "bodega_costomin",
@@ -1676,6 +1690,8 @@ def _auditoria_vista_bloques(
         ),
         (
             "Evidencia: última compra",
+            "Datos de la **última OC/factura**: fechas, proveedor, comprador, precios unitarios y TRM. Contrastalo con el bloque "
+            "anterior para confirmar que el sistema refleja la operación real.",
             [
                 "fecha_ultima_compra",
                 "pais_ultima",
@@ -1688,6 +1704,7 @@ def _auditoria_vista_bloques(
         ),
         (
             "Evidencia: penúltima compra",
+            "Misma foto para la **compra anterior**: permite ver tendencia (sube/baja estable) y detectar cambios de proveedor o país de origen.",
             [
                 "fecha_penultima_compra",
                 "pais_penultima",
@@ -1700,6 +1717,8 @@ def _auditoria_vista_bloques(
         ),
         (
             "Factores logísticos (precio COP ajustado)",
+            "Ajuste **COP con factor por origen** (USA/BR vs otros) usado en la app para comparar con costo de inventario. "
+            "Sin este bloque se malinterpreta el |Δ vs costo inv.| respecto al precio COP “en planta”.",
             [
                 "_origen_ultima_norm",
                 "_factor_logistico",
@@ -1712,6 +1731,7 @@ def _auditoria_vista_bloques(
 
 BUSINESS_LABELS: Final[dict[str, str]] = {
     "Referencia": "Ref",
+    "Referencia_Cruce": "Ref. cruce",
     "Referencia_Original": "Ref original",
     "Referencia_Alternas": "Refs alternas",
     "Descripcion": "Descripción",
@@ -1765,6 +1785,8 @@ BUSINESS_LABELS: Final[dict[str, str]] = {
     "Var_CostoMin_PrecioCOP": "Var vs costo mín (%)",
     "Var_CostoMax_PrecioCOP": "Var vs costo máx (%)",
     "Valor Liquido COP": "Valor liquidado COP",
+    "Ult. Precio Venta": "Valor últ. venta",
+    "Fecha Ult. Venta": "Fecha últ. venta",
     "Margen_Objetivo_Sistema": "Margen sistema",
     "Valor": "Valor",
     "Pct_sobre_margen": "% sobre margen",
@@ -2261,6 +2283,84 @@ def _render_tab_consulta_individual() -> None:
     save_tab_filter_prefs("consulta")
 
 
+# Columnas opcionales en consulta masiva: orden lógico (inventario/venta → auditoría última compra).
+_CONSULTA_MASIVA_COLS_EXTRA_BLOQUE_INV: Final[tuple[str, ...]] = (
+    "Costo_Min",
+    "Existencia_Total",
+    "Precio_Lista_09",
+    "Tipo_Origen",
+    "Ult. Precio Venta",
+    "Fecha Ult. Venta",
+)
+_CONSULTA_MASIVA_COLS_EXTRA_BLOQUE_AUD: Final[tuple[str, ...]] = (
+    "Fecha_Ultima_Compra",
+    "Pais_Ultima",
+    "Proveedor_Ultima",
+    "Comprador_Ultima",
+    "Precio_USD_Ultima",
+    "Precio_COP_Ultima",
+    "TRM_Ultima",
+)
+_CONSULTA_MASIVA_COLS_EXTRA_ORDER: Final[tuple[str, ...]] = (
+    _CONSULTA_MASIVA_COLS_EXTRA_BLOQUE_INV + _CONSULTA_MASIVA_COLS_EXTRA_BLOQUE_AUD
+)
+_CONSULTA_MASIVA_COLS_EXTRA: Final[frozenset[str]] = frozenset(_CONSULTA_MASIVA_COLS_EXTRA_ORDER)
+
+# Ocultas solo en pantalla (siguen en el CSV descargado).
+_CONSULTA_MASIVA_COLS_OCULTAR_UI: Final[frozenset[str]] = frozenset(
+    {"Referencia_Original", "Referencia_Normalizada"}
+)
+
+
+def _consulta_masiva_preparar_vista(df: pd.DataFrame) -> pd.DataFrame:
+    """Quita ref. original/normalizada; orden: entrada → ref. cruce → alternas → estado…"""
+    cols = [c for c in df.columns if c not in _CONSULTA_MASIVA_COLS_OCULTAR_UI]
+    head: list[str] = []
+    for key in (
+        "Referencia_Entrada",
+        "Referencia_Cruce",
+        "RefsAlternas",
+        "Estado",
+        "Tipo_Coincidencia",
+        "Descripción",
+    ):
+        if key in cols:
+            head.append(key)
+    tail = [c for c in cols if c not in head]
+    return df[head + tail]
+
+
+def _consulta_masiva_etiquetas_lista(df: pd.DataFrame) -> pd.DataFrame:
+    """Última compra pipeline lista (OC) — nombres cortos negocio."""
+    m = {
+        "Ult. Fecha Compra": "Fecha — lista (OC)",
+        "Proveedor": "Prov. — lista",
+        "Ultimo Valor USD": "USD — lista",
+        "Valor liquidado COP": "COP liq. — lista",
+    }
+    return df.rename(columns={k: v for k, v in m.items() if k in df.columns})
+
+
+def _consulta_masiva_etiquetas_audit(df: pd.DataFrame) -> pd.DataFrame:
+    """Última compra auditoría (SQL 003) — nombres cortos negocio."""
+    m = {
+        "Fecha últ. compra": "Fecha — aud.",
+        "País últ. compra": "País — aud.",
+        "Proveedor últ.": "Prov. — aud.",
+        "Comprador últ.": "Compr. — aud.",
+        "Últ compra (USD)": "USD — aud.",
+        "Últ compra (COP)": "COP — aud.",
+        "TRM últ compra": "TRM — aud.",
+    }
+    return df.rename(columns={k: v for k, v in m.items() if k in df.columns})
+
+
+def _consulta_masiva_encabezados_id(df: pd.DataFrame) -> pd.DataFrame:
+    """Encabezados compactos solo en consulta masiva."""
+    m = {"RefsAlternas": "Ref. alternas"}
+    return df.rename(columns={k: v for k, v in m.items() if k in df.columns})
+
+
 def _render_tab_consulta_masiva() -> None:
     st.markdown('<p class="consulta-page-lead">Consulta masiva de referencias</p>', unsafe_allow_html=True)
     st.caption("Carga un CSV con una columna de referencias (principales o alternas) para resolverlas en lote.")
@@ -2451,28 +2551,46 @@ def _render_tab_consulta_masiva() -> None:
             on_change=_sync_euro_num_to_slider,
         )
 
-    if not st.button("Procesar consulta masiva", key="consulta_masiva_run", type="primary"):
-        return
+    # Firma estable: mismo archivo + columna + lista de refs. Así, al togglear/slider sin reconsultar
+    # se reutiliza el resultado SQL y solo se recalcula mejor origen con los factores actuales.
+    _consulta_masiva_sig = (
+        tuple(refs_unicas),
+        col_ref,
+        hashlib.md5(raw).hexdigest(),
+    )
 
-    try:
-        resolver_masivo = getattr(data_access_service, "obtener_resumen_referencias_masivo", None)
-        if resolver_masivo is None:
-            df_out = _consulta_masiva_fallback(refs_unicas)
-            st.info(
-                "Se usó modo compatibilidad para consulta masiva (sin método masivo en data_access)."
-            )
-        else:
-            df_out = resolver_masivo(refs_unicas)
-    except Exception as exc:
-        st.error(f"No fue posible ejecutar la consulta masiva: {exc}")
-        return
+    run_masiva = st.button("Procesar consulta masiva", key="consulta_masiva_run", type="primary")
 
-    if df_out.empty:
-        st.warning("No se obtuvieron resultados.")
+    if run_masiva:
+        try:
+            resolver_masivo = getattr(data_access_service, "obtener_resumen_referencias_masivo", None)
+            if resolver_masivo is None:
+                df_sql = _consulta_masiva_fallback(refs_unicas)
+                st.info(
+                    "Se usó modo compatibilidad para consulta masiva (sin método masivo en data_access)."
+                )
+            else:
+                df_sql = resolver_masivo(refs_unicas)
+        except Exception as exc:
+            st.error(f"No fue posible ejecutar la consulta masiva: {exc}")
+            return
+
+        if df_sql.empty:
+            st.warning("No se obtuvieron resultados.")
+            return
+
+        st.session_state["consulta_masiva_df_sql"] = df_sql
+        st.session_state["consulta_masiva_cache_sig"] = _consulta_masiva_sig
+
+    df_sql = st.session_state.get("consulta_masiva_df_sql")
+    if st.session_state.get("consulta_masiva_cache_sig") != _consulta_masiva_sig:
+        df_sql = None
+
+    if df_sql is None:
         return
 
     df_out = _consulta_masiva_calcular_mejor_origen(
-        df_out,
+        df_sql.copy(),
         disp_umbral=float(disp_umbral_masivo),
         factor_usabr=float(factor_usabr),
         factor_euro=float(factor_euro),
@@ -2487,6 +2605,9 @@ def _render_tab_consulta_masiva() -> None:
         orden_cols = [c for c in df_out.columns if c != "Precio Prorrateo"] + ["Precio Prorrateo"]
         df_out = df_out[orden_cols]
 
+    if "Referencia_Cruce" not in df_out.columns:
+        df_out["Referencia_Cruce"] = None
+
     n_ok = int((df_out["Estado"] == "OK").sum()) if "Estado" in df_out.columns else 0
     n_no = int((df_out["Estado"] != "OK").sum()) if "Estado" in df_out.columns else 0
     m1, m2, m3 = st.columns(3)
@@ -2494,7 +2615,40 @@ def _render_tab_consulta_masiva() -> None:
     m2.metric("Con coincidencia", f"{n_ok:,}")
     m3.metric("Sin coincidencia", f"{n_no:,}")
 
-    df_show = _renombrar_negocio(df_out)
+    df_vista = _consulta_masiva_preparar_vista(df_out)
+    main_cols = [c for c in df_vista.columns if c not in _CONSULTA_MASIVA_COLS_EXTRA]
+    extra_ordered = [c for c in _CONSULTA_MASIVA_COLS_EXTRA_ORDER if c in df_vista.columns]
+
+    ver_panel = st.toggle(
+        "➕ Todas las columnas (inventario + auditoría)",
+        value=False,
+        key="consulta_masiva_panel_extra",
+        help="Una sola tabla: añade inventario, lista 09, tipo origen, venta y última compra (auditoría SQL 003), "
+        "ordenadas al final (bloque inventario/venta y luego auditoría).",
+    )
+
+    if ver_panel:
+        df_src = df_vista[main_cols + extra_ordered] if extra_ordered else df_vista
+        df_show = _consulta_masiva_encabezados_id(
+            _consulta_masiva_etiquetas_audit(
+                _consulta_masiva_etiquetas_lista(_renombrar_negocio(df_src))
+            )
+        )
+        st.caption(
+            "**Lista (OC):** fecha / prov. / USD — importación OC. **Inventario y venta** a continuación del bloque "
+            "principal. **Aud. (SQL 003):** última compra contable (no es el mismo documento que la lista OC)."
+        )
+    else:
+        df_src = df_vista[main_cols] if main_cols else df_vista
+        df_show = _consulta_masiva_encabezados_id(
+            _consulta_masiva_etiquetas_lista(_renombrar_negocio(df_src))
+        )
+        if extra_ordered and main_cols:
+            st.caption(
+                "Activa **➕ Todas las columnas** para incluir inventario, lista 09, tipo origen, venta y "
+                "auditoría en la misma tabla (orden lógico)."
+            )
+
     fmt_map = _consulta_masiva_build_format_map(df_show)
     st.dataframe(
         df_show.style.format(fmt_map).apply(_consulta_masiva_style_mejor_origen, axis=1),
@@ -2560,11 +2714,24 @@ def _consulta_masiva_ajustar_decimales(df: pd.DataFrame) -> pd.DataFrame:
         "Ultimo Valor USD",
         "Valor Liquido COP",
         "Valor Liq. (COP)",
+        "Costo_Min",
+        "Precio_Lista_09",
+        "Ult. Precio Venta",
+        "Precio_USD_Ultima",
+        "Precio_COP_Ultima",
+        "TRM_Ultima",
         "Mejor_Precio_Sin_Factor",
         "Mejor_Precio_Ajustado",
         "Precio Prorrateo",
     ]
-    avail_cols = ["disp_br", "disp_usa", "disp_eur", "_disp_total", "Mejor_Disponibilidad"]
+    avail_cols = [
+        "disp_br",
+        "disp_usa",
+        "disp_eur",
+        "_disp_total",
+        "Mejor_Disponibilidad",
+        "Existencia_Total",
+    ]
 
     for c in price_cols:
         if c in out.columns:
@@ -2582,8 +2749,19 @@ def _consulta_masiva_build_format_map(df_show: pd.DataFrame) -> dict[str, str]:
         "Precio Usa",
         "Precio Europa",
         "Ultimo Valor USD",
+        "USD — lista",
         "Valor liquidado COP",
+        "COP liq. — lista",
         "Valor Liq. (COP)",
+        "Costo mín.",
+        "Precio lista 09 (COP)",
+        "Valor últ. venta",
+        "Últ compra (USD)",
+        "Últ compra (COP)",
+        "USD — aud.",
+        "COP — aud.",
+        "TRM últ compra",
+        "TRM — aud.",
         "Mejor Precio Sin Factor",
         "Mejor Precio Ajustado",
         "Precio Prorrateo",
@@ -2594,6 +2772,7 @@ def _consulta_masiva_build_format_map(df_show: pd.DataFrame) -> dict[str, str]:
         "disp eur",
         "disp total",
         "Mejor Disponibilidad",
+        "Exist. total (ref.)",
     }
     fmt: dict[str, str] = {}
     for c in df_show.columns:
@@ -2635,6 +2814,7 @@ def _consulta_masiva_fallback(referencias: list[str]) -> pd.DataFrame:
     """
     cols = [
         "Referencia_Entrada",
+        "Referencia_Cruce",
         "Estado",
         "Tipo_Coincidencia",
         "Referencia_Original",
@@ -2654,6 +2834,19 @@ def _consulta_masiva_fallback(referencias: list[str]) -> pd.DataFrame:
         "Proveedor",
         "Ultimo Valor USD",
         "Valor Liquido COP",
+        "Costo_Min",
+        "Existencia_Total",
+        "Tipo_Origen",
+        "Precio_Lista_09",
+        "Ult. Precio Venta",
+        "Fecha Ult. Venta",
+        "Fecha_Ultima_Compra",
+        "Pais_Ultima",
+        "Proveedor_Ultima",
+        "Comprador_Ultima",
+        "Precio_USD_Ultima",
+        "Precio_COP_Ultima",
+        "TRM_Ultima",
     ]
     rows: list[dict] = []
     for ref in referencias:
@@ -2662,6 +2855,7 @@ def _consulta_masiva_fallback(referencias: list[str]) -> pd.DataFrame:
             continue
         item = {
             "Referencia_Entrada": entrada,
+            "Referencia_Cruce": None,
             "Estado": "Sin coincidencia",
             "Tipo_Coincidencia": None,
             "Referencia_Original": None,
@@ -2681,6 +2875,19 @@ def _consulta_masiva_fallback(referencias: list[str]) -> pd.DataFrame:
             "Proveedor": None,
             "Ultimo Valor USD": None,
             "Valor Liquido COP": None,
+            "Costo_Min": None,
+            "Existencia_Total": None,
+            "Tipo_Origen": None,
+            "Precio_Lista_09": None,
+            "Ult. Precio Venta": None,
+            "Fecha Ult. Venta": None,
+            "Fecha_Ultima_Compra": None,
+            "Pais_Ultima": None,
+            "Proveedor_Ultima": None,
+            "Comprador_Ultima": None,
+            "Precio_USD_Ultima": None,
+            "Precio_COP_Ultima": None,
+            "TRM_Ultima": None,
         }
         try:
             df_hit = buscar_referencias(entrada, limite=1)
@@ -2708,13 +2915,22 @@ def _consulta_masiva_fallback(referencias: list[str]) -> pd.DataFrame:
                         item["Proveedor"] = resumen.get("Proveedor")
                         item["Ultimo Valor USD"] = resumen.get("Ultimo Valor USD")
                         item["Valor Liquido COP"] = _valor_liq_cop_desde_resumen(resumen)
+                        item["Costo_Min"] = resumen.get("Costo_Min")
+                        item["Existencia_Total"] = resumen.get("Existencia_Total")
+                        item["Tipo_Origen"] = resumen.get("Tipo_Origen") or resumen.get("Tipo Origen")
+                        item["Precio_Lista_09"] = resumen.get("Precio_Lista_09")
+                        item["Ult. Precio Venta"] = resumen.get("Ult. Precio Venta") or resumen.get("Ultimo Valor Venta")
+                        item["Fecha Ult. Venta"] = resumen.get("Fecha Ult. Venta")
                         ent_up = entrada.upper()
                         if ent_up == ref_orig.upper():
                             item["Tipo_Coincidencia"] = "Principal"
+                            item["Referencia_Cruce"] = ref_orig
                         elif ent_up == ref_norm.upper():
                             item["Tipo_Coincidencia"] = "Normalizada"
+                            item["Referencia_Cruce"] = ref_norm
                         else:
                             item["Tipo_Coincidencia"] = "Alterna"
+                            item["Referencia_Cruce"] = ref_norm
         except Exception:
             pass
         rows.append(item)
@@ -4241,7 +4457,6 @@ def _render_tab_auditoria_referencias() -> None:
             precio_lista_col = lower_map.get("precio_lista_09")
             costo_min_c = lower_map.get("costo_min")
             costo_max_c = lower_map.get("costo_max")
-            ex_int_c = lower_map.get("existencia_intermedio")
             ex_tot_resumen = (
                 lower_map.get("existencia_total")
                 if lower_map.get("existencia_total") in df_fil.columns
@@ -4251,7 +4466,6 @@ def _render_tab_auditoria_referencias() -> None:
                     else None
                 )
             )
-            costo_int_c = lower_map.get("costo_intermedio")
             vpc_sql = lower_map.get("var_preciocop")
             vusd_sql = lower_map.get("var_preciousd")
             # Vista estratégica: identificar → priorizar (score) → problema 1 (última vs penúltima) → problema 2 (vs costo inv.) → magnitud.
@@ -4275,9 +4489,7 @@ def _render_tab_auditoria_referencias() -> None:
                     precio_lista_col,
                     ex_tot_resumen,
                     costo_min_c,
-                    costo_int_c,
                     costo_max_c,
-                    ex_int_c,
                     sistema_precio_col,
                     modelo_col,
                     lower_map.get("margen_objetivo_sistema"),
@@ -4333,18 +4545,31 @@ def _render_tab_auditoria_referencias() -> None:
         with subtabs[2]:
             st.markdown("##### Vista operativa — revisar y exportar")
             st.caption(
-                "**Misma priorización** que arriba, en **bloques** (menos scroll horizontal): primero **semáforo y score**, "
-                "luego **problema 1** y **problema 2**, después contexto y evidencia de compras, y factores logísticos. "
-                "Al final, **CSV** del slice para Excel u operaciones."
+                "**Misma priorización** que la vista táctica (orden por **score**), pero en **tablas angostas** para trabajar sin "
+                "tanto scroll. Flujo recomendado para el analista: **política del ítem** → **riesgo (semáforo/score)** → "
+                "**salto entre compras** → **vs inventario** → **exposición en stock y márgenes** → **evidencia de facturas** → "
+                "**ajuste logístico COP**. Al final, **CSV** para Excel o compras."
             )
-            st.markdown("**Lectura por bloques**")
+            with st.expander("Guía rápida — qué mirar en cada bloque", expanded=False):
+                st.markdown(
+                    """
+1. **Identificación** — ¿A qué segmento pertenece la ref. y qué margen objetivo tiene?
+2. **Semáforo / score** — ¿Qué tan urgente es frente al resto del filtro?
+3. **Problema 1** — ¿El precio saltó entre las dos últimas compras (USD, COP, TRM)?
+4. **Problema 2** — ¿La última compra está lejos del costo promedio de inventario?
+5. **Bodegas y lista** — ¿Cuánto stock y margen hay en juego?
+6. **Evidencia última / penúltima** — ¿Quién vendió, a qué precio y en qué fecha?
+7. **Factores logísticos** — ¿El COP ajustado por origen explica parte del desvío?
+"""
+                )
             st.caption(
-                "En **cada bloque**, las primeras columnas son siempre **Ref.**, **Refs alternas** y **Descripción** (cuando existan en datos). "
-                "Luego el resto del bloque: prioridad → variación entre compras → vs inventario → negocio → comprobantes → ajuste COP."
+                "En **cada tabla**, las primeras columnas son **Ref.**, **Refs alternas** y **Descripción** cuando existan; "
+                "luego las columnas específicas del bloque."
             )
             bloques = _auditoria_vista_bloques(lower_map)
             ref_alt_col = lower_map.get("referencias_alternas")
-            for bi, (titulo, keys) in enumerate(bloques):
+            bloque_visible_idx = 0
+            for bi, (titulo, ctx_bloque, keys) in enumerate(bloques):
                 cols_b: list[str] = []
                 for ky in keys:
                     if ky == "_existencia_suma_niveles":
@@ -4362,6 +4587,7 @@ def _render_tab_auditoria_referencias() -> None:
                 cols_b = id_parts + p2_front + body
                 if not cols_b:
                     continue
+                bloque_visible_idx += 1
                 df_b = df_vista[cols_b].copy()
                 df_b = _auditoria_coerce_display_dtypes(df_b)
                 df_b = df_b.rename(columns=alias_cols)
@@ -4369,7 +4595,8 @@ def _render_tab_auditoria_referencias() -> None:
                 _auditoria_df_map_semaforo_ui(df_b, sem_col, alias_cols)
                 cfg_b = _auditoria_build_column_config(cols_b, alias_cols)
                 cfg_b = {k: v for k, v in cfg_b.items() if k in df_b.columns}
-                st.markdown(f"**{titulo}**")
+                st.markdown(f"**Bloque {bloque_visible_idx} — {titulo}**")
+                st.caption(ctx_bloque)
                 st.dataframe(
                     df_b,
                     width="stretch",

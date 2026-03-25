@@ -45,8 +45,9 @@ FACTOR_USA  = float(config["FACTORES"]["factor_usa"])
 FACTOR_EUR  = float(config["FACTORES"]["factor_eur"])
 CHUNK       = 50_000
 
-_ANIO_ANTERIOR   = datetime.now().year - 1
-FECHA_PART_DESDE = f"{_ANIO_ANTERIOR}-01-01"
+# Participación e importaciones: desde 01/01 del (año actual − 2), hasta hoy.
+_ANIO_PART_DESDE = datetime.now().year - 2
+FECHA_PART_DESDE = f"{_ANIO_PART_DESDE}-01-01"
 FECHA_PART_HASTA = datetime.now().strftime("%Y-%m-%d")
 
 
