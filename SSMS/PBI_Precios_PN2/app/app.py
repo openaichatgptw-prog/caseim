@@ -2975,6 +2975,26 @@ def _render_tab_consulta_masiva() -> None:
                 "auditoría en la misma tabla (orden lógico)."
             )
 
+    personalizar_cols = st.toggle(
+        "🎛️ Seleccionar columnas de consulta masiva",
+        value=False,
+        key="consulta_masiva_cols_custom_toggle",
+        help="Elige exactamente qué columnas mostrar en la tabla principal de consulta masiva.",
+    )
+    if personalizar_cols and not df_show.empty:
+        cols_default = list(df_show.columns)
+        cols_sel = st.multiselect(
+            "Columnas visibles (consulta masiva)",
+            options=cols_default,
+            default=cols_default,
+            key="consulta_masiva_cols_custom_sel",
+        )
+        if cols_sel:
+            df_show = df_show[cols_sel]
+        else:
+            st.warning("Debes seleccionar al menos una columna para mostrar la tabla.")
+            return
+
     fmt_map = _consulta_masiva_build_format_map(df_show)
     st.dataframe(
         df_show.style.format(fmt_map).apply(_consulta_masiva_style_mejor_origen, axis=1),
@@ -3091,12 +3111,60 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
         factor_euro=float(factor_euro),
         disp_umbral=float(disp_umbral_masivo),
     )
+    # Widget para anexar columnas adicionales del resultado base al cotizador.
+    base_keys = ("Referencia_Entrada", "Referencia_Cruce")
+    cols_base_disponibles = [c for c in df_out.columns if c not in base_keys and c not in df_cot.columns]
+    cols_base_default = [c for c in ("Tipo_Coincidencia", "Mejor_Origen", "Precio Brasil", "Precio Usa", "Precio Europa") if c in cols_base_disponibles]
+    traer_datos_extra = st.toggle(
+        "➕ Traer más datos al cotizador",
+        value=False,
+        key="consulta_masiva_cot_extra_toggle",
+        help="Permite anexar columnas adicionales del resultado de consulta masiva para dar más contexto al precio recomendado.",
+    )
+    cols_extra_sel: list[str] = []
+    if traer_datos_extra and cols_base_disponibles:
+        cols_extra_sel = st.multiselect(
+            "Columnas adicionales",
+            options=cols_base_disponibles,
+            default=cols_base_default,
+            key="consulta_masiva_cot_extra_cols",
+            help="Se añaden al final de la tabla del cotizador.",
+        )
+    if cols_extra_sel:
+        extras = df_out[list(base_keys) + cols_extra_sel].copy()
+        # Evita colisiones por columnas repetidas en el merge.
+        extras = extras.rename(columns={c: f"_extra_{c}" for c in cols_extra_sel if c in df_cot.columns})
+        df_cot = df_cot.merge(extras, on=list(base_keys), how="left")
+
+    # Reordena columnas: contexto USD al lado de precio experto.
+    cot_order_pref = [
+        "Referencia_Entrada",
+        "Referencia_Cruce",
+        "Estado",
+        "P_venta_experto_COP",
+        "USD_base",
+        "USD_base_fuente",
+        "USD_base_unidades_disp",
+        "P_piso_inventario_COP",
+        "P_recomendado_COP",
+        "Regla_precio",
+        "Estado_cotizacion",
+        "Alertas_detalle",
+    ]
+    cot_order = [c for c in cot_order_pref if c in df_cot.columns] + [c for c in df_cot.columns if c not in cot_order_pref]
+    df_cot = df_cot[cot_order]
+
     df_cot_show = _renombrar_negocio(df_cot)
     fmt_cot = _consulta_masiva_cotizador_format_map(df_cot_show)
     st.dataframe(
         df_cot_show.style.format(fmt_cot, na_rep="—"),
         width="stretch",
         hide_index=True,
+    )
+    st.caption(
+        "`Fuente USD` indica de dónde salió el `USD base (cotiz.)`: "
+        "`Mejor_Precio_Ajustado` (origen BR/USA/EUR con factor) o, si no hubo origen válido, "
+        "respaldo `Ult. Fecha Compra / lista (USD)`."
     )
     st.caption(
         "**Guía Δ lista vs repo (%):** diferencia porcentual entre `Precio lista 09` y `P_recomendado_COP` "
