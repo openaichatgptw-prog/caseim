@@ -2172,7 +2172,7 @@ def _render_tab_consulta() -> None:
         st.info("Consultas pausadas mientras termina la actualización. Puedes cambiar entre pestañas libremente.")
         return
 
-    tab_individual, tab_masiva = st.tabs(["Consulta individual", "Consulta masiva (CSV)"])
+    tab_individual, tab_masiva = st.tabs(["Consulta individual", "Consulta en lote (CSV)"])
     with tab_individual:
         _render_tab_consulta_individual()
     with tab_masiva:
@@ -2688,88 +2688,124 @@ def _cot_piso_txt_to_slider() -> None:
 
 
 def _render_tab_consulta_masiva() -> None:
-    st.markdown('<p class="consulta-page-lead">Consulta masiva de referencias</p>', unsafe_allow_html=True)
-    st.caption("Carga un CSV con una columna de referencias (principales o alternas) para resolverlas en lote.")
+    st.markdown('<p class="consulta-page-lead">Consulta en lote (CSV) + consulta rápida</p>', unsafe_allow_html=True)
+    st.caption("Carga un CSV para resolver referencias en lote o consulta 1 referencia sin archivo.")
+
+    c_ref, c_btn = st.columns([3.0, 1.0], gap="small", vertical_alignment="bottom")
+    with c_ref:
+        ref_rapida = st.text_input(
+            "Consulta rápida (1 referencia)",
+            placeholder="Referencia principal, normalizada o alterna",
+            key="consulta_masiva_ref_rapida",
+        )
+    with c_btn:
+        # Botón alineado y más compacto.
+        run_rapida = st.button(
+            "Consultar",
+            key="consulta_masiva_ref_rapida_run",
+            type="primary",
+            use_container_width=True,
+        )
+
     uploaded = st.file_uploader(
         "Archivo CSV",
         type=["csv"],
         key="consulta_masiva_csv",
         help="El archivo debe contener al menos una columna con códigos de referencia.",
     )
-    if uploaded is None:
-        st.info("Sube un CSV para comenzar.")
+    # Persistir modo rápido: si Streamlit rerunea (p.ej. al dar "Procesar"),
+    # el click del botón se pierde; guardamos la referencia en session_state.
+    if run_rapida and str(ref_rapida or "").strip():
+        st.session_state["consulta_masiva_modo_rapido"] = True
+        st.session_state["consulta_masiva_modo_rapido_ref"] = str(ref_rapida).strip()
+    if uploaded is not None:
+        st.session_state["consulta_masiva_modo_rapido"] = False
+
+    modo_rapido = bool(st.session_state.get("consulta_masiva_modo_rapido", False))
+    ref_rapida_persist = str(st.session_state.get("consulta_masiva_modo_rapido_ref", "") or "").strip()
+
+    if uploaded is None and not (modo_rapido and ref_rapida_persist):
+        st.info("Sube un CSV o usa la consulta rápida.")
         return
 
-    raw = uploaded.getvalue()
-    if not raw:
-        st.warning("El archivo está vacío.")
-        return
+    if modo_rapido and ref_rapida_persist:
+        refs_unicas = [ref_rapida_persist]
+        col_ref = "Consulta rápida"
+        raw = ref_rapida_persist.encode("utf-8", errors="ignore")
+        st.caption("Modo consulta rápida: 1 referencia.")
+    else:
+        raw = uploaded.getvalue()
+        if not raw:
+            st.warning("El archivo está vacío.")
+            return
 
-    try:
-        text_csv = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text_csv = raw.decode("latin-1")
+        try:
+            text_csv = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text_csv = raw.decode("latin-1")
 
-    # Referencias se manejan siempre como texto para evitar conversiones tipo 12345 -> 12345.0
-    # Evitamos `sep=None` porque en archivos de 1 sola columna puede inferir separadores erróneos.
-    non_empty_lines = [ln.strip() for ln in text_csv.splitlines() if ln.strip()]
-    if not non_empty_lines:
-        st.warning("El CSV no contiene datos.")
-        return
-    sample = non_empty_lines[0]
-    has_common_delim = any(d in sample for d in [",", ";", "\t", "|"])
-    try:
-        if has_common_delim:
-            df_csv = pd.read_csv(
-                io.StringIO(text_csv),
-                sep=None,
-                engine="python",
-                dtype=str,
-                keep_default_na=False,
-            )
-        else:
-            # CSV de una sola columna y sin encabezado.
-            df_csv = pd.DataFrame({"Referencia": non_empty_lines})
-    except Exception as exc:
-        st.error(f"No fue posible leer el CSV: {exc}")
-        return
+    if not (modo_rapido and ref_rapida_persist):
+        # Referencias se manejan siempre como texto para evitar conversiones tipo 12345 -> 12345.0
+        # Evitamos `sep=None` porque en archivos de 1 sola columna puede inferir separadores erróneos.
+        non_empty_lines = [ln.strip() for ln in text_csv.splitlines() if ln.strip()]
+        if not non_empty_lines:
+            st.warning("El CSV no contiene datos.")
+            return
 
-    if df_csv.empty or len(df_csv.columns) == 0:
-        st.warning("El CSV no contiene datos.")
-        return
+        sample = non_empty_lines[0]
+        has_common_delim = any(d in sample for d in [",", ";", "\t", "|"])
+        try:
+            if has_common_delim:
+                df_csv = pd.read_csv(
+                    io.StringIO(text_csv),
+                    sep=None,
+                    engine="python",
+                    dtype=str,
+                    keep_default_na=False,
+                )
+            else:
+                # CSV de una sola columna y sin encabezado.
+                df_csv = pd.DataFrame({"Referencia": non_empty_lines})
+        except Exception as exc:
+            st.error(f"No fue posible leer el CSV: {exc}")
+            return
 
-    cols = [str(c) for c in df_csv.columns]
-    default_idx = 0
-    for i, c in enumerate(cols):
-        if str(c).strip().lower() in {"referencia", "referencias", "ref", "codigo", "código"}:
-            default_idx = i
-            break
-    col_ref = st.selectbox(
-        "Columna con referencias",
-        options=cols,
-        index=default_idx,
-        key="consulta_masiva_col_ref",
-    )
+        if df_csv.empty or len(df_csv.columns) == 0:
+            st.warning("El CSV no contiene datos.")
+            return
 
-    serie = df_csv[col_ref].astype(str).str.strip()
+        cols = [str(c) for c in df_csv.columns]
+        default_idx = 0
+        for i, c in enumerate(cols):
+            if str(c).strip().lower() in {"referencia", "referencias", "ref", "codigo", "código"}:
+                default_idx = i
+                break
+        col_ref = st.selectbox(
+            "Columna con referencias",
+            options=cols,
+            index=default_idx,
+            key="consulta_masiva_col_ref",
+        )
 
-    def _normalizar_ref_csv(val: str) -> str:
-        s = str(val or "").strip()
-        if not s:
-            return ""
-        # Limpia ruido común de Excel cuando un código texto se guarda/carga como float.
-        if re.fullmatch(r"\d+\.0+", s):
-            return s.split(".", 1)[0]
-        return s
+        serie = df_csv[col_ref].astype(str).str.strip()
 
-    refs = [_normalizar_ref_csv(x) for x in serie.tolist()]
-    refs = [x for x in refs if x]
-    if not refs:
-        st.warning("No se encontraron referencias válidas en la columna seleccionada.")
-        return
+        def _normalizar_ref_csv(val: str) -> str:
+            s = str(val or "").strip()
+            if not s:
+                return ""
+            # Limpia ruido común de Excel cuando un código texto se guarda/carga como float.
+            if re.fullmatch(r"\d+\.0+", s):
+                return s.split(".", 1)[0]
+            return s
 
-    refs_unicas = list(dict.fromkeys(refs))
-    st.caption(f"Referencias detectadas: {len(refs_unicas):,}")
+        refs = [_normalizar_ref_csv(x) for x in serie.tolist()]
+        refs = [x for x in refs if x]
+        if not refs:
+            st.warning("No se encontraron referencias válidas en la columna seleccionada.")
+            return
+
+        refs_unicas = list(dict.fromkeys(refs))
+        st.caption(f"Referencias detectadas: {len(refs_unicas):,}")
 
     c1, c2, c3 = st.columns(3, gap="small")
     with c1:
