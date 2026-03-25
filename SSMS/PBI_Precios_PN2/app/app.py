@@ -3111,15 +3111,27 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
         factor_euro=float(factor_euro),
         disp_umbral=float(disp_umbral_masivo),
     )
-    # Widget para anexar columnas adicionales del resultado base al cotizador.
+    # Vista ON/OFF del cotizador + columnas extra desde consulta masiva.
     base_keys = ("Referencia_Entrada", "Referencia_Cruce")
     cols_base_disponibles = [c for c in df_out.columns if c not in base_keys and c not in df_cot.columns]
-    cols_base_default = [c for c in ("Tipo_Coincidencia", "Mejor_Origen", "Precio Brasil", "Precio Usa", "Precio Europa") if c in cols_base_disponibles]
+    cols_base_default = [
+        c
+        for c in (
+            "Tipo_Coincidencia",
+            "Mejor_Origen",
+            "Mejor_Disponibilidad",
+            "Precio Brasil",
+            "Precio Usa",
+            "Precio Europa",
+            "Precio Prorrateo",
+        )
+        if c in cols_base_disponibles
+    ]
     traer_datos_extra = st.toggle(
-        "➕ Traer más datos al cotizador",
+        "➕ Vista analítica del cotizador (más campos)",
         value=False,
         key="consulta_masiva_cot_extra_toggle",
-        help="Permite anexar columnas adicionales del resultado de consulta masiva para dar más contexto al precio recomendado.",
+        help="OFF: vista ejecutiva (compacta). ON: añade métricas de diagnóstico y permite anexar columnas de la consulta masiva.",
     )
     cols_extra_sel: list[str] = []
     if traer_datos_extra and cols_base_disponibles:
@@ -3136,25 +3148,43 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
         extras = extras.rename(columns={c: f"_extra_{c}" for c in cols_extra_sel if c in df_cot.columns})
         df_cot = df_cot.merge(extras, on=list(base_keys), how="left")
 
-    # Reordena columnas: contexto USD al lado de precio experto.
-    cot_order_pref = [
+    # Orden profesional: identificación -> decisión -> drivers -> control.
+    cot_core_pref = [
         "Referencia_Entrada",
         "Referencia_Cruce",
         "Estado",
+        "Estado_cotizacion",
+        "P_recomendado_COP",
+        "Regla_precio",
+        "P_piso_inventario_COP",
         "P_venta_experto_COP",
         "USD_base",
         "USD_base_fuente",
         "USD_base_unidades_disp",
-        "P_piso_inventario_COP",
-        "P_recomendado_COP",
-        "Regla_precio",
-        "Estado_cotizacion",
+        "Costo_Min",
+        "Margen_pct_cot",
+        "TRM_cot",
         "Alertas_detalle",
     ]
-    cot_order = [c for c in cot_order_pref if c in df_cot.columns] + [c for c in df_cot.columns if c not in cot_order_pref]
+    cot_analitica_pref = [
+        "Costo_Max",
+        "Existencia_Total",
+        "Precio_Lista_09",
+        "Ult_venta_guia",
+        "Guia_lista09_vs_repo_pct",
+        "Guia_venta_vs_repo_pct",
+    ]
+    cot_core = [c for c in cot_core_pref if c in df_cot.columns]
+    cot_analitica = [c for c in cot_analitica_pref if c in df_cot.columns]
+    cot_order = cot_core + cot_analitica + [c for c in df_cot.columns if c not in (cot_core + cot_analitica)]
     df_cot = df_cot[cot_order]
 
-    df_cot_show = _renombrar_negocio(df_cot)
+    cot_view_cols = cot_core if not traer_datos_extra else (cot_core + cot_analitica)
+    cot_view_cols = [c for c in cot_view_cols if c in df_cot.columns]
+    cot_view_cols = cot_view_cols + [c for c in df_cot.columns if c.startswith("_extra_")]
+    df_cot_view = df_cot[cot_view_cols] if cot_view_cols else df_cot
+
+    df_cot_show = _renombrar_negocio(df_cot_view)
     fmt_cot = _consulta_masiva_cotizador_format_map(df_cot_show)
     st.dataframe(
         df_cot_show.style.format(fmt_cot, na_rep="—"),
