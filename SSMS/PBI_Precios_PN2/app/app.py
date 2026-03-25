@@ -1733,6 +1733,7 @@ BUSINESS_LABELS: Final[dict[str, str]] = {
     "Referencia": "Ref",
     "Referencia_Cruce": "Ref. cruce",
     "USD_base": "USD base (cotiz.)",
+    "USD_base_unidades_disp": "Und. disp. origen USD base",
     "USD_base_fuente": "Fuente USD",
     "Margen_pct_cot": "Margen % (cot.)",
     "TRM_cot": "TRM (cot.)",
@@ -2594,6 +2595,11 @@ def _consulta_masiva_cotizador_df(
                 "Estado": row.get("Estado"),
                 "Mejor_Origen": row.get("Mejor_Origen"),
                 "USD_base": float(p_adj) if p_adj is not None and pd.notna(p_adj) else None,
+                "USD_base_unidades_disp": (
+                    float(row.get("Mejor_Disponibilidad"))
+                    if row.get("Mejor_Disponibilidad") is not None and pd.notna(row.get("Mejor_Disponibilidad"))
+                    else None
+                ),
                 "USD_base_fuente": fuente_usd or None,
                 "Costo_Min": float(costo_min) if costo_min is not None and pd.notna(costo_min) else None,
                 "Costo_Max": float(costo_max) if costo_max is not None and pd.notna(costo_max) else None,
@@ -2629,6 +2635,7 @@ def _consulta_masiva_cotizador_format_map(df: pd.DataFrame) -> dict[str, str]:
             "Precio lista 09 (COP)",
             "Últ. venta (guía)",
             "Exist. total (ref.)",
+            "Und. disp. origen USD base",
             "Margen % (cot.)",
             "TRM (cot.)",
         ):
