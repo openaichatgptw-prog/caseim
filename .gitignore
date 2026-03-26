@@ -23,9 +23,23 @@ SSMS/config.json
 # Ignorar archivos CSV y Excel
 *.csv
 *.xlsx
+*.xls
+*.xlsm
 *.txt
 *.json
 *.duckdb
+*.duckdb.wal
 *.ini
+*.lock
+
+# Sensibles / datos locales del proyecto PBI_Precios_PN2
+SSMS/PBI_Precios_PN2/pipeline*.duckdb
+SSMS/PBI_Precios_PN2/pipeline*.duckdb.wal
+SSMS/PBI_Precios_PN2/*.csv
+SSMS/PBI_Precios_PN2/*.xlsx
+SSMS/PBI_Precios_PN2/*.xls
+SSMS/PBI_Precios_PN2/*.xlsm
+SSMS/PBI_Precios_PN2/.update_in_progress.lock
+SSMS/PBI_Precios_PN2/app/user_filter_prefs.json
 # Plantilla sin secretos (sí se versiona)
 !SSMS/PBI_Precios_PN2/Config.example.ini

@@ -87,6 +87,29 @@ def _is_duckdb_lock_error(text: str) -> bool:
     return mentions_duckdb and any(sig in txt for sig in lock_signals)
 
 
+def _cleanup_stale_work_dbs(master_db_path: Path, keep_paths: set[Path] | None = None) -> None:
+    """
+    Limpia bases temporales huérfanas `pipeline.work*.duckdb` (y su WAL) para
+    evitar acumulación en OneDrive/Windows.
+    """
+    keep = {p.resolve() for p in (keep_paths or set())}
+    parent = master_db_path.parent
+    stem = master_db_path.stem
+    for p in parent.glob(f"{stem}.work*.duckdb"):
+        try:
+            rp = p.resolve()
+            if rp in keep:
+                continue
+            wal = p.with_suffix(".duckdb.wal")
+            if wal.exists():
+                wal.unlink()
+            if p.exists():
+                p.unlink()
+        except Exception:
+            # Si está bloqueado en ese momento, se reintentará en la siguiente corrida.
+            continue
+
+
 def ejecutar_pipelines(
     log_callback: Callable[[str], None] | None = None,
     ejecutar_reportes_sql: bool | None = None,
@@ -101,6 +124,7 @@ def ejecutar_pipelines(
     env["PYTHONUTF8"] = "1"
     master_db_path = _resolve_master_db_path()
     work_db_path = master_db_path.with_name(f"{master_db_path.stem}.work.duckdb")
+    _cleanup_stale_work_dbs(master_db_path, keep_paths={work_db_path})
     env["PIPELINE_DUCKDB_PATH"] = str(work_db_path)
     for suffix in [".duckdb", ".duckdb.wal"]:
         p = work_db_path.with_suffix(suffix) if suffix != ".duckdb" else work_db_path
@@ -218,5 +242,6 @@ def ejecutar_pipelines(
                 p.unlink()
     except Exception:
         pass
+    _cleanup_stale_work_dbs(master_db_path, keep_paths={work_db_path})
 
     return ok, "\n".join(salida).strip()
