@@ -3976,14 +3976,16 @@ def _margen_ui_filtros_completos(df_margen: pd.DataFrame, margen_col: str, preci
         )
         _init_multiselect_list("margen_filtro_instalacion", nom_inst)
         inst_sel = st.multiselect("Nom. instalación", options=nom_inst, key="margen_filtro_instalacion")
-    with filtros8:
-        sistemas = (
-            sorted([str(x) for x in df_margen["Sistema_Precio"].dropna().unique()])
-            if "Sistema_Precio" in df_margen.columns
-            else []
-        )
-        _init_multiselect_list("margen_filtro_sistema", sistemas)
-        sistema_sel = st.multiselect("Sistema precio", options=sistemas, key="margen_filtro_sistema")
+
+        # Rango manual de margen (único modo).
+        _marg_series = pd.to_numeric(df_margen[margen_col], errors="coerce")
+        _marg_valid = _marg_series.dropna()
+        margen_min_base = float(_marg_valid.min()) if not _marg_valid.empty else -300.0
+        margen_max_base = float(_marg_valid.max()) if not _marg_valid.empty else 300.0
+        margen_min_ui = float(min(-300.0, margen_min_base))
+        margen_max_ui = float(max(300.0, margen_max_base))
+        if margen_min_ui >= margen_max_ui:
+            margen_max_ui = margen_min_ui + 1.0
 
         def _sync_margen_from_slider() -> None:
             lo, hi = st.session_state["margen_pct_range"]
@@ -3993,48 +3995,57 @@ def _margen_ui_filtros_completos(df_margen: pd.DataFrame, margen_col: str, preci
         def _sync_margen_from_inputs() -> None:
             lo = float(st.session_state.get("margen_pct_desde", -100.0))
             hi = float(st.session_state.get("margen_pct_hasta", 100.0))
-            lo = max(-300.0, min(lo, 300.0))
-            hi = max(-300.0, min(hi, 300.0))
+            lo = max(margen_min_ui, min(lo, margen_max_ui))
+            hi = max(margen_min_ui, min(hi, margen_max_ui))
             if lo > hi:
                 lo, hi = hi, lo
             st.session_state["margen_pct_desde"] = lo
             st.session_state["margen_pct_hasta"] = hi
             st.session_state["margen_pct_range"] = (lo, hi)
 
-        st.session_state.setdefault("margen_pct_range", (-100.0, 100.0))
+        st.session_state.setdefault("margen_pct_range", (margen_min_ui, margen_max_ui))
         st.session_state.setdefault("margen_pct_desde", float(st.session_state["margen_pct_range"][0]))
         st.session_state.setdefault("margen_pct_hasta", float(st.session_state["margen_pct_range"][1]))
         _sync_margen_from_inputs()
 
         st.slider(
             "Rango de margen (%)",
-            min_value=-300.0,
-            max_value=300.0,
+            min_value=float(margen_min_ui),
+            max_value=float(margen_max_ui),
             step=1.0,
             key="margen_pct_range",
             on_change=_sync_margen_from_slider,
         )
+        st.caption(f"Mínimo de margen detectado en base: {margen_min_base:,.2f}%")
+    with filtros8:
+        sistemas = (
+            sorted([str(x) for x in df_margen["Sistema_Precio"].dropna().unique()])
+            if "Sistema_Precio" in df_margen.columns
+            else []
+        )
+        _init_multiselect_list("margen_filtro_sistema", sistemas)
+        sistema_sel = st.multiselect("Sistema precio", options=sistemas, key="margen_filtro_sistema")
         m1, m2 = st.columns(2, gap="small")
         with m1:
             st.number_input(
-                "Desde Margen %",
-                min_value=-300.0,
-                max_value=300.0,
+                "Desde %",
+                min_value=float(margen_min_ui),
+                max_value=float(margen_max_ui),
                 step=1.0,
                 key="margen_pct_desde",
                 on_change=_sync_margen_from_inputs,
             )
         with m2:
             st.number_input(
-                "Hasta Margen %",
-                min_value=-300.0,
-                max_value=300.0,
+                "Hasta %",
+                min_value=float(margen_min_ui),
+                max_value=float(margen_max_ui),
                 step=1.0,
                 key="margen_pct_hasta",
                 on_change=_sync_margen_from_inputs,
             )
-        margen_desde = float(st.session_state["margen_pct_desde"])
-        margen_hasta = float(st.session_state["margen_pct_hasta"])
+    margen_desde = float(st.session_state["margen_pct_desde"])
+    margen_hasta = float(st.session_state["margen_pct_hasta"])
 
     df_filtrado = df_margen.copy()
     df_filtrado = df_filtrado[df_filtrado["_ref_codigo"] != "SIN_REFERENCIA"]
@@ -5092,7 +5103,17 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
         df_fil = df_fil[df_fil[sem_col].fillna("").astype(str).isin(sem_sel)]
     if txt:
         q = txt.upper()
-        search_cols = [c for c in [ref_col, desc_col, sistema_precio_col, equipo_col] if c]
+        refs_alt_col = None
+        for cand in (
+            "Referencias_Alternas",
+            "Referencia_Alternas",
+            "RefsAlternas",
+            "Refs_Alternas",
+        ):
+            if cand in df_fil.columns:
+                refs_alt_col = cand
+                break
+        search_cols = [c for c in [ref_col, refs_alt_col, desc_col, sistema_precio_col, equipo_col] if c]
         if search_cols:
             mask = pd.Series(False, index=df_fil.index)
             for c in search_cols:

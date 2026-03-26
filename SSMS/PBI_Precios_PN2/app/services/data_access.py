@@ -1831,6 +1831,12 @@ def obtener_auditoria_referencias(
         sem_col = lower_map.get("semaforo_variacion")
         ref_col = lower_map.get("referencia")
         desc_col = lower_map.get("descripcion") or lower_map.get("descripción")
+        refs_alt_col = (
+            lower_map.get("referencias_alternas")
+            or lower_map.get("referencia_alternas")
+            or lower_map.get("refsalternas")
+            or lower_map.get("refs_alternas")
+        )
 
         where_parts: list[str] = []
         params: list[Any] = []
@@ -1845,6 +1851,7 @@ def obtener_auditoria_referencias(
             search_cols: list[str] = []
             for cand in (
                 ref_col,
+                refs_alt_col,
                 desc_col,
                 sem_col,
                 lower_map.get("sistema_precio_item"),
