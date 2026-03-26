@@ -1947,6 +1947,29 @@ def _cargar_margenes_para_dashboard() -> tuple:
     return df, margen_col
 
 
+@st.cache_data(show_spinner=False, ttl=600, max_entries=3)
+def _cargar_referencias_catalogo_masivo_cached() -> list[str]:
+    """Catálogo único de referencias para consulta masiva sin CSV."""
+    df = obtener_dataset_margenes(limite=0, margen_min=-10_000.0, margen_max=100.0)
+    if df is None or df.empty:
+        return []
+    refs: list[str] = []
+    for c in ("Referencia_Original", "Referencia_Normalizada", "Referencia"):
+        if c in df.columns:
+            vals = (
+                df[c]
+                .astype(str)
+                .str.strip()
+                .replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
+                .dropna()
+                .tolist()
+            )
+            refs.extend(vals)
+    if not refs:
+        return []
+    return list(dict.fromkeys(refs))
+
+
 @st.cache_data(show_spinner=False, ttl=300)
 def _cargar_auditoria() -> dict:
     return obtener_auditoria_dashboard()
@@ -2750,7 +2773,26 @@ def _cot_piso_txt_to_slider() -> None:
 
 def _render_tab_consulta_masiva() -> None:
     st.markdown('<p class="consulta-page-lead">Consulta en lote (CSV) + consulta rápida</p>', unsafe_allow_html=True)
-    st.caption("Carga un CSV para resolver referencias en lote o consulta 1 referencia sin archivo.")
+    st.caption("Carga un CSV, consulta 1 referencia o analiza todo el catálogo.")
+
+    analizar_todas = st.toggle(
+        "Analizar todas las referencias (catálogo completo)",
+        value=False,
+        key="consulta_masiva_all_refs",
+        help="Usa todas las referencias disponibles en el dataset de márgenes para análisis masivo.",
+    )
+    limite_all_refs = 0
+    if analizar_todas:
+        limite_all_refs = int(
+            st.number_input(
+                "Límite de referencias para procesar (0 = todas)",
+                min_value=0,
+                max_value=500_000,
+                step=1_000,
+                value=0,
+                key="consulta_masiva_all_refs_limit",
+            )
+        )
 
     c_ref, c_btn = st.columns([3.0, 1.0], gap="small", vertical_alignment="bottom")
     with c_ref:
@@ -2785,11 +2827,21 @@ def _render_tab_consulta_masiva() -> None:
     modo_rapido = bool(st.session_state.get("consulta_masiva_modo_rapido", False))
     ref_rapida_persist = str(st.session_state.get("consulta_masiva_modo_rapido_ref", "") or "").strip()
 
-    if uploaded is None and not (modo_rapido and ref_rapida_persist):
+    if not analizar_todas and uploaded is None and not (modo_rapido and ref_rapida_persist):
         st.info("Sube un CSV o usa la consulta rápida.")
         return
 
-    if modo_rapido and ref_rapida_persist:
+    if analizar_todas:
+        refs_unicas = _cargar_referencias_catalogo_masivo_cached()
+        if limite_all_refs > 0:
+            refs_unicas = refs_unicas[:limite_all_refs]
+        if not refs_unicas:
+            st.warning("No se encontraron referencias en el catálogo para procesar.")
+            return
+        col_ref = "Catálogo completo"
+        raw = f"ALL_REFS:{len(refs_unicas)}:{limite_all_refs}".encode("utf-8")
+        st.caption(f"Modo catálogo completo: {len(refs_unicas):,} referencias a procesar.")
+    elif modo_rapido and ref_rapida_persist:
         refs_unicas = [ref_rapida_persist]
         col_ref = "Consulta rápida"
         raw = ref_rapida_persist.encode("utf-8", errors="ignore")
@@ -2805,7 +2857,7 @@ def _render_tab_consulta_masiva() -> None:
         except UnicodeDecodeError:
             text_csv = raw.decode("latin-1")
 
-    if not (modo_rapido and ref_rapida_persist):
+    if not analizar_todas and not (modo_rapido and ref_rapida_persist):
         # Referencias se manejan siempre como texto para evitar conversiones tipo 12345 -> 12345.0
         # Evitamos `sep=None` porque en archivos de 1 sola columna puede inferir separadores erróneos.
         non_empty_lines = [ln.strip() for ln in text_csv.splitlines() if ln.strip()]
@@ -2987,13 +3039,45 @@ def _render_tab_consulta_masiva() -> None:
     if run_masiva:
         try:
             resolver_masivo = getattr(data_access_service, "obtener_resumen_referencias_masivo", None)
-            if resolver_masivo is None:
-                df_sql = _consulta_masiva_fallback(refs_unicas)
-                st.info(
-                    "Se usó modo compatibilidad para consulta masiva (sin método masivo en data_access)."
-                )
+            if analizar_todas:
+                # Progreso por bloques para catálogos grandes.
+                chunk_size = 2_000
+                total_refs = len(refs_unicas)
+                total_chunks = max(1, (total_refs + chunk_size - 1) // chunk_size)
+                pbar = st.progress(0.0, text=f"Explorando referencias... 0/{total_refs:,}")
+                estado = st.empty()
+                frames: list[pd.DataFrame] = []
+                for i in range(total_chunks):
+                    a = i * chunk_size
+                    b = min(total_refs, (i + 1) * chunk_size)
+                    lote = refs_unicas[a:b]
+                    if resolver_masivo is None:
+                        df_lote = _consulta_masiva_fallback(lote)
+                    else:
+                        df_lote = resolver_masivo(lote)
+                    if isinstance(df_lote, pd.DataFrame) and not df_lote.empty:
+                        frames.append(df_lote)
+                    avance = float(b) / float(max(1, total_refs))
+                    pbar.progress(avance, text=f"Explorando referencias... {b:,}/{total_refs:,}")
+                    estado.caption(f"Lote {i+1}/{total_chunks} procesado ({b-a:,} refs).")
+                pbar.empty()
+                estado.empty()
+                if not frames:
+                    df_sql = pd.DataFrame()
+                else:
+                    df_sql = pd.concat(frames, ignore_index=True)
+                    if "Referencia_Entrada" in df_sql.columns:
+                        df_sql = df_sql.drop_duplicates(subset=["Referencia_Entrada"], keep="first")
+                if resolver_masivo is None:
+                    st.info("Se usó modo compatibilidad por lotes (sin método masivo en data_access).")
             else:
-                df_sql = resolver_masivo(refs_unicas)
+                if resolver_masivo is None:
+                    df_sql = _consulta_masiva_fallback(refs_unicas)
+                    st.info(
+                        "Se usó modo compatibilidad para consulta masiva (sin método masivo en data_access)."
+                    )
+                else:
+                    df_sql = resolver_masivo(refs_unicas)
         except Exception as exc:
             st.error(f"No fue posible ejecutar la consulta masiva: {exc}")
             return
@@ -3100,9 +3184,18 @@ def _render_tab_consulta_masiva() -> None:
     )
 
     st.markdown("---")
-    st.markdown("##### Cotizador automático (oferta al negocio)")
-    with st.expander("Metodología de precio", expanded=False):
-        st.markdown(
+    st.markdown(
+        """
+<div style="border:1px solid #25314d;border-radius:12px;padding:10px 12px;background:#0f1a30;margin-bottom:8px;">
+  <div style="font-weight:700;color:#e5e7eb;">Cotizador automático (oferta al negocio)</div>
+  <div style="color:#9fb0cc;font-size:.9rem;">Calcula precio recomendado y alerta de riesgo con parámetros comerciales.</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    with st.container(border=True):
+        with st.expander("Metodología de precio", expanded=False):
+            st.markdown(
             r"""
 **Base en USD (importación)**  
 Se usa el **Mejor precio ajustado (USD)** de la tabla: menor precio entre orígenes Brasil / USA / Europa  
@@ -3131,7 +3224,7 @@ cuando existen ambos. **Precio lista 09** y **última venta** son **guías**: se
 Se señala si: inventario **≤ 3 uds.**; dispersión alta entre **orígenes USD**; **costo mín. vs costo máx.** inventario muy distintos; **lista 09** o **últ. venta** muy lejos del precio de reposición. El **costo mín.** alimenta la cotización (piso y contexto), sin comparar contra costo prom.  
 Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el estado pasa a **“Precio no calculable automáticamente”** y se **anula** el precio recomendado (revisión manual obligatoria).
             """.strip()
-        )
+            )
 
     # Slider ↔ caja: mismo valor en session_state (callbacks on_change)
     _cot_defaults: tuple[tuple[str, int | str], ...] = (
@@ -3148,6 +3241,7 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
 
     c_mg, c_trm, c_piso = st.columns(3)
     with c_mg:
+        st.caption("**Margen objetivo**")
         st.slider(
             "Margen objetivo sobre venta (%)",
             min_value=10,
@@ -3164,6 +3258,7 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
             on_change=_cot_margen_txt_to_slider,
         )
     with c_trm:
+        st.caption("**TRM de cálculo**")
         st.slider(
             "TRM (COP por USD)",
             min_value=3500,
@@ -3179,6 +3274,7 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
             on_change=_cot_trm_txt_to_slider,
         )
     with c_piso:
+        st.caption("**Piso por inventario**")
         st.slider(
             "Margen piso inventario X (%)",
             min_value=5,
@@ -3208,6 +3304,59 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
         factor_euro=float(factor_euro),
         disp_umbral=float(disp_umbral_masivo),
     )
+    if "Estado_cotizacion" in df_cot.columns:
+        _estado = df_cot["Estado_cotizacion"].astype(str)
+        k_ok, k_rev, k_bloq = st.columns(3, gap="small")
+        k_ok.metric("OK / observaciones", f"{int((_estado == 'OK').sum() + (_estado == 'OK (con observaciones)').sum()):,}")
+        k_rev.metric("Revisar manual", f"{int((_estado == 'Revisar manual').sum()):,}")
+        k_bloq.metric("No calculable", f"{int((_estado == 'Precio no calculable automáticamente').sum()):,}")
+    with st.container(border=True):
+        st.markdown("##### Filtro rápido de riesgo")
+        r1, r2, r3 = st.columns([1.3, 1.0, 1.9], gap="medium")
+        with r1:
+            riesgo_x = float(
+                st.number_input(
+                    "X existencias (riesgo)",
+                    min_value=0.0,
+                    max_value=50_000.0,
+                    value=float(st.session_state.get("consulta_masiva_riesgo_x", 2.0)),
+                    step=0.5,
+                    key="consulta_masiva_riesgo_x",
+                    help="Umbral de inventario para riesgo. Se filtra cuando `Existencia_Total <= X` junto con estado crítico de cotización.",
+                )
+            )
+        with r2:
+            st.markdown("<div style='height:1.35rem'></div>", unsafe_allow_html=True)
+            only_risk = st.toggle(
+                "Mostrar solo riesgo",
+                value=bool(st.session_state.get("consulta_masiva_only_risk", False)),
+                key="consulta_masiva_only_risk",
+                help="Activa para mostrar solo referencias en riesgo según existencia y estado de cotización.",
+            )
+        with r3:
+            estado_riesgo_ui = "ACTIVO" if bool(st.session_state.get("consulta_masiva_only_risk", False)) else "INACTIVO"
+            st.markdown("<div style='height:1.25rem'></div>", unsafe_allow_html=True)
+            color_estado = "#22c55e" if estado_riesgo_ui == "ACTIVO" else "#94a3b8"
+            st.markdown(
+                f"<div style='line-height:1.35;'>"
+                f"<span style='font-weight:700;color:{color_estado};'>{estado_riesgo_ui}</span>"
+                f"<span style='color:#9fb0cc;'> · condición: </span>"
+                f"<code style='color:#86efac;'>Existencia_Total &lt;= {riesgo_x:g}</code>"
+                f"<span style='color:#9fb0cc;'> y </span>"
+                f"<code style='color:#86efac;'>Estado_cotizacion en [Revisar manual, Precio no calculable automáticamente]</code>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+    if only_risk:
+        if "Existencia_Total" in df_cot.columns and "Estado_cotizacion" in df_cot.columns:
+            estados_riesgo = {"Revisar manual", "Precio no calculable automáticamente"}
+            ex = pd.to_numeric(df_cot["Existencia_Total"], errors="coerce")
+            st_cot = df_cot["Estado_cotizacion"].astype(str).str.strip()
+            mask_riesgo = (ex <= float(riesgo_x)) & st_cot.isin(estados_riesgo)
+            df_cot = df_cot[mask_riesgo].copy()
+            st.caption(f"Referencias en riesgo encontradas: {len(df_cot):,}")
+        else:
+            st.warning("No se pudo aplicar filtro de riesgo: faltan columnas requeridas.")
     # Vista ON/OFF del cotizador + columnas extra desde consulta masiva.
     base_keys = ("Referencia_Entrada", "Referencia_Cruce")
     cols_base_disponibles = [c for c in df_out.columns if c not in base_keys and c not in df_cot.columns]
@@ -3310,6 +3459,7 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
             file_name="consulta_masiva_resultado.csv",
             mime="text/csv",
             key="consulta_masiva_download",
+            help="Exporta la salida base de consulta masiva: cruce de referencias, orígenes/precios, disponibilidad y estado de coincidencia.",
         )
     with dl2:
         st.download_button(
@@ -3318,6 +3468,7 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
             file_name="consulta_masiva_cotizacion.csv",
             mime="text/csv",
             key="consulta_masiva_download_cot",
+            help="Exporta la salida del cotizador: precio recomendado, precio experto, piso por inventario, estado de cotización y alertas.",
         )
 
 
