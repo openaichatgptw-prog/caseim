@@ -1421,6 +1421,396 @@ def obtener_resumen_ventas_x_bodega() -> pd.DataFrame:
         return con.execute(sql).df()
 
 
+def obtener_dimensiones_ventas() -> dict[str, list[str]]:
+    """
+    Devuelve listas de valores para filtros del tablero de ventas.
+
+    Nota: "Sede" se toma de la descripción del CO de movimiento (`Descp. CO Mvto.`).
+    """
+    dims: dict[str, list[str]] = {
+        "sede": [],
+        "sistema_precio": [],
+        "rotacion": [],
+        "descrip_un": [],
+        "cliente": [],
+        "vendedor": [],
+        "linea": [],
+        "modelo": [],
+        "anio": [],
+        "mes": [],
+    }
+    with _connect() as con:
+        if not _table_exists(con, "ventas_raw"):
+            return dims
+
+        def _col_if_exists(col: str) -> str | None:
+            return col if _table_has_column(con, "ventas_raw", col) else None
+
+        col_sede = _col_if_exists("Descp. CO Mvto.")
+        col_sis = _col_if_exists("Sistema Precio")
+        col_rot = _col_if_exists("Rotacion")
+        col_un = _col_if_exists("Descrip. UN")
+        col_cli = _col_if_exists("Cliente")
+        col_ven = _col_if_exists("Vendedor")
+        col_lin = _col_if_exists("Linea")
+        col_mod = _col_if_exists("Modelo")
+        col_fecha = _col_if_exists("Fecha Factura")
+
+        def _distinct(col: str | None, limit: int = 5_000) -> list[str]:
+            if not col:
+                return []
+            q = _duck_quote_ident(col)
+            sql = f"""
+                SELECT DISTINCT NULLIF(trim(CAST({q} AS VARCHAR)), '') AS v
+                FROM ventas_raw
+                WHERE {q} IS NOT NULL
+                ORDER BY 1
+                LIMIT ?
+            """
+            df = con.execute(sql, [int(limit)]).df()
+            if df.empty:
+                return []
+            return [str(x) for x in df["v"].dropna().tolist()]
+
+        dims["sede"] = _distinct(col_sede)
+        dims["sistema_precio"] = _distinct(col_sis)
+        dims["rotacion"] = _distinct(col_rot)
+        dims["descrip_un"] = _distinct(col_un)
+        dims["cliente"] = _distinct(col_cli)
+        dims["vendedor"] = _distinct(col_ven)
+        dims["linea"] = _distinct(col_lin)
+        dims["modelo"] = _distinct(col_mod)
+
+        # Años / meses (desde Fecha Factura)
+        if col_fecha:
+            qf = _duck_quote_ident(col_fecha)
+            df_ym = con.execute(
+                f"""
+                SELECT DISTINCT
+                    EXTRACT(year FROM try_cast({qf} AS DATE)) AS anio,
+                    EXTRACT(month FROM try_cast({qf} AS DATE)) AS mes
+                FROM ventas_raw
+                WHERE {qf} IS NOT NULL
+                ORDER BY 1, 2
+                """
+            ).df()
+            if not df_ym.empty:
+                anios = (
+                    pd.to_numeric(df_ym["anio"], errors="coerce")
+                    .dropna().astype(int).drop_duplicates().sort_values()
+                    .tolist()
+                )
+                meses = (
+                    pd.to_numeric(df_ym["mes"], errors="coerce")
+                    .dropna().astype(int).drop_duplicates().sort_values()
+                    .tolist()
+                )
+                dims["anio"] = [str(a) for a in anios]
+                dims["mes"] = [str(m) for m in meses]
+        return dims
+
+
+def obtener_dashboard_ventas(
+    sedes: list[str] | None = None,
+    sistemas_precio: list[str] | None = None,
+    rotaciones: list[str] | None = None,
+    unidades_negocio: list[str] | None = None,
+    clientes: list[str] | None = None,
+    vendedores: list[str] | None = None,
+    lineas: list[str] | None = None,
+    modelos: list[str] | None = None,
+    anios: list[int] | None = None,
+    meses: list[int] | None = None,
+) -> dict[str, pd.DataFrame]:
+    """
+    Tablero de ventas basado en `ventas_raw`.
+
+    Retorna datasets agregados listos para UI:
+    - timeseries_mes: ventas/utilidad/margen por mes y año
+    - por_linea_mes: ventas/margen por línea y mes (últimos 24 meses)
+    - por_sede, por_sistema, por_vendedor, por_cliente: totales por año (actual y anterior)
+    """
+    out: dict[str, pd.DataFrame] = {
+        "timeseries_mes": pd.DataFrame(),
+        "por_linea_mes": pd.DataFrame(),
+        "por_sede": pd.DataFrame(),
+        "por_sistema": pd.DataFrame(),
+        "por_vendedor": pd.DataFrame(),
+        "por_cliente": pd.DataFrame(),
+        "por_modelo": pd.DataFrame(),
+        "por_rotacion": pd.DataFrame(),
+    }
+
+    def _norm_list(xs: list[str] | None) -> list[str]:
+        if not xs:
+            return []
+        cleaned: list[str] = []
+        for x in xs:
+            s = str(x or "").strip()
+            if s:
+                cleaned.append(s)
+        return cleaned
+
+    sedes = _norm_list(sedes)
+    sistemas_precio = _norm_list(sistemas_precio)
+    rotaciones = _norm_list(rotaciones)
+    unidades_negocio = _norm_list(unidades_negocio)
+    clientes = _norm_list(clientes)
+    vendedores = _norm_list(vendedores)
+    lineas = _norm_list(lineas)
+    modelos = _norm_list(modelos)
+    anios = [int(x) for x in (anios or []) if str(x).strip().isdigit()]
+    meses = [int(x) for x in (meses or []) if str(x).strip().isdigit()]
+
+    with _connect() as con:
+        if not _table_exists(con, "ventas_raw"):
+            return out
+
+        # Columnas esperadas (según pipeline 02).
+        col_fecha = '"Fecha Factura"' if _table_has_column(con, "ventas_raw", "Fecha Factura") else None
+        col_venta = '"Valor Venta"' if _table_has_column(con, "ventas_raw", "Valor Venta") else None
+        col_util = '"Utilidad"' if _table_has_column(con, "ventas_raw", "Utilidad") else None
+        col_sede = '"Descp. CO Mvto."' if _table_has_column(con, "ventas_raw", "Descp. CO Mvto.") else None
+        col_sis = '"Sistema Precio"' if _table_has_column(con, "ventas_raw", "Sistema Precio") else None
+        col_rot = '"Rotacion"' if _table_has_column(con, "ventas_raw", "Rotacion") else None
+        col_un = '"Descrip. UN"' if _table_has_column(con, "ventas_raw", "Descrip. UN") else None
+        col_cli = '"Cliente"' if _table_has_column(con, "ventas_raw", "Cliente") else None
+        col_ven = '"Vendedor"' if _table_has_column(con, "ventas_raw", "Vendedor") else None
+        col_lin = '"Linea"' if _table_has_column(con, "ventas_raw", "Linea") else None
+        col_mod = '"Modelo"' if _table_has_column(con, "ventas_raw", "Modelo") else None
+
+        if not (col_fecha and col_venta):
+            return out
+
+        # Siempre arrancamos con una condición base para evitar `AND` colgando
+        # cuando no hay filtros seleccionados.
+        where_parts: list[str] = [f"{col_fecha} IS NOT NULL"]
+        params: list[Any] = []
+
+        def _add_in_filter(col_sql: str | None, values: list[str]) -> None:
+            if not col_sql or not values:
+                return
+            placeholders = ", ".join(["?"] * len(values))
+            where_parts.append(f"NULLIF(trim(CAST({col_sql} AS VARCHAR)), '') IN ({placeholders})")
+            params.extend(values)
+
+        _add_in_filter(col_sede, sedes)
+        _add_in_filter(col_sis, sistemas_precio)
+        _add_in_filter(col_rot, rotaciones)
+        _add_in_filter(col_un, unidades_negocio)
+        _add_in_filter(col_cli, clientes)
+        _add_in_filter(col_ven, vendedores)
+        _add_in_filter(col_lin, lineas)
+        _add_in_filter(col_mod, modelos)
+
+        # Filtros Año/Mes (se aplican sobre Fecha Factura)
+        if anios:
+            placeholders = ", ".join(["?"] * len(anios))
+            where_parts.append(f"EXTRACT(year FROM try_cast({col_fecha} AS DATE)) IN ({placeholders})")
+            params.extend([int(x) for x in anios])
+        if meses:
+            placeholders = ", ".join(["?"] * len(meses))
+            where_parts.append(f"EXTRACT(month FROM try_cast({col_fecha} AS DATE)) IN ({placeholders})")
+            params.extend([int(x) for x in meses])
+
+        where_sql = "WHERE " + " AND ".join(where_parts)
+
+        # Métrica margen: ponderada por ventas netas.
+        util_expr = f"COALESCE(try_cast({col_util} AS DOUBLE), 0)" if col_util else "0"
+        venta_expr = f"COALESCE(try_cast({col_venta} AS DOUBLE), 0)"
+        margen_expr = f"CASE WHEN SUM({venta_expr}) = 0 THEN NULL ELSE SUM({util_expr}) / NULLIF(SUM({venta_expr}), 0) END"
+
+        # Timeseries por mes.
+        sql_ts = f"""
+            WITH base AS (
+                SELECT
+                    try_cast({col_fecha} AS DATE) AS fecha,
+                    {venta_expr} AS venta,
+                    {util_expr} AS utilidad
+                FROM ventas_raw
+                {where_sql}
+            )
+            SELECT
+                EXTRACT(year FROM fecha) AS anio,
+                EXTRACT(month FROM fecha) AS mes,
+                date_trunc('month', fecha) AS mes_inicio,
+                SUM(venta) AS venta,
+                SUM(utilidad) AS utilidad,
+                CASE WHEN SUM(venta) = 0 THEN NULL ELSE SUM(utilidad) / NULLIF(SUM(venta), 0) END AS margen
+            FROM base
+            WHERE fecha IS NOT NULL
+            GROUP BY 1, 2, 3
+            ORDER BY 3
+        """
+        out["timeseries_mes"] = con.execute(sql_ts, params).df()
+
+        # Ventas por línea x mes (para tabla tipo la imagen).
+        if col_lin:
+            sql_lin = f"""
+                WITH base AS (
+                    SELECT
+                        date_trunc('month', try_cast({col_fecha} AS DATE)) AS mes_inicio,
+                        EXTRACT(year FROM try_cast({col_fecha} AS DATE)) AS anio,
+                        EXTRACT(month FROM try_cast({col_fecha} AS DATE)) AS mes,
+                        NULLIF(trim(CAST({col_lin} AS VARCHAR)), '') AS linea,
+                        {venta_expr} AS venta,
+                        {util_expr} AS utilidad
+                    FROM ventas_raw
+                    {where_sql}
+                )
+                SELECT
+                    anio,
+                    mes,
+                    mes_inicio,
+                    linea,
+                    SUM(venta) AS venta,
+                    SUM(utilidad) AS utilidad,
+                    CASE WHEN SUM(venta) = 0 THEN NULL ELSE SUM(utilidad) / NULLIF(SUM(venta), 0) END AS margen
+                FROM base
+                WHERE mes_inicio IS NOT NULL
+                  AND linea IS NOT NULL
+                GROUP BY 1, 2, 3, 4
+                ORDER BY mes_inicio, venta DESC
+            """
+            out["por_linea_mes"] = con.execute(sql_lin, params).df()
+
+        # Totales por año y dimensión (respeta filtros de año/mes y demás).
+        def _totales_por_dim(col_dim: str | None) -> pd.DataFrame:
+            if not col_dim:
+                return pd.DataFrame()
+            if anios:
+                ph = ", ".join(["?"] * len(anios))
+                anio_filter = f"AND anio IN ({ph})"
+                extra_params: list[Any] = [int(x) for x in anios]
+            else:
+                anio_filter = (
+                    "AND anio IN (EXTRACT(year FROM current_date), "
+                    "EXTRACT(year FROM current_date) - 1)"
+                )
+                extra_params = []
+            sql = f"""
+                WITH base AS (
+                    SELECT
+                        EXTRACT(year FROM try_cast({col_fecha} AS DATE)) AS anio,
+                        NULLIF(trim(CAST({col_dim} AS VARCHAR)), '') AS dim,
+                        {venta_expr} AS venta,
+                        {util_expr} AS utilidad
+                    FROM ventas_raw
+                    {where_sql}
+                ),
+                y AS (
+                    SELECT
+                        anio,
+                        dim,
+                        SUM(venta) AS venta,
+                        SUM(utilidad) AS utilidad,
+                        CASE WHEN SUM(venta) = 0 THEN NULL ELSE SUM(utilidad) / NULLIF(SUM(venta), 0) END AS margen
+                    FROM base
+                    WHERE dim IS NOT NULL
+                      {anio_filter}
+                    GROUP BY 1, 2
+                )
+                SELECT *
+                FROM y
+                ORDER BY anio, venta DESC, dim
+            """
+            return con.execute(sql, params + extra_params).df()
+
+        out["por_sede"] = _totales_por_dim(col_sede)
+        out["por_sistema"] = _totales_por_dim(col_sis)
+        out["por_vendedor"] = _totales_por_dim(col_ven)
+        out["por_cliente"] = _totales_por_dim(col_cli)
+        out["por_modelo"] = _totales_por_dim(col_mod)
+        out["por_rotacion"] = _totales_por_dim(col_rot)
+
+    return out
+
+
+def obtener_detalle_ventas_filtrado(
+    sedes: list[str] | None = None,
+    sistemas_precio: list[str] | None = None,
+    rotaciones: list[str] | None = None,
+    unidades_negocio: list[str] | None = None,
+    clientes: list[str] | None = None,
+    vendedores: list[str] | None = None,
+    lineas: list[str] | None = None,
+    modelos: list[str] | None = None,
+    anios: list[int] | None = None,
+    meses: list[int] | None = None,
+    limite: int | None = 200_000,
+) -> pd.DataFrame:
+    """
+    Devuelve el detalle completo de `ventas_raw` usando los mismos filtros del tablero.
+    """
+    def _norm_list(xs: list[str] | None) -> list[str]:
+        if not xs:
+            return []
+        out: list[str] = []
+        for x in xs:
+            s = str(x or "").strip()
+            if s:
+                out.append(s)
+        return out
+
+    sedes = _norm_list(sedes)
+    sistemas_precio = _norm_list(sistemas_precio)
+    rotaciones = _norm_list(rotaciones)
+    unidades_negocio = _norm_list(unidades_negocio)
+    clientes = _norm_list(clientes)
+    vendedores = _norm_list(vendedores)
+    lineas = _norm_list(lineas)
+    modelos = _norm_list(modelos)
+    anios = [int(x) for x in (anios or []) if str(x).strip().isdigit()]
+    meses = [int(x) for x in (meses or []) if str(x).strip().isdigit()]
+
+    with _connect() as con:
+        if not _table_exists(con, "ventas_raw"):
+            return pd.DataFrame()
+        col_fecha = '"Fecha Factura"' if _table_has_column(con, "ventas_raw", "Fecha Factura") else None
+        if not col_fecha:
+            return pd.DataFrame()
+
+        where_parts: list[str] = [f"{col_fecha} IS NOT NULL"]
+        params: list[Any] = []
+
+        def _add_in_filter(col_name: str, values: list[str]) -> None:
+            if not _table_has_column(con, "ventas_raw", col_name) or not values:
+                return
+            q = _duck_quote_ident(col_name)
+            ph = ", ".join(["?"] * len(values))
+            where_parts.append(f"NULLIF(trim(CAST({q} AS VARCHAR)), '') IN ({ph})")
+            params.extend(values)
+
+        _add_in_filter("Descp. CO Mvto.", sedes)
+        _add_in_filter("Sistema Precio", sistemas_precio)
+        _add_in_filter("Rotacion", rotaciones)
+        _add_in_filter("Descrip. UN", unidades_negocio)
+        _add_in_filter("Cliente", clientes)
+        _add_in_filter("Vendedor", vendedores)
+        _add_in_filter("Linea", lineas)
+        _add_in_filter("Modelo", modelos)
+
+        if anios:
+            ph = ", ".join(["?"] * len(anios))
+            where_parts.append(f"EXTRACT(year FROM try_cast({col_fecha} AS DATE)) IN ({ph})")
+            params.extend([int(x) for x in anios])
+        if meses:
+            ph = ", ".join(["?"] * len(meses))
+            where_parts.append(f"EXTRACT(month FROM try_cast({col_fecha} AS DATE)) IN ({ph})")
+            params.extend([int(x) for x in meses])
+
+        where_sql = "WHERE " + " AND ".join(where_parts)
+        sql = f"""
+            SELECT *
+            FROM ventas_raw
+            {where_sql}
+            ORDER BY try_cast({col_fecha} AS DATE) DESC
+        """
+        if limite is not None:
+            sql += "\nLIMIT ?"
+            return con.execute(sql, params + [int(max(1, limite))]).df()
+        return con.execute(sql, params).df()
+
 def obtener_auditoria_referencias(
     limite: int | None = 20_000,
     semaforo: str | None = None,

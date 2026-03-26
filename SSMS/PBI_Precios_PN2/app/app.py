@@ -6,7 +6,7 @@ import io
 import math
 import re
 from datetime import datetime
-from typing import Final
+from typing import Any, Final
 
 import pandas as pd
 import streamlit as st
@@ -25,6 +25,9 @@ from services.data_access import (
     obtener_auditoria_dashboard,
     obtener_auditoria_referencias,
     obtener_catalogo_bodegas_auditoria,
+    obtener_dashboard_ventas,
+    obtener_detalle_ventas_filtrado,
+    obtener_dimensiones_ventas,
     refrescar_catalogo_bodegas_auditoria,
     obtener_dataset_margenes,
     obtener_resumen_referencia,
@@ -5444,6 +5447,890 @@ def _render_tab_laboratorio_sql() -> None:
             st.dataframe(_renombrar_negocio(df_res), width="stretch", hide_index=True)
 
 
+@st.cache_data(show_spinner=False, ttl=300)
+def _cargar_dimensiones_ventas_cached() -> dict:
+    return obtener_dimensiones_ventas()
+
+
+@st.cache_data(show_spinner=False, ttl=180, max_entries=30)
+def _cargar_dashboard_ventas_cached(
+    sedes: tuple[str, ...],
+    sistemas: tuple[str, ...],
+    rotaciones: tuple[str, ...],
+    unidades: tuple[str, ...],
+    clientes: tuple[str, ...],
+    vendedores: tuple[str, ...],
+    lineas: tuple[str, ...],
+    modelos: tuple[str, ...],
+    anios: tuple[int, ...],
+    meses: tuple[int, ...],
+) -> dict:
+    return obtener_dashboard_ventas(
+        sedes=list(sedes),
+        sistemas_precio=list(sistemas),
+        rotaciones=list(rotaciones),
+        unidades_negocio=list(unidades),
+        clientes=list(clientes),
+        vendedores=list(vendedores),
+        lineas=list(lineas),
+        modelos=list(modelos),
+        anios=list(anios),
+        meses=list(meses),
+    )
+
+
+@st.cache_data(show_spinner=False, ttl=180, max_entries=30)
+def _cargar_detalle_ventas_cached(
+    sedes: tuple[str, ...],
+    sistemas: tuple[str, ...],
+    rotaciones: tuple[str, ...],
+    unidades: tuple[str, ...],
+    clientes: tuple[str, ...],
+    vendedores: tuple[str, ...],
+    lineas: tuple[str, ...],
+    modelos: tuple[str, ...],
+    anios: tuple[int, ...],
+    meses: tuple[int, ...],
+    limite: int | None = 200_000,
+) -> pd.DataFrame:
+    return obtener_detalle_ventas_filtrado(
+        sedes=list(sedes),
+        sistemas_precio=list(sistemas),
+        rotaciones=list(rotaciones),
+        unidades_negocio=list(unidades),
+        clientes=list(clientes),
+        vendedores=list(vendedores),
+        lineas=list(lineas),
+        modelos=list(modelos),
+        anios=list(anios),
+        meses=list(meses),
+        limite=limite,
+    )
+
+
+def _fmt_num_local(value: float | int | None, decimals: int = 0, signed: bool = False) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    try:
+        n = float(value)
+    except Exception:
+        return "—"
+    sign = "+" if signed and n > 0 else ""
+    if decimals <= 0:
+        txt = f"{abs(n):,.0f}"
+    else:
+        txt = f"{abs(n):,.{int(decimals)}f}"
+    txt = txt.replace(",", "_").replace(".", ",").replace("_", ".")
+    pref = "-" if n < 0 else sign
+    return f"{pref}{txt}"
+
+
+def _fmt_money_local(value: float | int | None, signed: bool = False) -> str:
+    base = _fmt_num_local(value, decimals=0, signed=signed)
+    if base == "—":
+        return base
+    return f"$ {base}"
+
+
+def _fmt_pct_local(value: float | int | None, decimals: int = 2, signed: bool = False) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    try:
+        p = float(value) * 100.0
+    except Exception:
+        return "—"
+    return f"{_fmt_num_local(p, decimals=decimals, signed=signed)}%"
+
+
+def _ventas_formato_comparativo_dim(
+    df: pd.DataFrame,
+    nombre_col_dim: str,
+    y_base: int,
+    y_comp: int,
+    *,
+    top_n: int = 35,
+) -> tuple[pd.DataFrame, dict[str, Any]] | tuple[None, None]:
+    """
+    Mismo formato que la tabla por líneas/mes: Venta/Margen año base, Venta/Margen año comp,
+    AV, %V, %M. Filas = una por dimensión (sin desglose mensual). Opcional top por venta año comp.
+    """
+    if df is None or df.empty or "dim" not in df.columns:
+        return None, None
+    g = df.copy()
+    for c in ("anio", "venta", "margen"):
+        if c in g.columns:
+            g[c] = pd.to_numeric(g[c], errors="coerce")
+    g["dim"] = g["dim"].astype(str)
+    g = g[g["anio"].isin([y_base, y_comp])]
+    if g.empty:
+        return None, None
+
+    gb = (
+        g.groupby(["dim", "anio"], dropna=False)
+        .agg(venta=("venta", "sum"))
+        .reset_index()
+    )
+    util = (
+        g.assign(_u=lambda x: x["venta"] * x["margen"])
+        .groupby(["dim", "anio"], dropna=False)["_u"]
+        .sum()
+        .reset_index(name="utilidad_sum")
+    )
+    gb = gb.merge(util, on=["dim", "anio"], how="left")
+    gb["margen"] = gb.apply(
+        lambda r: (r["utilidad_sum"] / r["venta"]) if r["venta"] and pd.notna(r["venta"]) and r["venta"] != 0 else None,
+        axis=1,
+    )
+
+    base = gb[gb["anio"] == y_base].rename(
+        columns={"venta": f"Venta {y_base}", "margen": f"Margen {y_base}"}
+    )[["dim", f"Venta {y_base}", f"Margen {y_base}"]]
+    comp = gb[gb["anio"] == y_comp].rename(
+        columns={"venta": f"Venta {y_comp}", "margen": f"Margen {y_comp}"}
+    )[["dim", f"Venta {y_comp}", f"Margen {y_comp}"]]
+
+    merged = pd.merge(base, comp, on="dim", how="outer")
+    merged["AV"] = merged[f"Venta {y_comp}"] - merged[f"Venta {y_base}"]
+    vb = merged[f"Venta {y_base}"].replace({0: pd.NA})
+    merged["%V"] = merged["AV"] / vb
+    merged["%M"] = merged[f"Margen {y_comp}"] - merged[f"Margen {y_base}"]
+    merged = merged.rename(columns={"dim": nombre_col_dim})
+
+    # Top N por venta año comparación (como en Power BI)
+    vc = f"Venta {y_comp}"
+    if vc in merged.columns and top_n and top_n > 0:
+        orden = merged.sort_values(vc, ascending=False, na_position="last").head(int(top_n))
+    else:
+        orden = merged.sort_values(nombre_col_dim, ascending=True)
+
+    # Fila Total (ponderado)
+    vb_col, mb_col = f"Venta {y_base}", f"Margen {y_base}"
+    vc_col, mc_col = f"Venta {y_comp}", f"Margen {y_comp}"
+    tot_vb = float(orden[vb_col].fillna(0).sum()) if vb_col in orden.columns else 0.0
+    tot_vc = float(orden[vc_col].fillna(0).sum()) if vc_col in orden.columns else 0.0
+    tot_mb = None
+    tot_mc = None
+    if vb_col in orden.columns and mb_col in orden.columns and tot_vb:
+        tot_mb = float(
+            (orden[vb_col].fillna(0) * orden[mb_col].fillna(0)).sum() / tot_vb
+        )
+    if vc_col in orden.columns and mc_col in orden.columns and tot_vc:
+        tot_mc = float(
+            (orden[vc_col].fillna(0) * orden[mc_col].fillna(0)).sum() / tot_vc
+        )
+    tot_av = tot_vc - tot_vb
+    tot_pv = (tot_av / tot_vb) if tot_vb else None
+    tot_pm = (tot_mc - tot_mb) if tot_mb is not None and tot_mc is not None else None
+
+    fila_total = {nombre_col_dim: "Total", vb_col: tot_vb, mb_col: tot_mb, vc_col: tot_vc, "AV": tot_av, "%V": tot_pv, mc_col: tot_mc, "%M": tot_pm}
+    show = pd.concat([orden, pd.DataFrame([fila_total])], ignore_index=True)
+
+    fmt = {
+        vb_col: _fmt_money_local,
+        vc_col: _fmt_money_local,
+        "AV": lambda x: _fmt_money_local(x, signed=True),
+        "%V": lambda x: _fmt_pct_local(x, decimals=2, signed=True),
+        mb_col: _fmt_pct_local,
+        mc_col: _fmt_pct_local,
+        "%M": lambda x: _fmt_pct_local(x, decimals=2, signed=True),
+    }
+    return show, fmt
+
+
+def _ventas_modelo_opciones_filtradas(todas: list[str], texto: str) -> list[str]:
+    """Reduce la lista de modelos a los que contienen `texto` (insensible a mayúsculas)."""
+    if not todas:
+        return []
+    t = (texto or "").strip()
+    if not t:
+        return list(todas)
+    tu = t.upper()
+    return [m for m in todas if tu in str(m).upper()]
+
+
+def _render_tab_resumen_ventas() -> None:
+    st.markdown(
+        """
+<style>
+.rv-hero{
+  border:1px solid #2a3858;
+  border-radius:14px;
+  padding:14px 16px;
+  background:linear-gradient(135deg,#0f1c37 0%,#101a31 55%,#0c162b 100%);
+  margin-bottom:10px;
+}
+.rv-hero h3{
+  margin:0;
+  font-size:1.1rem;
+  color:#e5e7eb;
+}
+.rv-hero p{
+  margin:4px 0 0;
+  color:#a3b0c6;
+  font-size:.9rem;
+}
+.rv-section{
+  margin:.45rem 0 .25rem;
+  padding-left:.55rem;
+  border-left:3px solid #38bdf8;
+}
+.rv-section b{color:#e5e7eb;}
+.rv-section span{color:#9fb0cc;font-size:.86rem;}
+.rv-chip-wrap{display:flex;flex-wrap:wrap;gap:6px;margin:.25rem 0 .55rem;}
+.rv-chip{
+  background:#101a31;border:1px solid #2a3858;color:#d1d5db;
+  border-radius:999px;padding:3px 10px;font-size:.78rem;
+}
+div[data-testid="stMetric"]{
+  border:1px solid #25314d;
+  border-radius:10px;
+  padding:.35rem .5rem;
+  background:#0f1a30;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+<div class="rv-hero">
+  <h3>Resumen de ventas</h3>
+  <p>Análisis comercial sobre <code>ventas_raw</code> (pipeline 02), con enfoque ejecutivo y comparativo.</p>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    dims = _cargar_dimensiones_ventas_cached() or {}
+    st.markdown('<div class="rv-section"><b>Filtros del tablero</b><br><span>Refina la vista por canal, producto, cliente, año y mes.</span></div>', unsafe_allow_html=True)
+    with st.container(border=True):
+        a1, a2 = st.columns([1, 1])
+        with a1:
+            if st.button("Limpiar filtros", key="ventas_clear_filters", use_container_width=True):
+                for k in (
+                    "ventas_sede_sel", "ventas_sys_sel", "ventas_rot_sel", "ventas_un_sel", "ventas_cli_sel",
+                    "ventas_ven_sel", "ventas_linea_sel", "ventas_modelo_sel", "ventas_anio_sel", "ventas_mes_sel",
+                ):
+                    st.session_state[k] = []
+                st.session_state["ventas_modelo_buscar_txt"] = ""
+                st.rerun()
+        with a2:
+            st.button("Actualizar vista", key="ventas_refresh", use_container_width=True)
+
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        with c1:
+            sedes_sel = st.multiselect("Sede", options=dims.get("sede", []), default=[], key="ventas_sede_sel")
+        with c2:
+            sys_sel = st.multiselect("Sistema Precio", options=dims.get("sistema_precio", []), default=[], key="ventas_sys_sel")
+        with c3:
+            rot_sel = st.multiselect(
+                "Rotación",
+                options=dims.get("rotacion", []),
+                default=[],
+                key="ventas_rot_sel",
+                help="Criterio plan 08: mismo formato que **margen SIESA** (`código - descripción`). Tras cambiar el pipeline, vuelve a cargar ventas.",
+            )
+        with c4:
+            un_sel = st.multiselect("Descrip. UN", options=dims.get("descrip_un", []), default=[], key="ventas_un_sel")
+        with c5:
+            cli_sel = st.multiselect("Cliente", options=dims.get("cliente", []), default=[], key="ventas_cli_sel")
+        with c6:
+            ven_sel = st.multiselect("Vendedor", options=dims.get("vendedor", []), default=[], key="ventas_ven_sel")
+
+        c7, c8, c9, c10 = st.columns(4)
+        with c7:
+            linea_sel = st.multiselect("Línea", options=dims.get("linea", []), default=[], key="ventas_linea_sel")
+        with c8:
+            modelo_buscar_txt = st.text_input(
+                "Filtrar modelo (texto)",
+                value="",
+                key="ventas_modelo_buscar_txt",
+                placeholder="Ej: 9900, MAGNUM...",
+                help="Escribe parte del código o de la descripción; el desplegable **Modelo** solo mostrará coincidencias.",
+            )
+        with c9:
+            modelo_todas = dims.get("modelo", []) or []
+            modelo_opts = _ventas_modelo_opciones_filtradas(modelo_todas, modelo_buscar_txt)
+            if (modelo_buscar_txt or "").strip() and not modelo_opts:
+                st.caption("Ningún modelo coincide con el texto. Ajusta el filtro o bórralo para ver todos.")
+            modelo_sel = st.multiselect(
+                "Modelo",
+                options=modelo_opts,
+                default=[],
+                key="ventas_modelo_sel",
+                help="Criterio plan 03 (misma lógica que Modelo CNH). Usa **Filtrar modelo** para acotar por texto antes de elegir.",
+            )
+        with c10:
+            anios_opts = [int(x) for x in (dims.get("anio", []) or []) if str(x).strip().isdigit()]
+            anios_sel = st.multiselect("Año", options=anios_opts, default=anios_opts[-2:] if len(anios_opts) >= 2 else anios_opts, key="ventas_anio_sel")
+
+        meses_opts = [int(x) for x in (dims.get("mes", []) or []) if str(x).strip().isdigit()]
+        meses_sel = st.multiselect(
+            "Mes",
+            options=meses_opts,
+            default=meses_opts,
+            key="ventas_mes_sel",
+            help="Selecciona uno o varios meses para comparar entre años.",
+        )
+
+    resumen_filtros = [
+        f"Años: {len(anios_sel)}",
+        f"Meses: {len(meses_sel)}",
+        f"Sedes: {len(sedes_sel)}",
+        f"Sistemas: {len(sys_sel)}",
+        f"Clientes: {len(cli_sel)}",
+        f"Modelos: {len(modelo_sel)}",
+    ]
+    chips_html = "".join([f'<span class="rv-chip">{x}</span>' for x in resumen_filtros])
+    st.markdown(f'<div class="rv-chip-wrap">{chips_html}</div>', unsafe_allow_html=True)
+
+    dash = _cargar_dashboard_ventas_cached(
+        tuple(sedes_sel),
+        tuple(sys_sel),
+        tuple(rot_sel),
+        tuple(un_sel),
+        tuple(cli_sel),
+        tuple(ven_sel),
+        tuple(linea_sel),
+        tuple(modelo_sel),
+        tuple(int(x) for x in anios_sel),
+        tuple(int(x) for x in meses_sel),
+    )
+
+    # Para el gráfico mensual, ignoramos filtro de mes:
+    # si se eligen años 2025 y 2026, muestra todo 2025 + todo 2026.
+    dash_graph = _cargar_dashboard_ventas_cached(
+        tuple(sedes_sel),
+        tuple(sys_sel),
+        tuple(rot_sel),
+        tuple(un_sel),
+        tuple(cli_sel),
+        tuple(ven_sel),
+        tuple(linea_sel),
+        tuple(modelo_sel),
+        tuple(int(x) for x in anios_sel),
+        tuple(),  # sin filtro de mes
+    )
+
+    # Gráfico: sin filtro de mes (todos los meses de los años elegidos).
+    ts_graph = dash_graph.get("timeseries_mes") if isinstance(dash_graph, dict) else None
+    if ts_graph is None or ts_graph.empty:
+        st.info("No hay datos para los filtros seleccionados (o no existe `ventas_raw`).")
+        return
+
+    ts2 = ts_graph.copy()
+    for c in ("venta", "utilidad", "margen"):
+        if c in ts2.columns:
+            ts2[c] = pd.to_numeric(ts2[c], errors="coerce")
+    if "mes_inicio" in ts2.columns:
+        try:
+            ts2["mes_inicio"] = pd.to_datetime(ts2["mes_inicio"])
+        except Exception:
+            pass
+
+    # KPIs: meses seleccionados solo del **último año** (max entre años elegidos; si no hay años, el año más reciente en datos).
+    ts_kpi = dash.get("timeseries_mes") if isinstance(dash, dict) else None
+    anios_int = [int(x) for x in anios_sel]
+    ultimo_anio: int | None = max(anios_int) if anios_int else None
+    if ts_kpi is not None and not ts_kpi.empty:
+        ts_k = ts_kpi.copy()
+        for c in ("venta", "utilidad", "margen"):
+            if c in ts_k.columns:
+                ts_k[c] = pd.to_numeric(ts_k[c], errors="coerce")
+        if "anio" in ts_k.columns:
+            ts_k["anio"] = pd.to_numeric(ts_k["anio"], errors="coerce")
+            if ultimo_anio is None:
+                try:
+                    ultimo_anio = int(ts_k["anio"].dropna().max())
+                except Exception:
+                    ultimo_anio = None
+            if ultimo_anio is not None:
+                ts_k = ts_k[ts_k["anio"] == ultimo_anio]
+        total_venta = float(ts_k["venta"].fillna(0).sum()) if "venta" in ts_k.columns else 0.0
+        total_util = float(ts_k["utilidad"].fillna(0).sum()) if "utilidad" in ts_k.columns else 0.0
+    else:
+        total_venta = 0.0
+        total_util = 0.0
+    total_margen = (total_util / total_venta) if total_venta else None
+
+    kpi_suffix = " (Último año - Meses seleccionados)"
+    k1, k2, k3 = st.columns(3)
+    with k1:
+        st.metric(f"Venta{kpi_suffix}", _fmt_money_local(total_venta))
+    with k2:
+        st.metric(f"Utilidad{kpi_suffix}", _fmt_money_local(total_util))
+    with k3:
+        st.metric(f"Margen ponderado{kpi_suffix}", _fmt_pct_local(total_margen))
+
+    st.markdown('<div class="rv-section"><b>Evolución mensual</b><br><span>Lectura de tendencia en venta, utilidad y margen.</span></div>', unsafe_allow_html=True)
+
+    if _HAS_PLOTLY:
+        import plotly.graph_objects as go  # type: ignore[import-not-found]
+
+        fig = go.Figure()
+        fig.add_trace(
+            go.Bar(
+                x=ts2.get("mes_inicio"),
+                y=ts2.get("venta"),
+                name="Venta",
+                marker_color="#ef4444",
+                opacity=0.9,
+            )
+        )
+        fig.add_trace(
+            go.Bar(
+                x=ts2.get("mes_inicio"),
+                y=ts2.get("utilidad"),
+                name="Utilidad",
+                marker_color="#9ca3af",
+                opacity=0.9,
+            )
+        )
+        if "margen" in ts2.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=ts2.get("mes_inicio"),
+                    y=(ts2["margen"] * 100.0),
+                    name="Margen (%)",
+                    mode="lines+markers",
+                    yaxis="y2",
+                    line=dict(color="#38bdf8", width=2),
+                )
+            )
+        fig.update_layout(
+            barmode="group",
+            xaxis_title="Mes",
+            yaxis_title="Valor",
+            yaxis2=dict(title="Margen (%)", overlaying="y", side="right", rangemode="tozero"),
+            legend=dict(orientation="h", y=-0.2),
+            margin=dict(l=40, r=40, t=35, b=50),
+            height=420,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown('<div class="rv-section"><b>Comparativo mensual por año</b><br><span>Series de años seleccionados sobre el mismo eje de meses.</span></div>', unsafe_allow_html=True)
+        st.caption("Comparativo mensual según los **años** elegidos en el filtro (enero–diciembre).")
+
+        from plotly.subplots import make_subplots  # type: ignore[import-not-found]
+
+        meses_labels = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
+        meses_ord = list(range(1, 13))
+        _year_colors = ["#9ca3af", "#ef4444", "#38bdf8", "#a855f7", "#22c55e", "#eab308"]
+
+        df_line = ts2.copy()
+        if (
+            "anio" in df_line.columns
+            and "mes" in df_line.columns
+            and "venta" in df_line.columns
+            and "utilidad" in df_line.columns
+        ):
+            for c in ("venta", "utilidad", "anio", "mes"):
+                df_line[c] = pd.to_numeric(df_line[c], errors="coerce")
+            anios_plot = sorted([int(x) for x in anios_sel]) if anios_sel else sorted(
+                df_line["anio"].dropna().unique().astype(int).tolist()
+            )
+            if anios_plot:
+                df_line = df_line[df_line["anio"].isin(anios_plot)]
+                g = df_line.groupby(["anio", "mes"], as_index=False)[["venta", "utilidad"]].sum()
+                pv = g.pivot_table(index="mes", columns="anio", values="venta", aggfunc="sum").reindex(meses_ord).fillna(0)
+                pu = (
+                    g.pivot_table(index="mes", columns="anio", values="utilidad", aggfunc="sum")
+                    .reindex(meses_ord)
+                    .fillna(0)
+                )
+                fig2 = make_subplots(
+                    rows=2,
+                    cols=1,
+                    shared_xaxes=True,
+                    vertical_spacing=0.12,
+                    subplot_titles=("Venta", "Utilidad"),
+                )
+                n_lineas = 0
+                for i, y in enumerate(anios_plot):
+                    if y not in pv.columns:
+                        continue
+                    n_lineas += 1
+                    col = _year_colors[i % len(_year_colors)]
+                    v_mill = (pv[y] / 1_000_000.0).tolist()
+                    u_mill = (pu[y] / 1_000_000.0).tolist() if y in pu.columns else [0.0] * 12
+                    fig2.add_trace(
+                        go.Scatter(
+                            x=meses_labels,
+                            y=v_mill,
+                            mode="lines+markers",
+                            name=str(y),
+                            line=dict(color=col, width=2.5),
+                            marker=dict(size=7, color=col),
+                            legendgroup=str(y),
+                            hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>$%{y:,.3f} mill.<extra></extra>",
+                        ),
+                        row=1,
+                        col=1,
+                    )
+                    fig2.add_trace(
+                        go.Scatter(
+                            x=meses_labels,
+                            y=u_mill,
+                            mode="lines+markers",
+                            name=str(y),
+                            line=dict(color=col, width=2.5),
+                            marker=dict(size=7, color=col),
+                            legendgroup=str(y),
+                            showlegend=False,
+                            hovertemplate="<b>%{fullData.name}</b><br>%{x}<br>$%{y:,.3f} mill.<extra></extra>",
+                        ),
+                        row=2,
+                        col=1,
+                    )
+                if n_lineas == 0:
+                    st.info("No hay datos mensuales para los años seleccionados.")
+                else:
+                    fig2.update_layout(
+                        height=640,
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.14,
+                            xanchor="center",
+                            x=0.5,
+                            bgcolor="rgba(15, 26, 48, 0.7)",
+                            bordercolor="rgba(56, 189, 248, 0.35)",
+                            borderwidth=1,
+                        ),
+                        margin=dict(l=50, r=30, t=145, b=40),
+                        hovermode="x unified",
+                    )
+                    for r in (1, 2):
+                        fig2.update_yaxes(
+                            tickprefix="$",
+                            ticksuffix=" mill.",
+                            tickformat=",.3f",
+                            title_text="Millones COP",
+                            gridcolor="rgba(148, 163, 184, 0.35)",
+                            griddash="dash",
+                            row=r,
+                            col=1,
+                        )
+                    fig2.update_xaxes(title_text="Mes", row=2, col=1)
+                    st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.caption("No hay años disponibles en los datos para este comparativo.")
+        else:
+            st.caption("Faltan columnas año/mes en la serie temporal; no se puede dibujar el comparativo.")
+
+    else:
+        if "mes_inicio" in ts2.columns:
+            try:
+                st.line_chart(ts2.set_index("mes_inicio")[["venta", "utilidad"]])
+            except Exception:
+                st.dataframe(ts2, width="stretch", hide_index=True)
+
+    # Tabla estilo imagen: línea x mes, comparando años seleccionados
+    st.markdown('<div class="rv-section"><b>Línea x Mes (comparativo)</b><br><span>Variación de venta y margen entre año base y año comparado.</span></div>', unsafe_allow_html=True)
+    df_lm = dash.get("por_linea_mes", pd.DataFrame())
+    if isinstance(df_lm, pd.DataFrame) and not df_lm.empty:
+        df_lm2 = df_lm.copy()
+        for c in ("anio", "mes", "venta", "margen"):
+            if c in df_lm2.columns:
+                df_lm2[c] = pd.to_numeric(df_lm2[c], errors="coerce")
+        if "linea" in df_lm2.columns:
+            df_lm2["linea"] = df_lm2["linea"].astype(str)
+
+        # Solo meses/años seleccionados (ya vienen filtrados desde SQL, pero por seguridad).
+        if anios_sel:
+            df_lm2 = df_lm2[df_lm2["anio"].isin([int(x) for x in anios_sel])]
+        if meses_sel:
+            df_lm2 = df_lm2[df_lm2["mes"].isin([int(x) for x in meses_sel])]
+
+        # Comparación: base = min(años), comp = max(años)
+        yrs = sorted({int(x) for x in df_lm2["anio"].dropna().astype(int).tolist()})
+        if len(yrs) >= 2:
+            y_base, y_comp = yrs[0], yrs[-1]
+            meses_ord = list(range(1, 13))
+            meses_map = {1: "ene", 2: "feb", 3: "mar", 4: "abr", 5: "may", 6: "jun", 7: "jul", 8: "ago", 9: "sep", 10: "oct", 11: "nov", 12: "dic"}
+
+            # Agregado por línea+mes
+            g = (
+                df_lm2.groupby(["linea", "mes", "anio"], dropna=False)
+                .agg(venta=("venta", "sum"), utilidad=("utilidad", "sum"))
+                .reset_index()
+            )
+            g["margen"] = g.apply(lambda r: (r["utilidad"] / r["venta"]) if r["venta"] else None, axis=1)
+
+            base = g[g["anio"] == y_base].rename(columns={"venta": f"Venta {y_base}", "margen": f"Margen {y_base}"})
+            comp = g[g["anio"] == y_comp].rename(columns={"venta": f"Venta {y_comp}", "margen": f"Margen {y_comp}"})
+            merged = pd.merge(
+                base[["linea", "mes", f"Venta {y_base}", f"Margen {y_base}"]],
+                comp[["linea", "mes", f"Venta {y_comp}", f"Margen {y_comp}"]],
+                on=["linea", "mes"],
+                how="outer",
+            )
+            merged["AV"] = (merged.get(f"Venta {y_comp}") - merged.get(f"Venta {y_base}"))
+            merged["%V"] = merged["AV"] / merged.get(f"Venta {y_base}").replace({0: pd.NA})
+            merged["%M"] = (merged.get(f"Margen {y_comp}") - merged.get(f"Margen {y_base}"))  # puntos (proporción)
+            merged["Mes"] = merged["mes"].astype("Int64").map(meses_map)
+
+            # Orden de meses y líneas
+            merged["_mes_ord"] = merged["mes"].astype("Int64")
+            merged = merged.sort_values(["linea", "_mes_ord"], ascending=[True, True])
+
+            show = merged.rename(columns={"linea": "Línea"}).drop(columns=["_mes_ord"], errors="ignore")
+            cols_show = ["Línea", "Mes", f"Venta {y_base}", f"Margen {y_base}", f"Venta {y_comp}", "AV", "%V", f"Margen {y_comp}", "%M"]
+            cols_show = [c for c in cols_show if c in show.columns]
+
+            fmt = {
+                f"Venta {y_base}": _fmt_money_local,
+                f"Venta {y_comp}": _fmt_money_local,
+                "AV": lambda x: _fmt_money_local(x, signed=True),
+                "%V": lambda x: _fmt_pct_local(x, decimals=2, signed=True),
+                f"Margen {y_base}": _fmt_pct_local,
+                f"Margen {y_comp}": _fmt_pct_local,
+                "%M": lambda x: _fmt_pct_local(x, decimals=2, signed=True),
+            }
+            st.dataframe(
+                show[cols_show].style.format(fmt, na_rep="—"),
+                width="stretch",
+                hide_index=True,
+            )
+        else:
+            st.caption("Selecciona al menos 2 años para ver comparación (ej. 2025 y 2026).")
+    else:
+        st.caption("Sin datos por línea/mes para los filtros actuales.")
+
+    st.markdown('<div class="rv-section"><b>Comparativos por dimensión</b><br><span>Sede, sistema, rotación, modelo, vendedor y cliente.</span></div>', unsafe_allow_html=True)
+    yrs_cmp = sorted(int(x) for x in anios_sel)
+    yb_cmp = yrs_cmp[0] if len(yrs_cmp) >= 2 else None
+    yc_cmp = yrs_cmp[-1] if len(yrs_cmp) >= 2 else None
+
+    t1, t2 = st.columns(2)
+    with t1:
+        st.markdown("#### Ventas totales por sede (comparativo)")
+        df_sd = dash.get("por_sede", pd.DataFrame())
+        if yb_cmp is not None and yc_cmp is not None and isinstance(df_sd, pd.DataFrame) and not df_sd.empty:
+            show_sd, fmt_sd = _ventas_formato_comparativo_dim(df_sd, "Sede", yb_cmp, yc_cmp, top_n=25)
+            if show_sd is not None and fmt_sd is not None:
+                st.dataframe(show_sd.style.format(fmt_sd, na_rep="—"), width="stretch", hide_index=True)
+            else:
+                st.caption("Sin datos para comparar.")
+        elif len(yrs_cmp) < 2:
+            st.caption("Selecciona al menos 2 años para ver el comparativo.")
+        else:
+            st.caption("Sin datos.")
+
+    with t2:
+        st.markdown("#### Ventas totales por sistema de precios (comparativo)")
+        df_ss = dash.get("por_sistema", pd.DataFrame())
+        if yb_cmp is not None and yc_cmp is not None and isinstance(df_ss, pd.DataFrame) and not df_ss.empty:
+            show_ss, fmt_ss = _ventas_formato_comparativo_dim(df_ss, "Sistema Precio", yb_cmp, yc_cmp, top_n=25)
+            if show_ss is not None and fmt_ss is not None:
+                st.dataframe(show_ss.style.format(fmt_ss, na_rep="—"), width="stretch", hide_index=True)
+            else:
+                st.caption("Sin datos para comparar.")
+        elif len(yrs_cmp) < 2:
+            st.caption("Selecciona al menos 2 años para ver el comparativo.")
+        else:
+            st.caption("Sin datos.")
+
+    st.markdown("#### Ventas totales por rotación (comparativo)")
+    df_ro = dash.get("por_rotacion", pd.DataFrame())
+    if yb_cmp is not None and yc_cmp is not None and isinstance(df_ro, pd.DataFrame) and not df_ro.empty:
+        show_ro, fmt_ro = _ventas_formato_comparativo_dim(df_ro, "Rotación", yb_cmp, yc_cmp, top_n=25)
+        if show_ro is not None and fmt_ro is not None:
+            st.dataframe(show_ro.style.format(fmt_ro, na_rep="—"), width="stretch", hide_index=True)
+        else:
+            st.caption("Sin datos para comparar.")
+    elif len(yrs_cmp) < 2:
+        st.caption("Selecciona al menos 2 años para ver el comparativo.")
+    else:
+        st.caption(
+            "Sin datos de rotación. Ejecuta de nuevo **02_ventas_precios_cnhV2.py** para alinear `Rotacion` con margen SIESA."
+        )
+
+    st.markdown("#### Ventas totales por modelo (comparativo)")
+    df_mo = dash.get("por_modelo", pd.DataFrame())
+    if yb_cmp is not None and yc_cmp is not None and isinstance(df_mo, pd.DataFrame) and not df_mo.empty:
+        show_mo, fmt_mo = _ventas_formato_comparativo_dim(df_mo, "Modelo", yb_cmp, yc_cmp, top_n=30)
+        if show_mo is not None and fmt_mo is not None:
+            st.dataframe(show_mo.style.format(fmt_mo, na_rep="—"), width="stretch", hide_index=True)
+        else:
+            st.caption("Sin datos para comparar.")
+    elif len(yrs_cmp) < 2:
+        st.caption("Selecciona al menos 2 años para ver el comparativo.")
+    else:
+        st.caption(
+            "Sin datos de modelo. Ejecuta de nuevo el pipeline **02_ventas_precios_cnhV2.py** para cargar la columna `Modelo` en `ventas_raw`."
+        )
+
+    b1, b2 = st.columns(2)
+    with b1:
+        st.markdown("#### Ventas totales por vendedor (comparativo, top)")
+        df_vn = dash.get("por_vendedor", pd.DataFrame())
+        if yb_cmp is not None and yc_cmp is not None and isinstance(df_vn, pd.DataFrame) and not df_vn.empty:
+            show_vn, fmt_vn = _ventas_formato_comparativo_dim(df_vn, "Vendedor", yb_cmp, yc_cmp, top_n=30)
+            if show_vn is not None and fmt_vn is not None:
+                st.dataframe(show_vn.style.format(fmt_vn, na_rep="—"), width="stretch", hide_index=True)
+            else:
+                st.caption("Sin datos para comparar.")
+        elif len(yrs_cmp) < 2:
+            st.caption("Selecciona al menos 2 años para ver el comparativo.")
+        else:
+            st.caption("Sin datos.")
+
+    with b2:
+        st.markdown("#### Ventas totales por cliente (comparativo, top)")
+        df_cl = dash.get("por_cliente", pd.DataFrame())
+        if yb_cmp is not None and yc_cmp is not None and isinstance(df_cl, pd.DataFrame) and not df_cl.empty:
+            show_cl, fmt_cl = _ventas_formato_comparativo_dim(df_cl, "Cliente", yb_cmp, yc_cmp, top_n=30)
+            if show_cl is not None and fmt_cl is not None:
+                st.dataframe(show_cl.style.format(fmt_cl, na_rep="—"), width="stretch", hide_index=True)
+            else:
+                st.caption("Sin datos para comparar.")
+        elif len(yrs_cmp) < 2:
+            st.caption("Selecciona al menos 2 años para ver el comparativo.")
+        else:
+            st.caption("Sin datos.")
+
+    st.markdown('<div class="rv-section"><b>Detalle operativo</b><br><span>Consulta de detalle con descarga de vista y CSV completo.</span></div>', unsafe_allow_html=True)
+    df_det = _cargar_detalle_ventas_cached(
+        tuple(sedes_sel),
+        tuple(sys_sel),
+        tuple(rot_sel),
+        tuple(un_sel),
+        tuple(cli_sel),
+        tuple(ven_sel),
+        tuple(linea_sel),
+        tuple(modelo_sel),
+        tuple(int(x) for x in anios_sel),
+        tuple(int(x) for x in meses_sel),
+        limite=200_000,
+    )
+    if isinstance(df_det, pd.DataFrame) and not df_det.empty:
+        show_det = _renombrar_negocio(df_det.copy())
+        fmt_det: dict[str, Any] = {}
+        for c in ("Valor Venta", "Precio Unit. Venta", "Utilidad", "Descuento", "Costo Unit.", "Costo Total", "Precio Esperado", "Venta Esperada", "Variacion Ventas"):
+            if c in show_det.columns:
+                show_det[c] = pd.to_numeric(show_det[c], errors="coerce")
+                fmt_det[c] = _fmt_money_local
+        for c in ("Margen", "Margen Sistema", "Margen Esperado"):
+            if c in show_det.columns:
+                show_det[c] = pd.to_numeric(show_det[c], errors="coerce")
+                fmt_det[c] = _fmt_pct_local
+
+        # Orden estratégico de columnas: contexto -> producto -> cliente/canal
+        # -> organización -> precio/resultado -> clasificación.
+        orden_preferido = [
+            "Sede",
+            "Descp. CO Mvto.",
+            "Descrip. UN",
+            "Bodega",
+            "Descrip. Bodega",
+            "Inst.",
+            "Descripcion Instalacion",
+            "Sistema Precio",
+            "Cod. Sistema",
+            "Cliente",
+            "Nit Cliente",
+            "Vendedor",
+            "Dcto Factura",
+            "Dcto. Remision",
+            "Dcto. Pedido",
+            "Fecha Factura",
+            "Año Comparativo",
+            "Referencia",
+            "Ref Normalizada",
+            "Descripcion",
+            "Modelo",
+            "Línea",
+            "Rotación",
+            "Rotacion",
+            "Cant.",
+            "U.M.",
+            "Precio Unit. Venta",
+            "Valor Venta",
+            "Costo Unit.",
+            "Costo Total",
+            "Descuento",
+            "Utilidad",
+            "Margen",
+            "Precio Esperado",
+            "Venta Esperada",
+            "Margen Esperado",
+            "Variacion Ventas",
+            "Precio CNH",
+            "Margen Sistema",
+            "Tipo Inv.",
+            "Tipo item",
+            "Uso Lista",
+            "Tiene Precio",
+            "Id Lista",
+            "Descripcion Lista",
+            "Motivo",
+            "Descripcion Motivo",
+            "CO Dcto",
+            "CO",
+            "Mvto.",
+            "Rowid Item",
+            "Rowid",
+        ]
+        cols_actuales = list(show_det.columns)
+        cols_ordenadas = [c for c in orden_preferido if c in cols_actuales]
+        cols_restantes = [c for c in cols_actuales if c not in cols_ordenadas]
+        show_det = show_det[cols_ordenadas + cols_restantes]
+
+        st.caption(f"Filas mostradas: {len(show_det):,} (tope visual: 200.000).")
+
+        c_det_1, c_det_2 = st.columns([1, 1])
+        with c_det_1:
+            csv_vista = show_det.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                "Descargar CSV (vista actual)",
+                data=csv_vista,
+                file_name="detalle_ventas_filtrado_vista.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with c_det_2:
+            if st.button("Preparar CSV completo (sin tope)", key="btn_det_csv_full", use_container_width=True):
+                st.session_state["_det_csv_full_ready"] = True
+
+        if st.session_state.get("_det_csv_full_ready", False):
+            with st.spinner("Generando CSV completo filtrado..."):
+                df_det_full = _cargar_detalle_ventas_cached(
+                    tuple(sedes_sel),
+                    tuple(sys_sel),
+                    tuple(rot_sel),
+                    tuple(un_sel),
+                    tuple(cli_sel),
+                    tuple(ven_sel),
+                    tuple(linea_sel),
+                    tuple(modelo_sel),
+                    tuple(int(x) for x in anios_sel),
+                    tuple(int(x) for x in meses_sel),
+                    limite=None,
+                )
+                csv_full = df_det_full.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                f"Descargar CSV completo ({len(df_det_full):,} filas)",
+                data=csv_full,
+                file_name="detalle_ventas_filtrado_completo.csv",
+                mime="text/csv",
+                use_container_width=True,
+                key="dl_det_csv_full",
+            )
+
+        max_styler_cells = 262_144
+        total_cells = int(show_det.shape[0] * show_det.shape[1])
+        if total_cells <= max_styler_cells:
+            st.dataframe(show_det.style.format(fmt_det, na_rep="—"), width="stretch", hide_index=True)
+        else:
+            st.info(
+                "La tabla es muy grande para formato enriquecido; se muestra sin estilo para evitar error de render."
+            )
+            st.dataframe(show_det, width="stretch", hide_index=True)
+    else:
+        st.caption("Sin filas para el detalle completo con los filtros actuales.")
+
+
 def _plotly_theme() -> dict:
     """Tema oscuro alineado al dashboard (legible en pantalla ancha)."""
     return {
@@ -6975,6 +7862,7 @@ _render_header_y_actualizacion()
 tabs = st.tabs(
     [
         "Consulta referencias",
+        "Resumen de ventas",
         "Reporte margen SIESA",
         "Auditoría referencias",
     ]
@@ -6982,6 +7870,8 @@ tabs = st.tabs(
 with tabs[0]:
     _render_tab_consulta()
 with tabs[1]:
-    _render_tab_margen()
+    _render_tab_resumen_ventas()
 with tabs[2]:
+    _render_tab_margen()
+with tabs[3]:
     _render_tab_auditoria_referencias()

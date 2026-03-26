@@ -3,6 +3,7 @@
 # ===========================================================================
 import configparser
 import os
+import time
 import pyodbc
 import pandas as pd
 import duckdb
@@ -90,6 +91,36 @@ def optimizar_duckdb(con: duckdb.DuckDBPyConnection, tablas: list[str]) -> None:
         con.execute(f"ANALYZE {tabla}")
 
 
+def conectar_duckdb_con_reintentos(
+    db_path: Path,
+    *,
+    intentos: int = 10,
+    espera_inicial_s: float = 1.0,
+) -> duckdb.DuckDBPyConnection:
+    """
+    Abre DuckDB tolerando bloqueos temporales en Windows.
+    """
+    last_exc: Exception | None = None
+    wait_s = float(espera_inicial_s)
+    for i in range(1, int(intentos) + 1):
+        try:
+            return duckdb.connect(str(db_path))
+        except duckdb.IOException as exc:
+            last_exc = exc
+            msg = str(exc).lower()
+            if ("being utilized by another process" in msg) or ("no tiene acceso al archivo" in msg) or ("already open in" in msg):
+                if i < intentos:
+                    print(f"Reintento {i}/{intentos} por bloqueo de DuckDB (esperando {wait_s:.1f}s)...")
+                    time.sleep(wait_s)
+                    wait_s = min(wait_s * 1.6, 8.0)
+                    continue
+            raise
+    raise RuntimeError(
+        f"No fue posible abrir DuckDB en '{db_path}'. "
+        "El archivo sigue bloqueado por otro proceso."
+    ) from last_exc
+
+
 # ===========================================================================
 # SECCION 3 - CONSULTA DE VENTAS
 # ===========================================================================
@@ -170,6 +201,8 @@ def build_query_ventas(fecha_desde: str) -> str:
                t106_mc_criterios_item_mayores.f106_descripcion)               AS [Linea],
         sist.f106_id                                                          AS [Cod. Sistema],
         sist.f106_descripcion                                                 AS [Sistema Precio],
+        CASE WHEN mod.f106_id IS NULL THEN NULL
+             ELSE CONCAT(RTRIM(mod.f106_id), ' - ', mod.f106_descripcion) END AS [Modelo],
         obj.Margen_obj                                                        AS [Margen Sistema],
         CASE WHEN t150_mc_bodegas.f150_id = 'BEMER' THEN '04' ELSE '09' END   AS [Lista Sugerida],
         ISNULL(lp.f126_precio, 0)                                             AS [Precio Esperado],
@@ -200,8 +233,9 @@ def build_query_ventas(fecha_desde: str) -> str:
         IIF(lp.f126_precio IS NULL, 'No', 'Si')                               AS [Tiene Precio],
         IIF(t112_mc_listas_precios.f112_id IN ('04','09'), 'Si', 'No')        AS [Uso Lista],
         IIF(t120_mc_items.f120_ind_tipo_item IN (1,3), 'Inv', 'Serv')         AS [Tipo item],
-        CASE WHEN RTRIM(rot.f106_id) IN ('AA','AB','BA','BB')
-             THEN 'Alta' ELSE 'Baja' END                                      AS [Rotacion],
+        /* Misma lógica que margen SIESA / #Rotacion en 00_Reportes_SQL: plan 08, código + descripción */
+        CASE WHEN rot.f106_id IS NULL THEN NULL
+             ELSE CONCAT(RTRIM(rot.f106_id), ' - ', rot.f106_descripcion) END AS [Rotacion],
         IIF(CAST(t461_cm_docto_factura_venta.f461_id_fecha AS DATE)
             >= CAST(DATEADD(day, -DAY(GETDATE())+1,
                             DATEADD(year, -1, GETDATE())) AS date),
@@ -275,7 +309,8 @@ def build_query_ventas(fecha_desde: str) -> str:
         LEFT JOIN (
             SELECT DISTINCT
                 t120_mc_items.f120_rowid,
-                t106b.f106_id
+                t106b.f106_id,
+                t106b.f106_descripcion
             FROM t125_mc_items_criterios cr
             INNER JOIN t106_mc_criterios_item_mayores t106b
                 ON  cr.f125_id_cia            = t106b.f106_id_cia
@@ -305,6 +340,23 @@ def build_query_ventas(fecha_desde: str) -> str:
               AND cr.f125_id_plan   = '12'
               AND t120_mc_items.f120_ind_tipo_item IN (1, 3)
         ) AS sist ON sist.f120_rowid = t120_mc_items.f120_rowid
+        LEFT JOIN (
+            SELECT DISTINCT
+                t120_mc_items.f120_rowid,
+                t106mod.f106_id,
+                t106mod.f106_descripcion
+            FROM t125_mc_items_criterios cr
+            INNER JOIN t106_mc_criterios_item_mayores t106mod
+                ON  cr.f125_id_cia            = t106mod.f106_id_cia
+                AND cr.f125_id_plan           = t106mod.f106_id_plan
+                AND cr.f125_id_criterio_mayor = t106mod.f106_id
+            INNER JOIN t120_mc_items
+                ON cr.f125_rowid_item = t120_mc_items.f120_rowid
+            WHERE cr.f125_id_cia    = 1
+              AND t106mod.f106_id_cia = 1
+              AND cr.f125_id_plan   = '03'
+              AND t120_mc_items.f120_ind_tipo_item IN (1, 3)
+        ) AS mod ON mod.f120_rowid = t120_mc_items.f120_rowid
         LEFT JOIN (
             SELECT DISTINCT
                 RTRIM(t120_mc_items.f120_referencia)        AS RefLista,
@@ -412,7 +464,7 @@ def extraer_ventas() -> int:
     total   = 0
     primera = True
 
-    with duckdb.connect(str(DUCKDB_PATH)) as duck:
+    with conectar_duckdb_con_reintentos(DUCKDB_PATH) as duck:
         duck.execute("PRAGMA threads = 4")
         try:
             for i, chunk in enumerate(
@@ -478,17 +530,39 @@ def cruzar_con_precio_cnh() -> pd.DataFrame:
 
     print("Cruzando ventas con Precio CNH (DuckDB)...")
 
-    sql_cruce = f"""
-        SELECT
-            v.*,
-            ROUND(p."Precio Prorrateo", 2) AS "Precio CNH"
-        FROM ventas_raw v
-        LEFT JOIN resultado_precios_lista p
-            ON {norm_sql('v.Ref_Normalizada')} = {norm_sql('p.Referencia_Normalizada')}
-    """
-
-    with duckdb.connect(str(DUCKDB_PATH)) as duck:
+    with conectar_duckdb_con_reintentos(DUCKDB_PATH) as duck:
         duck.execute("PRAGMA threads = 4")
+        # Si no se ejecutó SQL_00 (tabla no cargada), no aborta el pipeline:
+        # se conserva el detalle de ventas y se deja Precio CNH en NULL.
+        has_precio = bool(
+            duck.execute(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.tables
+                WHERE lower(table_name) = 'resultado_precios_lista'
+                """
+            ).fetchone()[0]
+        )
+        if has_precio:
+            sql_cruce = f"""
+                SELECT
+                    v.*,
+                    ROUND(p."Precio Prorrateo", 2) AS "Precio CNH"
+                FROM ventas_raw v
+                LEFT JOIN resultado_precios_lista p
+                    ON {norm_sql('v.Ref_Normalizada')} = {norm_sql('p.Referencia_Normalizada')}
+            """
+        else:
+            print(
+                "  Aviso: no existe `resultado_precios_lista` en DuckDB "
+                "(SQL 00 omitido). Se exportará ventas con `Precio CNH` en NULL."
+            )
+            sql_cruce = """
+                SELECT
+                    v.*,
+                    CAST(NULL AS DOUBLE) AS "Precio CNH"
+                FROM ventas_raw v
+            """
         df_resultado = duck.execute(sql_cruce).df()
 
     if df_resultado.empty:
