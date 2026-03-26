@@ -9,6 +9,7 @@ import pandas as pd
 import duckdb
 from pathlib import Path
 from datetime import datetime, date
+from ref_normalization import normalize_reference_expr_sql, normalize_reference_series_pd
 
 
 # ===========================================================================
@@ -36,53 +37,6 @@ CSV_OUT     = BASE_DIR / config["SALIDA_VENTAS"]["csv"].replace("{fecha}", FECHA
 
 FECHA_DESDE = date(datetime.now().year - 2, 1, 1).strftime("%Y-%m-%d")
 CHUNK_SIZE  = 50_000
-
-
-# ===========================================================================
-# SECCION 2 - NORMALIZACION
-# ===========================================================================
-def norm_sql(campo: str) -> str:
-    c = "CAST({campo} AS VARCHAR)".format(campo=campo)
-    return (
-        "UPPER(trim("
-            "regexp_replace("
-            "regexp_replace("
-            "regexp_replace("
-            "regexp_replace("
-            "regexp_replace("
-            "regexp_replace("
-                "replace("
-                    "trim(replace(replace(replace({c},"
-                    "chr(9),''),chr(10),''),chr(13),'')"
-                "),"
-            "'_','-'"
-            "),"
-        "'[^A-Za-z0-9.\\-\"/ ]','','g'),"
-        "'^\\.+|\\.+$','','g'),"
-        "'\\.{{2,}}','.','g'),"
-        "'-{{2,}}','-','g'),"
-        "'\\s*-\\s*','-','g'),"
-        "'[ ]{{2,}}',' ','g')"
-        "))"
-    ).format(c=c)
-
-
-def norm_pd(serie: pd.Series) -> pd.Series:
-    s = (
-        serie.astype("string")
-        .str.strip()
-        .str.replace(r"\t|\n|\r", "", regex=True)
-        .str.replace("_", "-", regex=False)
-        .str.replace(r'[^A-Za-z0-9.\-"/ ]', "", regex=True)
-        .str.replace(r"^\.+|\.+$", "", regex=True)
-        .str.replace(r"\.{2,}", ".", regex=True)
-        .str.replace(r"-{2,}", "-", regex=True)
-        .str.replace(r"\s*-\s*", "-", regex=True)
-        .str.replace(r" {2,}", " ", regex=True)
-        .str.upper()
-        .str.strip()
-    )
-    return s
 
 
 def optimizar_duckdb(con: duckdb.DuckDBPyConnection, tablas: list[str]) -> None:
@@ -480,7 +434,7 @@ def extraer_ventas() -> int:
                 if "Referencia" not in chunk.columns:
                     raise KeyError('No se encontró la columna "Referencia" en ventas')
 
-                chunk["Referencia"] = norm_pd(chunk["Referencia"]).replace("", pd.NA)
+                chunk["Referencia"] = normalize_reference_series_pd(chunk["Referencia"]).replace("", pd.NA)
                 chunk["Ref_Normalizada"] = chunk["Referencia"]
 
                 duck.register("ventas_chunk", chunk)
@@ -550,7 +504,7 @@ def cruzar_con_precio_cnh() -> pd.DataFrame:
                     ROUND(p."Precio Prorrateo", 2) AS "Precio CNH"
                 FROM ventas_raw v
                 LEFT JOIN resultado_precios_lista p
-                    ON {norm_sql('v.Ref_Normalizada')} = {norm_sql('p.Referencia_Normalizada')}
+                    ON {normalize_reference_expr_sql('v.Ref_Normalizada')} = {normalize_reference_expr_sql('p.Referencia_Normalizada')}
             """
         else:
             print(

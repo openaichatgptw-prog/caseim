@@ -26,6 +26,7 @@ import re
 import duckdb
 import pandas as pd
 import pyodbc
+from ref_normalization import normalize_reference_series_pd
 
 
 # ===========================================================================
@@ -1150,6 +1151,11 @@ def _columna_referencia_texto_fijo(nombre: str) -> bool:
     return False
 
 
+def _es_columna_de_referencia(nombre: str) -> bool:
+    c = str(nombre).strip().lower().replace(" ", "_")
+    return "referencia" in c or "ref_" in c
+
+
 def dataframe_para_duckdb(df: pd.DataFrame) -> pd.DataFrame:
     """
     Fuerza float64 en columnas numéricas para que DuckDB no infiera DECIMAL estrecho
@@ -1159,6 +1165,10 @@ def dataframe_para_duckdb(df: pd.DataFrame) -> pd.DataFrame:
     float64. Referencia / alternas se dejan en texto.
     """
     df = df.copy()
+    for col in df.columns:
+        if _es_columna_de_referencia(col):
+            df[col] = normalize_reference_series_pd(df[col]).replace("", pd.NA)
+
     for col in df.columns:
         if pd.api.types.is_datetime64_any_dtype(df[col]):
             continue

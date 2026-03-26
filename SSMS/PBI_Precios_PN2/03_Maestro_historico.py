@@ -9,6 +9,7 @@ from datetime import datetime
 import pyodbc
 import pandas as pd
 import duckdb
+from ref_normalization import normalize_reference_expr_sql
 
 
 # ===========================================================================
@@ -501,37 +502,7 @@ def calcular_en_duckdb():
                 CAST(Año3_USA_Pct         AS DOUBLE)  AS Año3_USA_Pct,
                 CAST(Año3_EUR_Pct         AS DOUBLE)  AS Año3_EUR_Pct,
                 CAST(Tipo_Origen          AS VARCHAR) AS Tipo_Origen,
-                UPPER(
-                    REGEXP_REPLACE(
-                        REGEXP_REPLACE(
-                            REGEXP_REPLACE(
-                                REGEXP_REPLACE(
-                                    REGEXP_REPLACE(
-                                        REGEXP_REPLACE(
-                                            REPLACE(
-                                                TRIM(REPLACE(REPLACE(REPLACE(CAST(Referencia_Principal AS VARCHAR),
-                                                                              '\t',''),
-                                                              '\n',''),
-                                                      '\r','')),
-                                                '_','-'
-                                            ),
-                                            '[^A-Za-z0-9.\\-\"/ ]','','g'
-                                        ),
-                                        '^\\.+|\\.+$','','g'
-                                    ),
-                                    '\\.{2,}','.',
-                                    'g'
-                                ),
-                                '-{2,}','-',
-                                'g'
-                            ),
-                            '\\s*-\\s*','-',
-                            'g'
-                        ),
-                        ' {2,}',' ',
-                        'g'
-                    )
-                ) AS Ref_Norm
+                {normalize_reference_expr_sql("Referencia_Principal")} AS Ref_Norm
             FROM origen_importaciones;
         """)
 

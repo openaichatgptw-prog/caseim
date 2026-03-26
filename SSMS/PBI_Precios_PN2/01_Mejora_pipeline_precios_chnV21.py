@@ -21,6 +21,10 @@ Configuración: config.ini (secciones ARCHIVOS, SALIDA, SQLSERVER, FACTORES)
 import configparser, pyodbc, pandas as pd, polars as pl, duckdb, os
 from pathlib import Path
 from datetime import datetime
+from ref_normalization import (
+    normalize_reference_expr_polars,
+    normalize_reference_expr_sql,
+)
 
 
 # ===========================================================================
@@ -361,38 +365,13 @@ WHERE  r.f124_id_cia = 1
 """
 
 
-# ===========================================================================
-# EXPRESION norm_sql — solo se usa en paso1 y paso2 al persistir columnas
-# En paso3 los JOINs usan las columnas precalculadas directamente
-# ===========================================================================
-def norm_sql(c):
-    return (
-        f"UPPER(trim(regexp_replace(regexp_replace(regexp_replace(regexp_replace("
-        f"regexp_replace(regexp_replace(replace(trim(replace(replace(replace(CAST({c} AS VARCHAR),"
-        f"chr(9),''),chr(10),''),chr(13),'')"
-        f"),'_','-'),'[^A-Za-z0-9.\\-\"/ ]','','g'),'^\\.+|\\.+$','','g'),"
-        f"'\\.{{2,}}','.','g'),'-{{2,}}','-','g'),'\\s*-\\s*','-','g'),'[ ]{{2,}}',' ','g')))"
-    )
-
-
-def norm_pl(col):
-    return (
-        col.cast(pl.Utf8).str.strip_chars()
-        .str.replace_all(r"\t|\n|\r", "").str.replace_all(r"_", "-")
-        .str.replace_all(r"[^A-Za-z0-9.\-\"/ ]", "").str.replace_all(r"^\.+|\.+$", "")
-        .str.replace_all(r"\.{2,}", ".").str.replace_all(r"-{2,}", "-")
-        .str.replace_all(r"\s*-\s*", "-").str.replace_all(r" {2,}", " ")
-        .str.to_uppercase()
-    )
-
-
 def leer_hoja(path, sheet, cols):
     df = pl.read_excel(path, sheet_name=sheet, has_header=True)
     n  = df.columns
     a0 = next(iter(cols))
     return (
         df.select(
-            [norm_pl(pl.col(n[cols[a0]])).alias(a0)] +
+            [normalize_reference_expr_polars(pl.col(n[cols[a0]])).alias(a0)] +
             [
                 # DNET suele venir como texto; mantenerlo como string para parsearlo luego.
                 (
@@ -515,7 +494,7 @@ def paso1_precios_excel():
               .str.replace_all(r"[^0-9.\-]", "")
               .cast(pl.Float64, strict=False)
               .round(2),
-            norm_pl(pl.col("referencia")).alias("ref_norm"),
+            normalize_reference_expr_polars(pl.col("referencia")).alias("ref_norm"),
         ])
         .sort("referencia")
     )
@@ -576,7 +555,7 @@ def paso2_sqlserver():
 
             # Persiste Ref_Norm en maestro — calculada una sola vez
             con.execute("ALTER TABLE maestro ADD COLUMN Ref_Norm VARCHAR")
-            con.execute(f"UPDATE maestro SET Ref_Norm = {norm_sql('Referencia')}")
+            con.execute(f"UPDATE maestro SET Ref_Norm = {normalize_reference_expr_sql('Referencia')}")
 
             print("  Cargando referencias alternas...")
             df_refs = pd.read_sql(SQL_REFS, conn_sql)
@@ -587,8 +566,8 @@ def paso2_sqlserver():
             con.execute(f"""
                 CREATE OR REPLACE TABLE referencias_alternas AS
                 SELECT *,
-                       {norm_sql('Referencia')}        AS Ref_Norm,
-                       {norm_sql('Referencia_Alterna')} AS Ref_Alt_Norm
+                       {normalize_reference_expr_sql('Referencia')}        AS Ref_Norm,
+                       {normalize_reference_expr_sql('Referencia_Alterna')} AS Ref_Alt_Norm
                 FROM tmp_refs
             """)
             con.execute(

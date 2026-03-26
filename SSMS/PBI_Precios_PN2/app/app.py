@@ -5,7 +5,10 @@ import html
 import io
 import math
 import re
+import sys
+import importlib
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Final
 
 import pandas as pd
@@ -38,6 +41,18 @@ from services import data_access as data_access_service
 from services.filter_prefs import load_filter_prefs_into_session, render_reset_filters_button, save_tab_filter_prefs
 from services.pipeline_runner import ejecutar_pipelines
 from services.sql_reports_loader import SQL_001_KEY, SQL_002_KEY, SQL_003_KEY
+
+PIPELINE_BASE_DIR = Path(__file__).resolve().parents[1]
+if str(PIPELINE_BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(PIPELINE_BASE_DIR))
+
+try:
+    from ref_normalization import normalize_reference_text
+except ImportError:
+    # En recargas de Streamlit puede quedar un módulo parcialmente inicializado
+    # en memoria (sys.modules). Lo invalidamos y reintentamos.
+    sys.modules.pop("ref_normalization", None)
+    normalize_reference_text = importlib.import_module("ref_normalization").normalize_reference_text
 
 PIPELINE_OPCIONES: Final[list[str]] = [
     "01_Mejora_pipeline_precios_chnV21.py",
@@ -2903,7 +2918,7 @@ def _render_tab_consulta_masiva() -> None:
         serie = df_csv[col_ref].astype(str).str.strip()
 
         def _normalizar_ref_csv(val: str) -> str:
-            s = str(val or "").strip()
+            s = normalize_reference_text(val)
             if not s:
                 return ""
             # Limpia ruido común de Excel cuando un código texto se guarda/carga como float.
@@ -4908,6 +4923,7 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
         sliders_activos = solo_significativas
         u1, u2, u3 = r_um[1], r_um[2], r_um[3]
         with u1:
+            st.session_state.setdefault("aud_umbral_var_compra", 20.0)
             st.session_state.setdefault(
                 "aud_umbral_var_compra_num",
                 float(st.session_state.get("aud_umbral_var_compra", 20.0)),
@@ -4926,7 +4942,6 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
                 "Umbral |Δ compra| (%)",
                 min_value=0.0,
                 max_value=300.0,
-                value=20.0,
                 step=1.0,
                 key="aud_umbral_var_compra",
                 disabled=not sliders_activos,
@@ -4946,6 +4961,7 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
                 help="Ajuste numérico; se sincroniza con el slider.",
             )
         with u2:
+            st.session_state.setdefault("aud_umbral_var_costo", 15.0)
             st.session_state.setdefault(
                 "aud_umbral_var_costo_num",
                 float(st.session_state.get("aud_umbral_var_costo", 15.0)),
@@ -4964,7 +4980,6 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
                 "Umbral |Δ vs costo inv.| (%)",
                 min_value=0.0,
                 max_value=300.0,
-                value=15.0,
                 step=1.0,
                 key="aud_umbral_var_costo",
                 disabled=not sliders_activos,
