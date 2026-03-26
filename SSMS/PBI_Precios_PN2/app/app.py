@@ -706,11 +706,23 @@ st.markdown(
         line-height: 1.25;
         word-break: break-word;
     }
+    .consulta-kpi-cell {
+        padding: 0.36rem 0.45rem;
+        border: 1px solid rgba(42, 58, 92, 0.5);
+        border-radius: 8px;
+        background: rgba(13, 20, 38, 0.48);
+        min-height: 56px;
+    }
     .consulta-compra-grid {
         display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 0.32rem 0.45rem;
+        grid-template-columns: repeat(4, minmax(150px, 1fr));
+        gap: 0.38rem 0.45rem;
         margin: 0;
+    }
+    @media (max-width: 980px) {
+        .consulta-compra-grid {
+            grid-template-columns: repeat(2, minmax(150px, 1fr));
+        }
     }
     @media (max-width: 520px) {
         .consulta-compra-grid {
@@ -946,7 +958,6 @@ def _consulta_html_topline_kpis(resumen: dict) -> str:
     else:
         pp_s = "—"
     disp_t = html.escape(f"{resumen.get('_disp_total', 0):,.2f}")
-    disp_ok = html.escape(str(resumen.get("_disponible", "NO")))
     help_pr = html.escape(_consulta_help_prorrateo(), quote=True)
     items = (
         f'<span class="consulta-kpi-inline-item">'
@@ -958,8 +969,7 @@ def _consulta_html_topline_kpis(resumen: dict) -> str:
         f'<span class="consulta-kpi-val">{pp_s}</span></span>'
         f'<span class="consulta-kpi-inline-item"><span class="consulta-kpi-lbl">Disp. total</span>'
         f'<span class="consulta-kpi-val">{disp_t}</span></span>'
-        f'<span class="consulta-kpi-inline-item"><span class="consulta-kpi-lbl">Disponible</span>'
-        f'<span class="consulta-kpi-val">{disp_ok}</span></span>'
+        ""
     )
     return (
         f'<div class="consulta-topline">'
@@ -1151,6 +1161,11 @@ def _consulta_html_ultima_compra(resumen: dict) -> str:
     prov = html.escape(_fmt_consulta_display(resumen.get("Proveedor")))
     usd = html.escape(_fmt_money_usd(resumen.get("Último Valor (USD)"), decimals=2))
     cop = html.escape(_fmt_money_cop_local(_valor_liq_cop_desde_resumen(resumen), decimals=0))
+    costo_min = html.escape(_fmt_money_cop_local(resumen.get("Costo_Min"), decimals=0))
+    costo_max = html.escape(_fmt_money_cop_local(resumen.get("Costo_Max"), decimals=0))
+    ex_total = _to_float(resumen.get("Existencia_Total"))
+    ex_total_s = "—" if ex_total is None else _fmt_num_local(ex_total, decimals=0)
+    existencias = html.escape(ex_total_s)
     return (
         f'<div class="consulta-compra-grid">'
         f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Fecha</span>'
@@ -1161,6 +1176,12 @@ def _consulta_html_ultima_compra(resumen: dict) -> str:
         f'<span class="consulta-kpi-val">{usd}</span></div>'
         f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Valor Liq. (COP)</span>'
         f'<span class="consulta-kpi-val">{cop}</span></div>'
+        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Costo mín.</span>'
+        f'<span class="consulta-kpi-val">{costo_min}</span></div>'
+        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Costo máx.</span>'
+        f'<span class="consulta-kpi-val">{costo_max}</span></div>'
+        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Existencias</span>'
+        f'<span class="consulta-kpi-val">{existencias}</span></div>'
         f"</div>"
     )
 
@@ -1183,7 +1204,7 @@ def _consulta_build_sheet_html(
         )
     )
     hr = '<div class="consulta-hr"></div>'
-    head = '<div class="consulta-blockhead">Última compra</div>'
+    head = '<div class="consulta-blockhead">Última compra / Inventario</div>'
     comp = _consulta_html_ultima_compra(resumen)
     inner = top + split + note + hr + head + comp
     return f'<div class="consulta-sheet-wrap"><div class="consulta-sheet">{inner}</div></div>'
@@ -2233,6 +2254,22 @@ def _render_tab_consulta_individual() -> None:
     if ref_norm:
         try:
             resumen = obtener_resumen_referencia(ref_norm)
+            # Enriquecer consulta individual con la misma lógica de consulta masiva (COALESCE aud/inv).
+            resolver_masivo = getattr(data_access_service, "obtener_resumen_referencias_masivo", None)
+            if resolver_masivo is not None:
+                try:
+                    df_single = resolver_masivo([ref_norm])
+                    if df_single is not None and not df_single.empty:
+                        row_m = df_single.iloc[0].to_dict()
+                        if resumen is None:
+                            resumen = row_m
+                        else:
+                            for k in ("Costo_Min", "Costo_Max", "Existencia_Total", "_disponible", "_disp_total"):
+                                v = row_m.get(k)
+                                if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                                    resumen[k] = v
+                except Exception:
+                    pass
         except Exception as exc:
             st.error(f"No fue posible consultar la referencia: {exc}")
             return
@@ -2293,7 +2330,25 @@ def _render_tab_consulta_individual() -> None:
             unsafe_allow_html=True,
         )
     else:
-        st.dataframe(_renombrar_negocio(ventas), width="stretch", hide_index=True)
+        ventas_show = _renombrar_negocio(ventas)
+        fmt_ventas: dict[str, str] = {}
+        for col in ("Precio Unit. Venta", "Valor Venta"):
+            if col in ventas_show.columns:
+                ventas_show[col] = pd.to_numeric(ventas_show[col], errors="coerce")
+                fmt_ventas[col] = "{:,.0f}"
+        if "Margen" in ventas_show.columns:
+            ventas_show["Margen"] = pd.to_numeric(ventas_show["Margen"], errors="coerce")
+            marg_s = ventas_show["Margen"]
+            # Si viene en proporción (0.18), mostrar como 18.0%; si ya viene en % (18), conservar escala.
+            if marg_s.notna().any() and float(marg_s.abs().max()) <= 2.0:
+                fmt_ventas["Margen"] = "{:.2%}"
+            else:
+                fmt_ventas["Margen"] = "{:.2f}%"
+        st.dataframe(
+            ventas_show.style.format(fmt_ventas, na_rep="—"),
+            width="stretch",
+            hide_index=True,
+        )
 
     save_tab_filter_prefs("consulta")
 

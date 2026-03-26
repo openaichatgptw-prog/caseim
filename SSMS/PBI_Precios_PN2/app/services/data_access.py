@@ -437,10 +437,8 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
         has_o3_tab = _table_exists(con, "origen_precios_tablero")
         has_o3_ref = _table_has_column(con, "origen_precios_tablero", "REF") if has_o3_tab else False
         has_o3_tipo = _table_has_column(con, "origen_precios_tablero", "Tipo_Origen") if has_o3_tab else False
-        # Inventario SIESA (reporte 00): existencias por bodega (campo correcto para total).
-        has_margen_tab = _table_exists(con, "margen_siesa_raw")
-        has_margen_ref = _table_has_column(con, "margen_siesa_raw", "Referencia") if has_margen_tab else False
-        has_margen_exist = _table_has_column(con, "margen_siesa_raw", "Existencia") if has_margen_tab else False
+        # Inventario SIESA consolidado (reporte 00) se toma desde auditoria_raw
+        # para evitar recalcular/sumar en la app.
 
         def _pick_rpl_col(*cands: str) -> str | None:
             for cand in cands:
@@ -650,27 +648,6 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
             """
             o3_tipo_expr = 'NULLIF(trim(CAST(o3."Tipo_Origen" AS VARCHAR)), \'\')'
 
-        inv_cte = ""
-        inv_join = ""
-        inv_exist_expr = "CAST(NULL AS DOUBLE)"
-        if has_margen_ref and has_margen_exist:
-            inv_cte = """
-                ,
-                inv AS (
-                    SELECT
-                        upper(trim(CAST(Referencia AS VARCHAR))) AS ref_inv_key,
-                        SUM(COALESCE(try_cast(Existencia AS DOUBLE), 0)) AS "Existencia_Total_INV"
-                    FROM margen_siesa_raw
-                    WHERE Referencia IS NOT NULL
-                    GROUP BY 1
-                )
-            """
-            inv_join = """
-                LEFT JOIN inv
-                  ON upper(trim(CAST(p.Referencia_Original AS VARCHAR))) = inv.ref_inv_key
-            """
-            inv_exist_expr = 'try_cast(inv."Existencia_Total_INV" AS DOUBLE)'
-
         con.register("tmp_refs_input", df_input)
         try:
             join_alt = ""
@@ -731,7 +708,6 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
                     FROM cand
                 )
                 {aud_cte}
-                {inv_cte}
                 SELECT
                     i.orden,
                     i.referencia_entrada AS Referencia_Entrada,
@@ -774,7 +750,7 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
                     {sel_vlr_liq},
                     COALESCE({p_costo_min_expr}, {aud_costo_expr}) AS "Costo_Min",
                     COALESCE({p_costo_max_expr}, {aud_costo_max_expr}) AS "Costo_Max",
-                    COALESCE({p_existencia_total_expr}, {inv_exist_expr}, {aud_exist_expr}) AS "Existencia_Total",
+                    COALESCE({p_existencia_total_expr}, {aud_exist_expr}) AS "Existencia_Total",
                     COALESCE({p_tipo_origen_expr}, {aud_tipo_expr}, {o3_tipo_expr}) AS "Tipo_Origen",
                     COALESCE({p_precio_lista_09_expr}, {aud_pl_expr}) AS "Precio_Lista_09",
                     {sel_ult_precio_venta},
@@ -791,7 +767,6 @@ def obtener_resumen_referencias_masivo(referencias: list[str]) -> pd.DataFrame:
                   ON p.referencia_entrada = i.referencia_entrada
                  AND p.rn = 1
                 {aud_join}
-                {inv_join}
                 {join_o3}
                 ORDER BY i.orden
             """
