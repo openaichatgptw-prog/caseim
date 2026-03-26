@@ -1951,8 +1951,15 @@ def _coerce_margen_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False, ttl=300)
-def _cargar_margenes_para_dashboard() -> tuple:
-    df = obtener_dataset_margenes(limite=0, margen_min=-10_000.0, margen_max=100.0)
+def _cargar_margenes_para_dashboard(cache_version: str = "20260326_v3") -> tuple:
+    # Cargamos un rango muy amplio para que referencias con márgenes extremos
+    # (ej. costos/prices sin Precio_Lista) no se “pierdan” antes de filtrar en UI.
+    df = obtener_dataset_margenes(
+        limite=0,
+        margen_min=-1e15,
+        margen_max=1e15,
+        incluir_margenes_null=True,
+    )
     df = _coerce_margen_numeric_columns(df)
     margen_col = None
     for cand in ("Margen09", "Margen_Pct", "Margen04"):
@@ -1963,9 +1970,14 @@ def _cargar_margenes_para_dashboard() -> tuple:
 
 
 @st.cache_data(show_spinner=False, ttl=600, max_entries=3)
-def _cargar_referencias_catalogo_masivo_cached() -> list[str]:
+def _cargar_referencias_catalogo_masivo_cached(cache_version: str = "20260326_v3") -> list[str]:
     """Catálogo único de referencias para consulta masiva sin CSV."""
-    df = obtener_dataset_margenes(limite=0, margen_min=-10_000.0, margen_max=100.0)
+    df = obtener_dataset_margenes(
+        limite=0,
+        margen_min=-1e15,
+        margen_max=1e15,
+        incluir_margenes_null=True,
+    )
     if df is None or df.empty:
         return []
     refs: list[str] = []
@@ -3801,6 +3813,36 @@ def _margen_df_con_codigo_referencia(df: pd.DataFrame, margen_col: str, precio_c
         ro if ro else (_primera_alterna(ra) if _primera_alterna(ra) else "SIN_REFERENCIA")
         for ro, ra in zip(ref_original, ref_alternas)
     ]
+
+    # Cuando incluimos filas con márgenes/precios NULL (referencias sin Precio_Lista),
+    # algunos JOINs de puente pueden duplicar registros en UI.
+    # Base 00 normalmente trae 1 fila por (Referencia, Bodega); deduplicamos por llaves
+    # disponibles para mantener consistencia en KPIs y detalle filtrado.
+    dedup_keys: list[str] = []
+    if "Referencia_Original" in df_margen.columns:
+        dedup_keys.append("Referencia_Original")
+    if "Bodega" in df_margen.columns:
+        dedup_keys.append("Bodega")
+    for extra in ("Nom_Instalacion", "Rotacion"):
+        if extra in df_margen.columns:
+            dedup_keys.append(extra)
+    if len(dedup_keys) >= 2:
+        # Si hay duplicados por la ruta de JOIN (común al incluir NULLs),
+        # conservar la fila "más informativa" en vez de la primera arbitraria.
+        prefer_exist_col = "Existencia" if "Existencia" in df_margen.columns else ("Disponible" if "Disponible" in df_margen.columns else None)
+        prefer_cols: list[str] = []
+        if prefer_exist_col and prefer_exist_col in df_margen.columns:
+            prefer_cols.append(prefer_exist_col)
+        if "Costo_Prom_Inst" in df_margen.columns:
+            prefer_cols.append("Costo_Prom_Inst")
+        if prefer_cols:
+            df_margen = df_margen.sort_values(
+                by=prefer_cols,
+                ascending=[False] * len(prefer_cols),
+                kind="mergesort",
+            )
+        df_margen = df_margen.drop_duplicates(subset=dedup_keys, keep="first")
+
     if margen_col in df_margen.columns:
         df_margen[margen_col] = pd.to_numeric(df_margen[margen_col], errors="coerce")
     if precio_col in df_margen.columns:
@@ -3824,6 +3866,14 @@ def _margen_ui_filtros_completos(df_margen: pd.DataFrame, margen_col: str, preci
                 placeholder="Ej: 12345 o texto",
                 key="margen_filtro_busqueda",
             ).strip()
+            # Si el usuario busca una referencia que no tenga precio/margen (NULL),
+            # permitir que esos registros se mantengan en el filtrado.
+            st.session_state.setdefault("margen_incluir_nulls", bool(txt_busqueda))
+            incluir_nulls = st.checkbox(
+                "Incluir sin precio/margen (NULL)",
+                key="margen_incluir_nulls",
+                help="Mantiene filas donde `Margen*` o `Precio_Lista_*` vienen en NULL/NaN.",
+            )
         with sub_m2:
             modelo_txt = st.text_input(
                 "Modelo (palabra clave)",
@@ -4074,20 +4124,32 @@ def _margen_ui_filtros_completos(df_margen: pd.DataFrame, margen_col: str, preci
         ]
     if margen_desde > margen_hasta:
         margen_desde, margen_hasta = margen_hasta, margen_desde
-    df_filtrado = df_filtrado[
-        (df_filtrado[margen_col] >= float(margen_desde))
-        & (df_filtrado[margen_col] <= float(margen_hasta))
-    ]
+    effective_incluir_nulls = incluir_nulls or bool(txt_busqueda)
+    margen_s = df_filtrado[margen_col]
+    if effective_incluir_nulls:
+        df_filtrado = df_filtrado[
+            ((margen_s >= float(margen_desde)) & (margen_s <= float(margen_hasta)))
+            | margen_s.isna()
+        ]
+    else:
+        df_filtrado = df_filtrado[
+            (margen_s >= float(margen_desde))
+            & (margen_s <= float(margen_hasta))
+        ]
     if precio_09_desde > precio_09_hasta:
         precio_09_desde, precio_09_hasta = precio_09_hasta, precio_09_desde
     if existencia_desde > existencia_hasta:
         existencia_desde, existencia_hasta = existencia_hasta, existencia_desde
 
     if precio_col in df_filtrado.columns:
-        df_filtrado = df_filtrado[
-            (df_filtrado[precio_col].fillna(0) >= float(precio_09_desde))
-            & (df_filtrado[precio_col].fillna(0) <= float(precio_09_hasta))
-        ]
+        precio_s = df_filtrado[precio_col]
+        price_mask = (
+            (precio_s.fillna(0) >= float(precio_09_desde))
+            & (precio_s.fillna(0) <= float(precio_09_hasta))
+        )
+        if effective_incluir_nulls:
+            price_mask = price_mask | precio_s.isna()
+        df_filtrado = df_filtrado[price_mask]
     if existencia_col_global:
         df_filtrado = df_filtrado[
             (df_filtrado[existencia_col_global].fillna(0) >= float(existencia_desde))

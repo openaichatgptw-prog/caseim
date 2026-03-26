@@ -990,6 +990,8 @@ def obtener_dataset_margenes(
     limite: int | None = 10_000,
     margen_min: float = -10_000.0,
     margen_max: float = 100.0,
+    *,
+    incluir_margenes_null: bool = False,
 ) -> pd.DataFrame:
     """
     Filas alineadas al reporte `00_precio_margen_SIESA.sql` (tabla `margen_siesa_raw`).
@@ -1162,6 +1164,12 @@ def obtener_dataset_margenes(
             )
         )
 
+        sql_where_between = f"({margen_expr}) BETWEEN ? AND ?"
+        # Si el margen es NULL (por ejemplo, sin `Precio_Lista_*`), el BETWEEN lo descarta.
+        # Para la UI de auditoria/consulta queremos opcionalmente conservar esas filas.
+        if incluir_margenes_null:
+            sql_where_between = f"(({margen_expr}) IS NULL OR {sql_where_between})"
+
         sql = f"""
             SELECT
                 m.Descripcion,
@@ -1189,7 +1197,7 @@ def obtener_dataset_margenes(
             {rmap_alt_block}
             {join_attr_sql}
             {join_o3_sql}
-            WHERE ({margen_expr}) BETWEEN ? AND ?
+            WHERE {sql_where_between}
             ORDER BY m.Referencia, m.Bodega
         """
 
