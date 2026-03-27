@@ -2622,6 +2622,7 @@ def _consulta_masiva_cotizador_df(
     piso_margin_pct: float = 40.0,
     factor_usabr: float = 1.35,
     factor_euro: float = 1.55,
+    factor_otros: float | None = None,
     disp_umbral: float = 0.0,
 ) -> pd.DataFrame:
     """
@@ -2635,17 +2636,42 @@ def _consulta_masiva_cotizador_df(
     m = min(max(m, 0.01), 0.95)
     denom = max(1e-12, 1.0 - m)
     trm_f = float(trm)
+    factor_otros_f = float(factor_euro if factor_otros is None else factor_otros)
     piso_m = float(piso_margin_pct) / 100.0
     piso_m = min(max(piso_m, 5.0 / 100.0), 80.0 / 100.0)
     denom_piso = max(1e-12, 1.0 - piso_m)
+
+    def _factor_por_pais_ultima_compra(pais: object) -> float:
+        s = str(pais or "").upper().strip()
+        # Variantes comunes para evitar dejar compras sin factor comparable.
+        if (
+            "USA" in s
+            or s == "US"
+            or "ESTADOS UNIDOS" in s
+            or "UNITED STATES" in s
+            or "BRASIL" in s
+            or "BRAZIL" in s
+            or s == "BR"
+        ):
+            return float(factor_usabr)
+        if "EUROPA" in s or "EUROPE" in s or "EUR" in s or "FRANCIA" in s or "ITALIA" in s:
+            return float(factor_euro)
+        return factor_otros_f
 
     rows: list[dict] = []
     for _, row in df.iterrows():
         p_adj = row.get("Mejor_Precio_Ajustado")
         fuente_usd = "Mejor_Precio_Ajustado"
+        factor_ultima_aplicado: float | None = None
         if pd.isna(p_adj) or p_adj is None:
-            p_adj = row.get("Ultimo Valor USD")
-            fuente_usd = "Ult. Fecha Compra / lista (USD)" if pd.notna(p_adj) else ""
+            ult_usd = row.get("Ultimo Valor USD")
+            if ult_usd is not None and pd.notna(ult_usd):
+                factor_ultima_aplicado = _factor_por_pais_ultima_compra(row.get("Pais_Ultima"))
+                p_adj = float(ult_usd) * float(factor_ultima_aplicado)
+                fuente_usd = "Ult. Fecha Compra / lista (USD, ajustado)"
+            else:
+                p_adj = None
+                fuente_usd = ""
 
         costo_min = row.get("Costo_Min")
         costo_max = row.get("Costo_Max")
@@ -2710,6 +2736,7 @@ def _consulta_masiva_cotizador_df(
                     else None
                 ),
                 "USD_base_fuente": fuente_usd or None,
+                "Factor_ultima_compra_aplicado": factor_ultima_aplicado,
                 "Costo_Min": float(costo_min) if costo_min is not None and pd.notna(costo_min) else None,
                 "Costo_Max": float(costo_max) if costo_max is not None and pd.notna(costo_max) else None,
                 "Existencia_Total": float(exist) if exist is not None and pd.notna(exist) else None,
@@ -2731,30 +2758,13 @@ def _consulta_masiva_cotizador_df(
 
 
 def _consulta_masiva_cotizador_format_map(df: pd.DataFrame) -> dict[str, str]:
-    """Formato tras `_renombrar_negocio` en el cotizador."""
+    """Formato tras `_renombrar_negocio` en el cotizador.
+    Regla UI: todas las columnas numéricas con máximo 2 decimales.
+    """
     fmt: dict[str, str] = {}
     for c in df.columns:
-        n = str(c)
-        if n in (
-            "P. venta experto (COP)",
-            "P. piso inventario (COP)",
-            "P. recomendado (COP)",
-            "Costo mín.",
-            "Costo máx.",
-            "Precio lista 09 (COP)",
-            "Últ. venta (guía)",
-            "Exist. total (ref.)",
-            "Und. disp. origen USD base",
-            "Margen % (cot.)",
-            "TRM (cot.)",
-        ):
-            fmt[n] = "{:,.0f}"
-        elif n in ("DNET BRA (USD)", "DNET USA (USD)", "DNET EUR (EUR)"):
-            fmt[n] = "{:,.2f}"
-        elif n in ("Guía Δ lista vs repo (%)", "Guía Δ venta vs repo (%)"):
-            fmt[n] = "{:,.1f}"
-        elif n == "USD base (cotiz.)":
-            fmt[n] = "{:,.2f}"
+        if pd.api.types.is_numeric_dtype(df[c]):
+            fmt[str(c)] = "{:,.2f}"
     return fmt
 
 
@@ -3329,6 +3339,7 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
         piso_margin_pct=float(piso_margen),
         factor_usabr=float(factor_usabr),
         factor_euro=float(factor_euro),
+        factor_otros=float(factor_euro),
         disp_umbral=float(disp_umbral_masivo),
     )
     if "Estado_cotizacion" in df_cot.columns:
@@ -3408,17 +3419,35 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
     )
     cols_extra_sel: list[str] = []
     if traer_datos_extra and cols_base_disponibles:
+        key_cols_extra = "consulta_masiva_cot_extra_cols"
+        current_sel = st.session_state.get(key_cols_extra, cols_base_default)
+        current_sel = [c for c in list(current_sel) if c in cols_base_disponibles]
+        all_selected = bool(cols_base_disponibles) and (set(current_sel) == set(cols_base_disponibles))
+        select_all_extra = st.checkbox(
+            "Seleccionar todas",
+            value=all_selected,
+            key="consulta_masiva_cot_extra_all",
+            help="Marca para incluir todas las columnas disponibles en el cotizador.",
+        )
+        if select_all_extra:
+            st.session_state[key_cols_extra] = list(cols_base_disponibles)
+        elif all_selected:
+            st.session_state[key_cols_extra] = list(cols_base_default)
+
         cols_extra_sel = st.multiselect(
             "Columnas adicionales",
             options=cols_base_disponibles,
             default=cols_base_default,
-            key="consulta_masiva_cot_extra_cols",
+            key=key_cols_extra,
             help="Se añaden al final de la tabla del cotizador.",
         )
+    extra_cols_added: list[str] = []
     if cols_extra_sel:
         extras = df_out[list(base_keys) + cols_extra_sel].copy()
         # Evita colisiones por columnas repetidas en el merge.
-        extras = extras.rename(columns={c: f"_extra_{c}" for c in cols_extra_sel if c in df_cot.columns})
+        rename_map = {c: f"_extra_{c}" for c in cols_extra_sel if c in df_cot.columns}
+        extras = extras.rename(columns=rename_map)
+        extra_cols_added = [rename_map.get(c, c) for c in cols_extra_sel]
         df_cot = df_cot.merge(extras, on=list(base_keys), how="left")
 
     # Orden profesional: identificación -> decisión -> fundamentos -> control.
@@ -3455,7 +3484,9 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
 
     cot_view_cols = cot_core if not traer_datos_extra else (cot_core + cot_analitica)
     cot_view_cols = [c for c in cot_view_cols if c in df_cot.columns]
-    cot_view_cols = cot_view_cols + [c for c in df_cot.columns if c.startswith("_extra_")]
+    extras_visibles = [c for c in extra_cols_added if c in df_cot.columns]
+    cot_view_cols = cot_view_cols + [c for c in df_cot.columns if c.startswith("_extra_") and c not in extras_visibles]
+    cot_view_cols = cot_view_cols + [c for c in extras_visibles if c not in cot_view_cols]
     df_cot_view = df_cot[cot_view_cols] if cot_view_cols else df_cot
 
     df_cot_show = _renombrar_negocio(df_cot_view)
@@ -3468,7 +3499,7 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
     st.caption(
         "`Fuente USD` indica de dónde salió el `USD base (cotiz.)`: "
         "`Mejor_Precio_Ajustado` (origen BR/USA/EUR con factor) o, si no hubo origen válido, "
-        "respaldo `Ult. Fecha Compra / lista (USD)`."
+        "respaldo `Ult. Fecha Compra / lista (USD, ajustado)` según `País últ. compra`."
     )
     st.caption(
         "**Guía Δ lista vs repo (%):** diferencia porcentual entre `Precio lista 09` y `P_recomendado_COP` "
