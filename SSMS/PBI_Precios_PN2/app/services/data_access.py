@@ -892,8 +892,8 @@ def obtener_existencia_por_bodega_consulta(ref_normalizada: str) -> pd.DataFrame
     Detalle de inventario por instalación y bodega desde `margen_siesa_raw` (reporte SQL 001).
 
     Equivale al bloque **Existencias** del query inventario (t400 + t132): cada fila ya trae
-    Existencia, Disponible y Costo_Prom_Inst tal como los calculó Siesa en el pipeline;
-    aquí solo se filtran y ordenan filas, sin sumas ni márgenes adicionales en Python.
+    Existencia, Disponible, Costo_Prom_Inst, Precio_Lista_09 y Margen09 tal como los calculó
+    el reporte Siesa en el pipeline; aquí solo se filtran y ordenan filas, sin recálculos en Python.
     """
     ref = (ref_normalizada or "").strip()
     if not ref:
@@ -925,6 +925,8 @@ def obtener_existencia_por_bodega_consulta(ref_normalizada: str) -> pd.DataFrame
             ("Existencia", "Existencia"),
             ("Disponible", "Cant. disponible"),
             ("Costo_Prom_Inst", "Costo prom. unit. (inst.)"),
+            ("Precio_Lista_09", "Precio lista 09"),
+            ("Margen09", "Margen"),
             ("Unidad", "U.M."),
             ("EstadoItem", "Estado del item"),
             ("Rotacion", "Rotación"),

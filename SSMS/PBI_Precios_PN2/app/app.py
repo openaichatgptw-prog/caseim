@@ -2471,7 +2471,7 @@ def _render_tab_consulta_individual() -> None:
     )
     st.caption(
         "Detalle por instalación y bodega desde `margen_siesa_raw` (carga SQL 001). "
-        "Mismos campos base que el reporte de existencias en ERP; sin sumas ni márgenes calculados aquí."
+        "Incluye precio lista 09 y margen tal como vienen del reporte Siesa; sin sumas ni recálculos en Python."
     )
     try:
         df_bod = obtener_existencia_por_bodega_consulta(ref_norm)
@@ -2499,6 +2499,16 @@ def _render_tab_consulta_individual() -> None:
             df_bod_disp["Costo prom. unit. (inst.)"] = pd.to_numeric(
                 df_bod_disp["Costo prom. unit. (inst.)"], errors="coerce"
             ).map(_fmt_money_cop_local)
+        if "Precio lista 09" in df_bod_disp.columns:
+            df_bod_disp["Precio lista 09"] = pd.to_numeric(
+                df_bod_disp["Precio lista 09"], errors="coerce"
+            ).map(_fmt_money_cop_local)
+        if "Margen" in df_bod_disp.columns:
+            _mb = pd.to_numeric(df_bod_disp["Margen"], errors="coerce")
+            if _mb.notna().any() and float(_mb.abs().max()) <= 2.0:
+                df_bod_disp["Margen"] = _mb.map(lambda x: f"{float(x):.2%}" if pd.notna(x) else "—")
+            else:
+                df_bod_disp["Margen"] = _mb.map(lambda x: f"{float(x):.2f}%" if pd.notna(x) else "—")
         st.dataframe(df_bod_disp, width="stretch", hide_index=True)
 
     try:
@@ -2533,8 +2543,14 @@ def _render_tab_consulta_individual() -> None:
     else:
         ventas_show = _renombrar_negocio(ventas)
         v_disp = ventas_show.copy()
+        _cfg_ult_ventas: dict[str, st.column_config.Column] = {}
+        # Fecha como datetime (no texto): el grid ordena bien asc/desc; el formato dd/mm/aaaa va en column_config.
         if "Fecha Factura" in v_disp.columns:
-            v_disp["Fecha Factura"] = v_disp["Fecha Factura"].map(_fmt_consulta_fecha_ddmmyyyy)
+            v_disp["Fecha Factura"] = pd.to_datetime(v_disp["Fecha Factura"], errors="coerce")
+            _cfg_ult_ventas["Fecha Factura"] = st.column_config.DatetimeColumn(
+                "Fecha Factura",
+                format="DD/MM/YYYY",
+            )
         if "Cant." in v_disp.columns:
             v_disp["Cant."] = pd.to_numeric(v_disp["Cant."], errors="coerce").map(_fmt_consulta_entero)
         for _col in ("Precio Unit. Venta", "Valor Venta"):
@@ -2546,7 +2562,10 @@ def _render_tab_consulta_individual() -> None:
                 v_disp["Margen"] = marg_s.map(lambda x: f"{float(x):.2%}" if pd.notna(x) else "—")
             else:
                 v_disp["Margen"] = marg_s.map(lambda x: f"{float(x):.2f}%" if pd.notna(x) else "—")
-        st.dataframe(v_disp, width="stretch", hide_index=True)
+        _uv_kw: dict = {"width": "stretch", "hide_index": True}
+        if _cfg_ult_ventas:
+            _uv_kw["column_config"] = _cfg_ult_ventas
+        st.dataframe(v_disp, **_uv_kw)
 
     save_tab_filter_prefs("consulta")
 
