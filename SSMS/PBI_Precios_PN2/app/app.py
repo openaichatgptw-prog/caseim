@@ -2669,6 +2669,57 @@ _CONSULTA_MASIVA_COLS_OCULTAR_UI: Final[frozenset[str]] = frozenset(
     {"Referencia_Original", "Referencia_Normalizada"}
 )
 
+# Orden lógico para «Solo columnas estratégicas» (etiquetas ya renombradas en la tabla de consulta masiva).
+_CONSULTA_MASIVA_PRIORIDAD_ESTRATEGICA: Final[tuple[str, ...]] = (
+    "Referencia Entrada",
+    "Ref. cruce",
+    "Ref. alternas",
+    "Estado",
+    "Tipo Coincidencia",
+    "Descripción",
+    "Mejor Origen",
+    "Mejor Disponibilidad",
+    "Mejor Precio Ajustado",
+    "Mejor Precio Sin Factor",
+    "Precio Brasil",
+    "Precio Usa",
+    "Precio Europa",
+    "disp br",
+    "disp usa",
+    "disp eur",
+    "Fecha — lista (OC)",
+    "Prov. — lista",
+    "USD — lista",
+    "COP liq. — lista",
+    "Costo mín.",
+    "Costo máx.",
+    "Exist. total (ref.)",
+    "Precio lista 09 (COP)",
+    "Tipo origen",
+    "Valor últ. venta",
+    "Fecha últ. venta",
+    "Fecha — aud.",
+    "País — aud.",
+    "Prov. — aud.",
+    "USD — aud.",
+    "COP — aud.",
+    "DNET BRA (USD)",
+    "DNET USA (USD)",
+    "DNET EUR (EUR)",
+)
+
+
+def _consulta_masiva_columnas_estrategicas(cols: list[str]) -> list[str]:
+    """Subconjunto de columnas visibles para lectura ejecutiva (respeta orden de prioridad)."""
+    presentes = set(cols)
+    out: list[str] = []
+    for lbl in _CONSULTA_MASIVA_PRIORIDAD_ESTRATEGICA:
+        if lbl in presentes and lbl not in out:
+            out.append(lbl)
+    if not out:
+        return cols[: min(12, len(cols))]
+    return out
+
 
 def _consulta_masiva_preparar_vista(df: pd.DataFrame) -> pd.DataFrame:
     """Quita ref. original/normalizada; orden: entrada → ref. cruce → alternas → estado…"""
@@ -3427,32 +3478,51 @@ def _render_tab_consulta_masiva() -> None:
                 "auditoría en la misma tabla (orden lógico)."
             )
 
-    personalizar_cols = st.toggle(
-        "🎛️ Seleccionar columnas de consulta masiva",
-        value=False,
-        key="consulta_masiva_cols_custom_toggle",
-        help="Elige exactamente qué columnas mostrar en la tabla principal de consulta masiva.",
-    )
-    if personalizar_cols and not df_show.empty:
-        cols_default = list(df_show.columns)
-        cols_sel = st.multiselect(
-            "Columnas visibles (consulta masiva)",
-            options=cols_default,
-            default=cols_default,
-            key="consulta_masiva_cols_custom_sel",
+    @_streamlit_fragment_optional()
+    def _consulta_masiva_cols_y_tabla(df_show_full: pd.DataFrame) -> None:
+        personalizar_cols = st.toggle(
+            "🎛️ Seleccionar columnas de consulta masiva",
+            value=False,
+            key="consulta_masiva_cols_custom_toggle",
+            help="Elige exactamente qué columnas mostrar en la tabla principal de consulta masiva. "
+            "Con Streamlit ≥1.33, solo este bloque se redibuja al cambiar la selección.",
         )
-        if cols_sel:
-            df_show = df_show[cols_sel]
-        else:
-            st.warning("Debes seleccionar al menos una columna para mostrar la tabla.")
-            return
+        df_tab = df_show_full
+        if personalizar_cols and not df_show_full.empty:
+            cols_default = list(df_show_full.columns)
+            cols_est = _consulta_masiva_columnas_estrategicas(cols_default)
+            r_es, r_ms = st.columns([1, 2], gap="small")
+            with r_es:
+                if st.button(
+                    "↺ Solo columnas estratégicas",
+                    key="consulta_masiva_reset_strategic_cols",
+                    help="Restaura un conjunto corto: identificación, estado, mejores orígenes/precios y señales clave de lista/auditoría.",
+                ):
+                    st.session_state["consulta_masiva_cols_custom_sel"] = list(cols_est)
+            with r_ms:
+                st.caption(
+                    "Vista compacta al reset; añade o quita columnas en la lista siguiente."
+                )
+            cols_sel = st.multiselect(
+                "Columnas visibles (consulta masiva)",
+                options=cols_default,
+                default=cols_default,
+                key="consulta_masiva_cols_custom_sel",
+            )
+            if cols_sel:
+                df_tab = df_show_full[cols_sel]
+            else:
+                st.warning("Debes seleccionar al menos una columna para mostrar la tabla.")
+                return
 
-    fmt_map = _consulta_masiva_build_format_map(df_show)
-    st.dataframe(
-        df_show.style.format(fmt_map).apply(_consulta_masiva_style_mejor_origen, axis=1),
-        width="stretch",
-        hide_index=True,
-    )
+        fmt_map = _consulta_masiva_build_format_map(df_tab)
+        st.dataframe(
+            df_tab.style.format(fmt_map).apply(_consulta_masiva_style_mejor_origen, axis=1),
+            width="stretch",
+            hide_index=True,
+        )
+
+    _consulta_masiva_cols_y_tabla(df_show)
 
     st.markdown("---")
     st.markdown(
@@ -3642,139 +3712,158 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
             st.caption(f"Referencias en riesgo encontradas: {len(df_cot):,}")
         else:
             st.warning("No se pudo aplicar filtro de riesgo: faltan columnas requeridas.")
-    # Vista ON/OFF del cotizador + columnas extra desde consulta masiva.
-    base_keys = ("Referencia_Entrada", "Referencia_Cruce")
-    cols_base_disponibles = [c for c in df_out.columns if c not in base_keys and c not in df_cot.columns]
-    cols_base_default = [
-        c
-        for c in (
-            "Tipo_Coincidencia",
+
+    df_cot_base = df_cot.copy()
+
+    @_streamlit_fragment_optional()
+    def _consulta_masiva_cotizador_vista_y_descargas() -> None:
+        # Vista ON/OFF del cotizador + columnas extra desde consulta masiva (solo este bloque se redibuja al cambiar toggles/multiselect).
+        base_keys = ("Referencia_Entrada", "Referencia_Cruce")
+        cols_base_disponibles = [
+            c for c in df_out.columns if c not in base_keys and c not in df_cot_base.columns
+        ]
+        cols_base_default = [
+            c
+            for c in (
+                "Tipo_Coincidencia",
+                "Mejor_Origen",
+                "Mejor_Disponibilidad",
+                "Precio Brasil",
+                "Precio Usa",
+                "Precio Europa",
+                "Precio Prorrateo",
+            )
+            if c in cols_base_disponibles
+        ]
+        traer_datos_extra = st.toggle(
+            "➕ Vista analítica del cotizador (más campos)",
+            value=False,
+            key="consulta_masiva_cot_extra_toggle",
+            help="OFF: vista ejecutiva (compacta). ON: añade métricas de diagnóstico y permite anexar columnas de la consulta masiva.",
+        )
+        cols_extra_sel: list[str] = []
+        if traer_datos_extra and cols_base_disponibles:
+            key_cols_extra = "consulta_masiva_cot_extra_cols"
+            current_sel = st.session_state.get(key_cols_extra, cols_base_default)
+            current_sel = [c for c in list(current_sel) if c in cols_base_disponibles]
+            all_selected = bool(cols_base_disponibles) and (set(current_sel) == set(cols_base_disponibles))
+            c_solo, c_all = st.columns([1, 1], gap="small")
+            with c_solo:
+                if st.button(
+                    "↺ Solo columnas estratégicas",
+                    key="consulta_masiva_cot_reset_strategic",
+                    help="Restaura el conjunto corto por defecto: coincidencia, orígenes y precios clave de la consulta masiva.",
+                ):
+                    st.session_state[key_cols_extra] = list(cols_base_default)
+            with c_all:
+                select_all_extra = st.checkbox(
+                    "Seleccionar todas",
+                    value=all_selected,
+                    key="consulta_masiva_cot_extra_all",
+                    help="Marca para incluir todas las columnas disponibles en el cotizador.",
+                )
+            if select_all_extra:
+                st.session_state[key_cols_extra] = list(cols_base_disponibles)
+            elif all_selected:
+                st.session_state[key_cols_extra] = list(cols_base_default)
+
+            cols_extra_sel = st.multiselect(
+                "Columnas adicionales",
+                options=cols_base_disponibles,
+                default=cols_base_default,
+                key=key_cols_extra,
+                help="Se añaden al final de la tabla del cotizador.",
+            )
+        extra_cols_added: list[str] = []
+        df_cot = df_cot_base.copy()
+        if cols_extra_sel:
+            extras = df_out[list(base_keys) + cols_extra_sel].copy()
+            # Evita colisiones por columnas repetidas en el merge.
+            rename_map = {c: f"_extra_{c}" for c in cols_extra_sel if c in df_cot.columns}
+            extras = extras.rename(columns=rename_map)
+            extra_cols_added = [rename_map.get(c, c) for c in cols_extra_sel]
+            df_cot = df_cot.merge(extras, on=list(base_keys), how="left")
+
+        # Orden profesional: identificación -> decisión -> fundamentos -> control.
+        cot_core_pref = [
+            "Referencia_Entrada",
+            "Referencia_Cruce",
             "Mejor_Origen",
-            "Mejor_Disponibilidad",
-            "Precio Brasil",
-            "Precio Usa",
-            "Precio Europa",
-            "Precio Prorrateo",
-        )
-        if c in cols_base_disponibles
-    ]
-    traer_datos_extra = st.toggle(
-        "➕ Vista analítica del cotizador (más campos)",
-        value=False,
-        key="consulta_masiva_cot_extra_toggle",
-        help="OFF: vista ejecutiva (compacta). ON: añade métricas de diagnóstico y permite anexar columnas de la consulta masiva.",
-    )
-    cols_extra_sel: list[str] = []
-    if traer_datos_extra and cols_base_disponibles:
-        key_cols_extra = "consulta_masiva_cot_extra_cols"
-        current_sel = st.session_state.get(key_cols_extra, cols_base_default)
-        current_sel = [c for c in list(current_sel) if c in cols_base_disponibles]
-        all_selected = bool(cols_base_disponibles) and (set(current_sel) == set(cols_base_disponibles))
-        select_all_extra = st.checkbox(
-            "Seleccionar todas",
-            value=all_selected,
-            key="consulta_masiva_cot_extra_all",
-            help="Marca para incluir todas las columnas disponibles en el cotizador.",
-        )
-        if select_all_extra:
-            st.session_state[key_cols_extra] = list(cols_base_disponibles)
-        elif all_selected:
-            st.session_state[key_cols_extra] = list(cols_base_default)
+            "Estado_cotizacion",
+            "P_recomendado_COP",
+            "P_venta_experto_COP",
+            "P_piso_inventario_COP",
+            "USD_base",
+            "USD_base_unidades_disp",
+            "Costo_Min",
+            "Existencia_Total",
+        ]
+        cot_analitica_pref = [
+            "Estado",
+            "Costo_Max",
+            "Precio_Lista_09",
+            "Ult_venta_guia",
+            "Guia_lista09_vs_repo_pct",
+            "Guia_venta_vs_repo_pct",
+            "Margen_pct_cot",
+            "TRM_cot",
+            "USD_base_fuente",
+            "Regla_precio",
+            "Alertas_detalle",
+        ]
+        cot_core = [c for c in cot_core_pref if c in df_cot.columns]
+        cot_analitica = [c for c in cot_analitica_pref if c in df_cot.columns]
+        cot_order = cot_core + cot_analitica + [c for c in df_cot.columns if c not in (cot_core + cot_analitica)]
+        df_cot = df_cot[cot_order]
 
-        cols_extra_sel = st.multiselect(
-            "Columnas adicionales",
-            options=cols_base_disponibles,
-            default=cols_base_default,
-            key=key_cols_extra,
-            help="Se añaden al final de la tabla del cotizador.",
+        cot_view_cols = cot_core if not traer_datos_extra else (cot_core + cot_analitica)
+        cot_view_cols = [c for c in cot_view_cols if c in df_cot.columns]
+        extras_visibles = [c for c in extra_cols_added if c in df_cot.columns]
+        cot_view_cols = cot_view_cols + [c for c in df_cot.columns if c.startswith("_extra_") and c not in extras_visibles]
+        cot_view_cols = cot_view_cols + [c for c in extras_visibles if c not in cot_view_cols]
+        df_cot_view = df_cot[cot_view_cols] if cot_view_cols else df_cot
+
+        df_cot_show = _renombrar_negocio(df_cot_view)
+        fmt_cot = _consulta_masiva_cotizador_format_map(df_cot_show)
+        st.dataframe(
+            df_cot_show.style.format(fmt_cot, na_rep="—"),
+            width="stretch",
+            hide_index=True,
         )
-    extra_cols_added: list[str] = []
-    if cols_extra_sel:
-        extras = df_out[list(base_keys) + cols_extra_sel].copy()
-        # Evita colisiones por columnas repetidas en el merge.
-        rename_map = {c: f"_extra_{c}" for c in cols_extra_sel if c in df_cot.columns}
-        extras = extras.rename(columns=rename_map)
-        extra_cols_added = [rename_map.get(c, c) for c in cols_extra_sel]
-        df_cot = df_cot.merge(extras, on=list(base_keys), how="left")
-
-    # Orden profesional: identificación -> decisión -> fundamentos -> control.
-    cot_core_pref = [
-        "Referencia_Entrada",
-        "Referencia_Cruce",
-        "Mejor_Origen",
-        "Estado_cotizacion",
-        "P_recomendado_COP",
-        "P_venta_experto_COP",
-        "P_piso_inventario_COP",
-        "USD_base",
-        "USD_base_unidades_disp",
-        "Costo_Min",
-        "Existencia_Total",
-    ]
-    cot_analitica_pref = [
-        "Estado",
-        "Costo_Max",
-        "Precio_Lista_09",
-        "Ult_venta_guia",
-        "Guia_lista09_vs_repo_pct",
-        "Guia_venta_vs_repo_pct",
-        "Margen_pct_cot",
-        "TRM_cot",
-        "USD_base_fuente",
-        "Regla_precio",
-        "Alertas_detalle",
-    ]
-    cot_core = [c for c in cot_core_pref if c in df_cot.columns]
-    cot_analitica = [c for c in cot_analitica_pref if c in df_cot.columns]
-    cot_order = cot_core + cot_analitica + [c for c in df_cot.columns if c not in (cot_core + cot_analitica)]
-    df_cot = df_cot[cot_order]
-
-    cot_view_cols = cot_core if not traer_datos_extra else (cot_core + cot_analitica)
-    cot_view_cols = [c for c in cot_view_cols if c in df_cot.columns]
-    extras_visibles = [c for c in extra_cols_added if c in df_cot.columns]
-    cot_view_cols = cot_view_cols + [c for c in df_cot.columns if c.startswith("_extra_") and c not in extras_visibles]
-    cot_view_cols = cot_view_cols + [c for c in extras_visibles if c not in cot_view_cols]
-    df_cot_view = df_cot[cot_view_cols] if cot_view_cols else df_cot
-
-    df_cot_show = _renombrar_negocio(df_cot_view)
-    fmt_cot = _consulta_masiva_cotizador_format_map(df_cot_show)
-    st.dataframe(
-        df_cot_show.style.format(fmt_cot, na_rep="—"),
-        width="stretch",
-        hide_index=True,
-    )
-    st.caption(
-        "`Fuente USD` indica de dónde salió el `USD base (cotiz.)`: "
-        "`Mejor_Precio_Ajustado` (origen BR/USA/EUR con factor) o, si no hubo origen válido, "
-        "respaldo `Ult. Fecha Compra / lista (USD, ajustado)` según `País últ. compra`."
-    )
-    st.caption(
-        "**Guía Δ lista vs repo (%):** diferencia porcentual entre `Precio lista 09` y `P_recomendado_COP` "
-        "(|lista - recomendado| / max(lista, recomendado) × 100). "
-        "**Guía Δ venta vs repo (%):** misma lógica usando `Últ. Precio Venta` vs `P_recomendado_COP`."
-    )
-
-    csv_out = df_out.to_csv(index=False).encode("utf-8-sig")
-    csv_cot = df_cot.to_csv(index=False).encode("utf-8-sig")
-    dl1, dl2 = st.columns(2)
-    with dl1:
-        st.download_button(
-            "Descargar resultado consulta (CSV)",
-            data=csv_out,
-            file_name="consulta_masiva_resultado.csv",
-            mime="text/csv",
-            key="consulta_masiva_download",
-            help="Exporta la salida base de consulta masiva: cruce de referencias, orígenes/precios, disponibilidad y estado de coincidencia.",
+        st.caption(
+            "`Fuente USD` indica de dónde salió el `USD base (cotiz.)`: "
+            "`Mejor_Precio_Ajustado` (origen BR/USA/EUR con factor) o, si no hubo origen válido, "
+            "respaldo `Ult. Fecha Compra / lista (USD, ajustado)` según `País últ. compra`."
         )
-    with dl2:
-        st.download_button(
-            "Descargar cotización (CSV)",
-            data=csv_cot,
-            file_name="consulta_masiva_cotizacion.csv",
-            mime="text/csv",
-            key="consulta_masiva_download_cot",
-            help="Exporta la salida del cotizador: precio recomendado, precio experto, piso por inventario, estado de cotización y alertas.",
+        st.caption(
+            "**Guía Δ lista vs repo (%):** diferencia porcentual entre `Precio lista 09` y `P_recomendado_COP` "
+            "(|lista - recomendado| / max(lista, recomendado) × 100). "
+            "**Guía Δ venta vs repo (%):** misma lógica usando `Últ. Precio Venta` vs `P_recomendado_COP`."
         )
+
+        csv_out = df_out.to_csv(index=False).encode("utf-8-sig")
+        csv_cot_bytes = df_cot.to_csv(index=False).encode("utf-8-sig")
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button(
+                "Descargar resultado consulta (CSV)",
+                data=csv_out,
+                file_name="consulta_masiva_resultado.csv",
+                mime="text/csv",
+                key="consulta_masiva_download",
+                help="Exporta la salida base de consulta masiva: cruce de referencias, orígenes/precios, disponibilidad y estado de coincidencia.",
+            )
+        with dl2:
+            st.download_button(
+                "Descargar cotización (CSV)",
+                data=csv_cot_bytes,
+                file_name="consulta_masiva_cotizacion.csv",
+                mime="text/csv",
+                key="consulta_masiva_download_cot",
+                help="Exporta la salida del cotizador: precio recomendado, precio experto, piso por inventario, estado de cotización y alertas.",
+            )
+
+    _consulta_masiva_cotizador_vista_y_descargas()
 
 
 def _consulta_masiva_calcular_mejor_origen(
@@ -5756,7 +5845,7 @@ def _render_tab_auditoria_referencias() -> None:
             st.caption(
                 "**Una fila = una referencia**. Por defecto ves un **bloque corto** (identificación, **semáforo**, **score**, "
                 "variación entre compras, **costo prom. inv.**, Δ vs costo SQL, |Δ| de la app, **última compra COP** y **stock**). "
-                "Usa **Solo columnas estratégicas** para reset rápido o el buscador + lista para añadir/quitar sin recargar toda la pestaña (requiere Streamlit ≥1.33)."
+                "Usa **Solo columnas estratégicas** para reset rápido o la lista para añadir/quitar sin recargar toda la pestaña (requiere Streamlit ≥1.33)."
             )
             orden_cols = _auditoria_column_order_full(df_vista, lower_map, costo_inv_col)
             df_full = df_vista[orden_cols].copy()
@@ -5781,39 +5870,19 @@ def _render_tab_auditoria_referencias() -> None:
 
             @_streamlit_fragment_optional()
             def _aud_vista_tactica_selector_y_tabla() -> None:
-                r1, r2 = st.columns([1, 2], gap="small")
-                with r1:
-                    if st.button(
-                        "↺ Solo columnas estratégicas",
-                        key="aud_tac_reset_strategic",
-                        help="Restaura el conjunto corto inicial (sin abrir el listado completo de columnas).",
-                    ):
-                        st.session_state["aud_tactica_cols_multiselect_v2"] = list(default_lbl)
-                with r2:
-                    q_filt = st.text_input(
-                        "Filtrar nombres de columna",
-                        value="",
-                        key="aud_tac_col_name_filter",
-                        placeholder="Escribe parte del nombre…",
-                        help="Reduce la lista desplegable para marcar o desmarcar más rápido.",
-                    )
-                q = (q_filt or "").strip().lower()
-                _raw_prev = st.session_state.get("aud_tactica_cols_multiselect_v2")
-                prev_sel = list(_raw_prev) if _raw_prev is not None else list(default_lbl)
-                if q:
-                    opts_filtradas = [c for c in all_lbl if q in c.lower()]
-                    prev_valid = [c for c in prev_sel if c in all_lbl]
-                    options_ms = list(dict.fromkeys(prev_valid + opts_filtradas))
-                else:
-                    options_ms = all_lbl
+                if st.button(
+                    "↺ Solo columnas estratégicas",
+                    key="aud_tac_reset_strategic",
+                    help="Restaura el conjunto corto inicial (sin abrir el listado completo de columnas).",
+                ):
+                    st.session_state["aud_tactica_cols_multiselect_v2"] = list(default_lbl)
 
                 sel = st.multiselect(
                     "Columnas visibles (marca para añadir o quitar)",
-                    options=options_ms,
+                    options=all_lbl,
                     default=default_lbl,
                     key="aud_tactica_cols_multiselect_v2",
-                    help="Con Streamlit 1.33+, solo este bloque se vuelve a dibujar al cambiar la selección. "
-                    "Usa el filtro de texto para acortar la lista.",
+                    help="Con Streamlit 1.33+, solo este bloque se vuelve a dibujar al cambiar la selección.",
                 )
                 if not sel:
                     st.warning("Selecciona al menos una columna; se restaura la vista estratégica por defecto.")
