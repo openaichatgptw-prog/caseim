@@ -15,7 +15,7 @@ _PREFS_PATH: Final[Path] = Path(__file__).resolve().parent.parent / "user_filter
 TAB_FILTER_KEYS: Final[dict[str, list[str]]] = {
     "consulta": [
         "consulta_txt_busqueda",
-        "consulta_coincidencias",
+        # consulta_coincidencias: clave dinámica por texto de búsqueda (no persistible estable)
         "consulta_origen_disp_umbral",
     ],
     "margen": [

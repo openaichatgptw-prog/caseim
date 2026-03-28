@@ -411,6 +411,7 @@ DECLARE @UmbralPctModBajo          DECIMAL(5,4) = 0.10;
 DROP TABLE IF EXISTS #RefsFiltradas;
 DROP TABLE IF EXISTS #BaseRefs;
 DROP TABLE IF EXISTS #Existencias;
+DROP TABLE IF EXISTS #ExistenciaTotalRef;
 DROP TABLE IF EXISTS #BodegasPorCosto;
 DROP TABLE IF EXISTS #FactPricing;
 DROP TABLE IF EXISTS #VarCuartiles;
@@ -497,6 +498,20 @@ WHERE 1 = 1
 /*__AUDITORIA_FILTER_BODEGAS__*/;
 
 CREATE NONCLUSTERED INDEX IX_Existencias_Ref ON #Existencias(Referencia);
+
+-------------------------------------------------------------------------------
+-- 3A) TOTAL EXISTENCIA SIESA (t400_cm_existencia.f400_cant_existencia_1) POR REF.
+--     Existencia_Total en la salida usa este agregado, no la suma de existencias
+--     por nivel de costo (min / intermedio / max).
+-------------------------------------------------------------------------------
+SELECT
+    Referencia,
+    CAST(SUM(Existencia) AS DECIMAL(18, 4)) AS Existencia_Total_Siesa
+INTO #ExistenciaTotalRef
+FROM #Existencias
+GROUP BY Referencia;
+
+CREATE NONCLUSTERED INDEX IX_ExistenciaTotalRef ON #ExistenciaTotalRef(Referencia);
 
 -------------------------------------------------------------------------------
 -- 3B) PRE-CALCULAR BODEGAS POR (REFERENCIA, COSTO) SOLO CON EXISTENCIA > 0
@@ -657,6 +672,8 @@ BasePivot AS (
             SUM(CASE WHEN r.Tipo_Registro = 'MIN' THEN r.Existencia END)
         ) AS Existencia_Max,
 
+        MAX(et.Existencia_Total_Siesa) AS Existencia_Total_Siesa,
+
         SUM(CASE WHEN r.Tipo_Registro = 'MIN'        THEN r.Disponible END) AS Disponible_Min,
         CASE WHEN MAX(CASE WHEN r.Tipo_Registro = 'INTERMEDIO' THEN 1 END) = 1
              THEN SUM(CASE WHEN r.Tipo_Registro = 'INTERMEDIO' THEN r.Disponible END)
@@ -680,6 +697,7 @@ BasePivot AS (
     FROM ResumenCostos r
     JOIN #BaseRefs b        ON r.Referencia = b.Referencia_Principal
     LEFT JOIN UM_Por_Ref um ON um.Referencia = b.Referencia_Principal
+    LEFT JOIN #ExistenciaTotalRef et ON et.Referencia = b.Referencia_Principal
     GROUP BY b.Referencia_Principal, b.Referencias_Alternas
 ),
 
@@ -785,6 +803,7 @@ FactBase AS (
         bp.Costo_Max,
         bp.Bodega_CostoMax,
         bp.Existencia_Min, bp.Existencia_Intermedio, bp.Existencia_Max,
+        bp.Existencia_Total_Siesa,
         bp.Disponible_Min, bp.Disponible_Intermedio, bp.Disponible_Max,
         bp.NroBod_Min, bp.NroBod_Intermedio, bp.NroBod_Max,
         bp.Precio_Lista_09,
@@ -865,6 +884,7 @@ FactPricingFinal AS (
         ve.Costo_Max,
         ve.Bodega_CostoMax,
         ve.Existencia_Min, ve.Existencia_Intermedio, ve.Existencia_Max,
+        ve.Existencia_Total_Siesa,
         ve.Disponible_Min, ve.Disponible_Intermedio, ve.Disponible_Max,
         ve.NroBod_Min, ve.NroBod_Intermedio, ve.NroBod_Max,
         ve.Precio_Lista_09,
@@ -1071,7 +1091,7 @@ SELECT
     Bodega_CostoMax,
 
     Existencia_Min,    Existencia_Intermedio,    Existencia_Max,
-    (COALESCE(Existencia_Min, 0) + COALESCE(Existencia_Intermedio, 0) + COALESCE(Existencia_Max, 0)) AS Existencia_Total,
+    COALESCE(Existencia_Total_Siesa, 0) AS Existencia_Total,
     Disponible_Min,    Disponible_Intermedio,    Disponible_Max,
     NroBod_Min,        NroBod_Intermedio,        NroBod_Max,
 

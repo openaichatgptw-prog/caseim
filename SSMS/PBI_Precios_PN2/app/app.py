@@ -33,6 +33,8 @@ from services.data_access import (
     obtener_dimensiones_ventas,
     refrescar_catalogo_bodegas_auditoria,
     obtener_dataset_margenes,
+    obtener_existencia_por_bodega_consulta,
+    obtener_rango_fechas_ventas_raw,
     obtener_resumen_referencia,
     obtener_ultimas_ventas,
     sync_read_db,
@@ -717,6 +719,17 @@ st.markdown(
         color: #94a3b8;
         margin-bottom: 0.12rem;
     }
+    .consulta-kpi-cell .consulta-kpi-lbl-row {
+        display: flex;
+        align-items: center;
+        gap: 0.2rem;
+        margin-bottom: 0.12rem;
+        flex-wrap: wrap;
+    }
+    .consulta-kpi-cell .consulta-kpi-lbl-row .consulta-kpi-lbl {
+        display: inline;
+        margin-bottom: 0;
+    }
     .consulta-kpi-cell .consulta-kpi-val {
         font-size: 0.86rem;
         font-weight: 650;
@@ -759,6 +772,16 @@ st.markdown(
         letter-spacing: 0.08em;
         color: #94a3b8;
         margin: 0 0 0.2rem 0;
+    }
+    .consulta-ventas-head-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.28rem;
+        flex-wrap: wrap;
+        margin: 0 0 0.2rem 0;
+    }
+    .consulta-ventas-head-row .consulta-ventas-head {
+        margin: 0;
     }
     .consulta-msg-soft {
         margin: 0.15rem 0 0 0;
@@ -964,6 +987,35 @@ def _consulta_help_prorrateo() -> str:
     )
 
 
+def _consulta_help_costo_exist_auditoria() -> str:
+    """Auditoría (SQL 003): costos extremos y existencia total vs. universo de bodegas."""
+    return (
+        "Estos valores dependen del conjunto de bodegas consideradas en el reporte de auditoría cargado "
+        "en la app (SQL 003). Ese modelo excluye bodegas de repuestos usados y bodegas de emergencia "
+        "(por ejemplo BUSA, EPALM), que sí pueden aparecer en el detalle «Existencia por bodega (Siesa)»."
+    )
+
+
+def _consulta_help_ultimas_ventas(fecha_min: str | None, fecha_max: str | None) -> str:
+    """Tooltip con rango real de ventas_raw (MIN/MAX Fecha Factura en DuckDB)."""
+    if fecha_min and fecha_max:
+        return (
+            f"Dataset ventas_raw: facturas desde {fecha_min} hasta {fecha_max} "
+            "(mínimo y máximo de «Fecha Factura» en la tabla cargada en DuckDB)."
+        )
+    if fecha_min or fecha_max:
+        a = fecha_min or "—"
+        b = fecha_max or "—"
+        return (
+            f"Dataset ventas_raw: «Fecha Factura» entre {a} y {b} "
+            "(al menos una fecha disponible en DuckDB)."
+        )
+    return (
+        "Rango de fechas no disponible: ejecuta «Actualizar datos» con el pipeline que carga "
+        "`ventas_raw` (ventas) para ver aquí el periodo exacto."
+    )
+
+
 def _consulta_html_topline_kpis(resumen: dict) -> str:
     """Referencia + KPIs en una sola franja horizontal (menos altura que bloques separados)."""
     ref = html.escape(str(resumen.get("Referencia_Original", "-")))
@@ -1158,6 +1210,32 @@ def _fmt_money_cop_local(val: object, decimals: int = 0) -> str:
         return "—"
 
 
+def _fmt_consulta_fecha_ddmmyyyy(val: object) -> str:
+    """Fecha en tablas de consulta: dd/mm/aaaa."""
+    if _fmt_consulta_display(val) == "—":
+        return "—"
+    try:
+        ts = pd.Timestamp(val)
+        if pd.isna(ts):
+            return "—"
+        return ts.strftime("%d/%m/%Y")
+    except Exception:
+        return "—"
+
+
+def _fmt_consulta_entero(val: object) -> str:
+    """Instalación numérica, cantidades: entero sin decimales."""
+    if _fmt_consulta_display(val) == "—":
+        return "—"
+    try:
+        x = float(val)
+        if not math.isfinite(x):
+            return "—"
+        return str(int(round(x)))
+    except (TypeError, ValueError):
+        return "—"
+
+
 def _fmt_money_usd(val: object, decimals: int = 2) -> str:
     if _fmt_consulta_display(val) == "—":
         return "—"
@@ -1184,6 +1262,20 @@ def _consulta_html_ultima_compra(resumen: dict) -> str:
     ex_total = _to_float(resumen.get("Existencia_Total"))
     ex_total_s = "—" if ex_total is None else _fmt_num_local(ex_total, decimals=0)
     existencias = html.escape(ex_total_s)
+    help_aud = html.escape(_consulta_help_costo_exist_auditoria(), quote=True)
+    icon_aud = (
+        f'<span class="consulta-kpi-help-icon" title="{help_aud}" '
+        f'aria-label="{help_aud}" role="img">i</span>'
+    )
+    lbl_costo_min = (
+        f'<span class="consulta-kpi-lbl-row"><span class="consulta-kpi-lbl">Costo mín.</span>{icon_aud}</span>'
+    )
+    lbl_costo_max = (
+        f'<span class="consulta-kpi-lbl-row"><span class="consulta-kpi-lbl">Costo máx.</span>{icon_aud}</span>'
+    )
+    lbl_ex = (
+        f'<span class="consulta-kpi-lbl-row"><span class="consulta-kpi-lbl">Existencias</span>{icon_aud}</span>'
+    )
     return (
         f'<div class="consulta-compra-grid">'
         f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Fecha</span>'
@@ -1194,11 +1286,11 @@ def _consulta_html_ultima_compra(resumen: dict) -> str:
         f'<span class="consulta-kpi-val">{usd}</span></div>'
         f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Valor Liq. (COP)</span>'
         f'<span class="consulta-kpi-val">{cop}</span></div>'
-        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Costo mín.</span>'
+        f'<div class="consulta-kpi-cell">{lbl_costo_min}'
         f'<span class="consulta-kpi-val">{costo_min}</span></div>'
-        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Costo máx.</span>'
+        f'<div class="consulta-kpi-cell">{lbl_costo_max}'
         f'<span class="consulta-kpi-val">{costo_max}</span></div>'
-        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Existencias</span>'
+        f'<div class="consulta-kpi-cell">{lbl_ex}'
         f'<span class="consulta-kpi-val">{existencias}</span></div>'
         f"</div>"
     )
@@ -2273,6 +2365,16 @@ def _render_tab_consulta_individual() -> None:
         st.error(f"No fue posible leer datos de DuckDB: {exc}")
         return
 
+    # Clave de widget distinta por texto de búsqueda: al cambiar la consulta (Enter / pegar)
+    # Streamlit no reutiliza el estado del selectbox anterior (evita etiqueta «pegada»).
+    _q = (texto_busqueda or "").strip()
+    _sel_key = (
+        "consulta_coincidencias_"
+        + hashlib.sha256(_q.encode("utf-8")).hexdigest()[:20]
+        if _q
+        else "consulta_coincidencias__vacío"
+    )
+
     ref_norm: str | None = None
     with col_r:
         if df_refs is not None and not df_refs.empty:
@@ -2287,14 +2389,14 @@ def _render_tab_consulta_individual() -> None:
                 opciones[etiqueta] = row["Referencia_Normalizada"]
 
             opts_keys = list(opciones.keys())
-            if "consulta_coincidencias" in st.session_state:
-                _cur = st.session_state["consulta_coincidencias"]
+            if _sel_key in st.session_state:
+                _cur = st.session_state[_sel_key]
                 if _cur not in opciones:
-                    del st.session_state["consulta_coincidencias"]
+                    del st.session_state[_sel_key]
             seleccionado = st.selectbox(
                 "Coincidencia",
                 opts_keys,
-                key="consulta_coincidencias",
+                key=_sel_key,
                 help="Elige la fila a analizar.",
             )
             ref_norm = opciones[seleccionado]
@@ -2362,14 +2464,60 @@ def _render_tab_consulta_individual() -> None:
         unsafe_allow_html=True,
     )
 
+    st.markdown(
+        '<div class="consulta-ventas-wrap"><div class="consulta-ventas-head">'
+        "Existencia por bodega (Siesa)</div></div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Detalle por instalación y bodega desde `margen_siesa_raw` (carga SQL 001). "
+        "Mismos campos base que el reporte de existencias en ERP; sin sumas ni márgenes calculados aquí."
+    )
+    try:
+        df_bod = obtener_existencia_por_bodega_consulta(ref_norm)
+    except Exception as exc:
+        st.error(f"No fue posible consultar inventario por bodega: {exc}")
+        df_bod = None
+
+    if df_bod is None:
+        pass
+    elif df_bod.empty:
+        st.markdown(
+            '<p class="consulta-msg-soft">No hay filas en <code>margen_siesa_raw</code> para esta referencia '
+            "o la tabla no existe. Ejecuta <strong>Actualizar datos</strong> incluyendo "
+            "<strong>SQL 001 — Margen SIESA</strong>.</p>",
+            unsafe_allow_html=True,
+        )
+    else:
+        df_bod_disp = df_bod.copy()
+        if "Instalación" in df_bod_disp.columns:
+            df_bod_disp["Instalación"] = df_bod_disp["Instalación"].map(_fmt_consulta_entero)
+        for _c in ("Existencia", "Cant. disponible"):
+            if _c in df_bod_disp.columns:
+                df_bod_disp[_c] = pd.to_numeric(df_bod_disp[_c], errors="coerce").map(_fmt_consulta_entero)
+        if "Costo prom. unit. (inst.)" in df_bod_disp.columns:
+            df_bod_disp["Costo prom. unit. (inst.)"] = pd.to_numeric(
+                df_bod_disp["Costo prom. unit. (inst.)"], errors="coerce"
+            ).map(_fmt_money_cop_local)
+        st.dataframe(df_bod_disp, width="stretch", hide_index=True)
+
     try:
         ventas = obtener_ultimas_ventas(ref_norm, limite=20)
     except Exception as exc:
         st.error(f"No fue posible consultar ventas: {exc}")
         ventas = None
 
+    try:
+        _v_min, _v_max = obtener_rango_fechas_ventas_raw()
+    except Exception:
+        _v_min, _v_max = None, None
+    _help_uv = html.escape(_consulta_help_ultimas_ventas(_v_min, _v_max), quote=True)
     st.markdown(
-        '<div class="consulta-ventas-wrap"><div class="consulta-ventas-head">Últimas ventas</div></div>',
+        '<div class="consulta-ventas-wrap"><div class="consulta-ventas-head-row">'
+        '<span class="consulta-ventas-head">Últimas ventas</span>'
+        f'<span class="consulta-kpi-help-icon" title="{_help_uv}" '
+        f'aria-label="{_help_uv}" role="img">i</span>'
+        "</div></div>",
         unsafe_allow_html=True,
     )
     if ventas is None:
@@ -2384,24 +2532,21 @@ def _render_tab_consulta_individual() -> None:
         )
     else:
         ventas_show = _renombrar_negocio(ventas)
-        fmt_ventas: dict[str, str] = {}
-        for col in ("Precio Unit. Venta", "Valor Venta"):
-            if col in ventas_show.columns:
-                ventas_show[col] = pd.to_numeric(ventas_show[col], errors="coerce")
-                fmt_ventas[col] = "{:,.0f}"
-        if "Margen" in ventas_show.columns:
-            ventas_show["Margen"] = pd.to_numeric(ventas_show["Margen"], errors="coerce")
-            marg_s = ventas_show["Margen"]
-            # Si viene en proporción (0.18), mostrar como 18.0%; si ya viene en % (18), conservar escala.
+        v_disp = ventas_show.copy()
+        if "Fecha Factura" in v_disp.columns:
+            v_disp["Fecha Factura"] = v_disp["Fecha Factura"].map(_fmt_consulta_fecha_ddmmyyyy)
+        if "Cant." in v_disp.columns:
+            v_disp["Cant."] = pd.to_numeric(v_disp["Cant."], errors="coerce").map(_fmt_consulta_entero)
+        for _col in ("Precio Unit. Venta", "Valor Venta"):
+            if _col in v_disp.columns:
+                v_disp[_col] = pd.to_numeric(v_disp[_col], errors="coerce").map(_fmt_money_cop_local)
+        if "Margen" in v_disp.columns:
+            marg_s = pd.to_numeric(v_disp["Margen"], errors="coerce")
             if marg_s.notna().any() and float(marg_s.abs().max()) <= 2.0:
-                fmt_ventas["Margen"] = "{:.2%}"
+                v_disp["Margen"] = marg_s.map(lambda x: f"{float(x):.2%}" if pd.notna(x) else "—")
             else:
-                fmt_ventas["Margen"] = "{:.2f}%"
-        st.dataframe(
-            ventas_show.style.format(fmt_ventas, na_rep="—"),
-            width="stretch",
-            hide_index=True,
-        )
+                v_disp["Margen"] = marg_s.map(lambda x: f"{float(x):.2f}%" if pd.notna(x) else "—")
+        st.dataframe(v_disp, width="stretch", hide_index=True)
 
     save_tab_filter_prefs("consulta")
 
@@ -3233,34 +3378,47 @@ def _render_tab_consulta_masiva() -> None:
     with st.container(border=True):
         with st.expander("Metodología de precio", expanded=False):
             st.markdown(
-            r"""
+                """
 **Base en USD (importación)**  
-Se usa el **Mejor precio ajustado (USD)** de la tabla: menor precio entre orígenes Brasil / USA / Europa  
+Se usa el **Mejor precio ajustado (USD)** de la tabla: menor precio entre orígenes Brasil / USA / Europa,
 tras los **factores de importación** (sliders de esta pantalla) y el umbral de disponibilidad.  
 Si no hay origen válido, respaldo: **Último valor USD** de la lista de precios (última compra OC).
-
-**Precio venta experto (COP)**  
-\[
-P_{\mathrm{experto}} = P_{\mathrm{USD}} \times \frac{\mathrm{TRM}}{1 - m}
-\]  
-con \(m\) = margen objetivo **sobre el precio de venta** (ej. 25 % → \(1-m = 0{,}75\)).
-
-**Piso por inventario (COP)**  
-\[
-P_{\mathrm{piso}} = \frac{\mathrm{Costo\ mín.\ inventario}}{1 - X}
-\]  
-Mismo **Costo_Min** que en la consulta masiva (lista/auditoría), con \(X\) configurable.
-
-**Precio recomendado al negocio**  
-\[
-P_{\mathrm{recomendado}} = \max\bigl(P_{\mathrm{experto}},\, P_{\mathrm{piso}}\bigr)
-\]  
-cuando existen ambos. **Precio lista 09** y **última venta** son **guías**: se muestra el % de diferencia frente al precio de reposición propuesto.
-
+                """.strip()
+            )
+            st.divider()
+            st.markdown("**Precio venta experto (COP)**")
+            st.latex(
+                r"P_{\mathrm{experto}} = P_{\mathrm{USD}} \times \frac{\mathrm{TRM}}{1 - m}"
+            )
+            st.caption(
+                "Donde *m* es el margen objetivo **sobre el precio de venta** "
+                "(ej. 25 % → el divisor es 1 − 0,25 = 0,75)."
+            )
+            st.divider()
+            st.markdown("**Piso por inventario (COP)**")
+            st.latex(r"P_{\mathrm{piso}} = \frac{C_{\min}}{1 - X}")
+            st.caption(
+                "**C_min** = costo mínimo de inventario (misma columna **Costo_Min** que en consulta masiva). "
+                "**X** = margen piso inventario (slider de esta pantalla)."
+            )
+            st.divider()
+            st.markdown("**Precio recomendado al negocio**")
+            st.latex(
+                r"P_{\mathrm{rec}} = \max\left(P_{\mathrm{experto}},\; P_{\mathrm{piso}}\right)"
+            )
+            st.markdown(
+                """
+Cuando existen ambos términos. **Precio lista 09** y **última venta** son **guías**: se muestra el % de diferencia frente al precio de reposición propuesto.
+                """.strip()
+            )
+            st.divider()
+            st.markdown(
+                """
 **Alertas y “precio no calculable automáticamente”**  
 Se señala si: inventario **≤ 3 uds.**; dispersión alta entre **orígenes USD**; **costo mín. vs costo máx.** inventario muy distintos; **lista 09** o **últ. venta** muy lejos del precio de reposición. El **costo mín.** alimenta la cotización (piso y contexto), sin comparar contra costo prom.  
+
 Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el estado pasa a **“Precio no calculable automáticamente”** y se **anula** el precio recomendado (revisión manual obligatoria).
-            """.strip()
+                """.strip()
             )
 
     # Slider ↔ caja: mismo valor en session_state (callbacks on_change)

@@ -847,6 +847,112 @@ def _duck_quote_ident(name: str) -> str:
     return '"' + str(name).replace('"', "") + '"'
 
 
+def obtener_rango_fechas_ventas_raw() -> tuple[str | None, str | None]:
+    """
+    Fecha mínima y máxima de «Fecha Factura» en `ventas_raw` (rango real del dataset en DuckDB).
+    Coincide con lo materializado tras el pipeline 02 (filtros del query aplicados al cargar la tabla).
+    """
+    with _connect() as con:
+        if not _table_exists(con, "ventas_raw"):
+            return None, None
+        if not _table_has_column(con, "ventas_raw", "Fecha Factura"):
+            return None, None
+        q = _duck_quote_ident("Fecha Factura")
+        row = con.execute(
+            f"""
+            SELECT
+                min(cast({q} AS DATE)) AS dmin,
+                max(cast({q} AS DATE)) AS dmax
+            FROM ventas_raw
+            """
+        ).fetchone()
+        if not row:
+            return None, None
+        dmin, dmax = row[0], row[1]
+        if dmin is None and dmax is None:
+            return None, None
+
+        def _as_yyyy_mm_dd(val: object) -> str | None:
+            if val is None:
+                return None
+            try:
+                ts = pd.Timestamp(val)
+                if pd.isna(ts):
+                    return None
+                return str(ts.date())
+            except Exception:
+                s = str(val).strip()
+                return s[:10] if len(s) >= 10 else (s or None)
+
+        return _as_yyyy_mm_dd(dmin), _as_yyyy_mm_dd(dmax)
+
+
+def obtener_existencia_por_bodega_consulta(ref_normalizada: str) -> pd.DataFrame:
+    """
+    Detalle de inventario por instalación y bodega desde `margen_siesa_raw` (reporte SQL 001).
+
+    Equivale al bloque **Existencias** del query inventario (t400 + t132): cada fila ya trae
+    Existencia, Disponible y Costo_Prom_Inst tal como los calculó Siesa en el pipeline;
+    aquí solo se filtran y ordenan filas, sin sumas ni márgenes adicionales en Python.
+    """
+    ref = (ref_normalizada or "").strip()
+    if not ref:
+        return pd.DataFrame()
+
+    with _connect() as con:
+        if not _table_exists(con, "margen_siesa_raw"):
+            return pd.DataFrame()
+
+        meta = [str(r[0]).strip() for r in con.execute("DESCRIBE margen_siesa_raw").fetchall()]
+        colset = {c.lower(): c for c in meta}
+
+        def pick(*cands: str) -> str | None:
+            for c in cands:
+                if c.lower() in colset:
+                    return colset[c.lower()]
+            return None
+
+        ref_col = pick("Referencia")
+        if not ref_col:
+            return pd.DataFrame()
+
+        # Columnas alineadas al reporte Siesa «existencia por bodega» / query inventario (solo Existencias).
+        layout: list[tuple[str, str]] = [
+            ("Instalacion", "Instalación"),
+            ("Nom_Instalacion", "Desc. instalación"),
+            ("Bodega", "Bodega"),
+            ("Nom_Bodega", "Desc. bodega"),
+            ("Existencia", "Existencia"),
+            ("Disponible", "Cant. disponible"),
+            ("Costo_Prom_Inst", "Costo prom. unit. (inst.)"),
+            ("Unidad", "U.M."),
+            ("EstadoItem", "Estado del item"),
+            ("Rotacion", "Rotación"),
+        ]
+        parts: list[str] = []
+        for src, alias in layout:
+            c = pick(src)
+            if c:
+                parts.append(f"m.{_duck_quote_ident(c)} AS {_duck_quote_ident(alias)}")
+
+        if not parts:
+            return pd.DataFrame()
+
+        ord_bits: list[str] = []
+        for key in ("Instalacion", "Bodega"):
+            c = pick(key)
+            if c:
+                ord_bits.append(f"m.{_duck_quote_ident(c)}")
+        order_sql = f" ORDER BY {', '.join(ord_bits)}" if ord_bits else ""
+
+        sql = (
+            f"SELECT {', '.join(parts)} FROM margen_siesa_raw m WHERE "
+            f"upper(trim(CAST(m.{_duck_quote_ident(ref_col)} AS VARCHAR))) = upper(trim(?))"
+            f"{order_sql}"
+        )
+        return con.execute(sql, [ref]).df()
+
+
 def _margen_sql_expr(table_alias: str, quoted_col: str) -> str:
     """
     Expresión numérica alineada al valor guardado en `margen_siesa_raw` (origen SSMS).
