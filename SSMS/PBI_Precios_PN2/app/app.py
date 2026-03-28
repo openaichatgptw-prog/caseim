@@ -67,6 +67,12 @@ SQL_003_OPCION: Final[str] = "SQL 003 — Auditoría refs (auditoria_raw)"
 SQL_OPCIONES: Final[list[str]] = [SQL_001_OPCION, SQL_002_OPCION, SQL_003_OPCION]
 
 
+def _streamlit_fragment_optional():
+    """Streamlit ≥1.33: `st.fragment` evita rerun de toda la app al cambiar widgets del bloque decorado."""
+    frag = getattr(st, "fragment", None)
+    return frag if frag is not None else (lambda fn: fn)
+
+
 def _todas_opciones_actualizacion() -> list[str]:
     return list(PIPELINE_OPCIONES) + list(SQL_OPCIONES)
 
@@ -1615,6 +1621,64 @@ def _auditoria_column_order_full(df: pd.DataFrame, lower_map: dict[str, str], co
     return out
 
 
+def _auditoria_tactica_columnas_estrategicas_originales(
+    df: pd.DataFrame,
+    lower_map: dict[str, str],
+    costo_inv_col: str | None,
+) -> list[str]:
+    """
+    Subconjunto inicial de la vista táctica: pocas columnas con lectura ejecutiva.
+    El usuario añade el resto con el multiselect (orden de la tabla = orden lógico del reporte).
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add_key(k: str) -> None:
+        col = lower_map.get(k)
+        if col and col in df.columns and col not in seen:
+            out.append(col)
+            seen.add(col)
+
+    def _add_direct(name: str) -> None:
+        if name in df.columns and name not in seen:
+            out.append(name)
+            seen.add(name)
+
+    for k in (
+        "referencia",
+        "referencias_alternas",
+        "descripcion",
+        "semaforo_variacion",
+    ):
+        _add_key(k)
+    _add_direct("_score_alerta")
+    for k in (
+        "dias_entre_compras",
+        "var_preciousd",
+        "var_preciocop",
+        "var_trm",
+    ):
+        _add_key(k)
+    if costo_inv_col:
+        _add_direct(costo_inv_col)
+    for k in (
+        "var_costomin_preciocop",
+        "var_costomax_preciocop",
+        "absvar_costo",
+    ):
+        _add_key(k)
+    _add_direct("_abs_var_compra")
+    _add_direct("_abs_var_costo")
+    for k in (
+        "precio_cop_ultima",
+        "existencia_total",
+        "sistema_precio_item",
+        "clasificacion_rotacion",
+    ):
+        _add_key(k)
+    return out
+
+
 def _auditoria_one_column_config(orig: str, label: str) -> st.column_config.Column:
     """Formato auditoría: columnas de precio con formato moneda (dollar); costos/otros montos $ sin decimales como antes; fechas DD/MM/AAAA."""
     lc = orig.lower()
@@ -1654,6 +1718,13 @@ def _auditoria_one_column_config(orig: str, label: str) -> st.column_config.Colu
             format="%,.0f",
             help="Suma Min + Intermedio + Max (proxy; validar si aplica a su modelo).",
         )
+    if "semaforo" in lc and "variacion" in lc:
+        return st.column_config.TextColumn(
+            label,
+            width="medium",
+            help="Alineación de la última compra (COP × factor país) frente a costos mín./máx. de inventario. "
+            "Detalle de categorías: desplegable **📖 Cómo se calcula el semáforo** arriba en esta pestaña.",
+        )
     if any(
         x in lc
         for x in (
@@ -1668,7 +1739,6 @@ def _auditoria_one_column_config(orig: str, label: str) -> st.column_config.Colu
             "equipo",
             "modelo",
             "clasificacion",
-            "semaforo",
             "altern",
         )
     ):
@@ -4744,6 +4814,39 @@ def _render_tab_auditoria() -> None:
         )
 
 
+def _auditoria_doc_semaforo_markdown() -> str:
+    """Texto de ayuda: lógica del semáforo en SQL (misma corrida / mismos filtros)."""
+    return """
+**¿Qué pregunta responde el semáforo?**  
+Si el **precio de la última compra** (en COP y **multiplicado por el factor logístico** según país: Brasil / USA / otros→EUR, definido en `config.ini`) está **alineado** con los **costos de inventario extremos** de esa referencia: **costo mínimo** y **costo máximo** en bodega.
+
+**Dos números que calcula el sistema (columnas en la tabla):**
+
+1. **`ABSVar_Costo`** — En pesos (COP): la **mayor** de estas dos brechas en valor absoluto:
+   - diferencia frente al **costo mínimo**, y  
+   - diferencia frente al **costo máximo**.  
+   Así se mide “cuántos pesos” separan la compra ajustada del inventario en el peor de los dos extremos.
+
+2. **`ABSVar_Costo_Pct`** — La **mayor** desviación **relativa** (en proporción; en pantalla suele verse como %) entre:
+   - variación vs costo mínimo, y  
+   - variación vs costo máximo.
+
+**Reglas del color (se evalúan en este orden; la primera que cumpla gana):**
+
+| Categoría (SQL) | En pantalla suele verse como | Condición (resumida) |
+|-----------------|------------------------------|------------------------|
+| Sin datos | Sin dato | No hay precio de última compra → no se puede comparar. |
+| **CRÍTICO** | Crítico | Brecha en pesos **muy alta** respecto al resto del reporte **y** desviación % **≥ 30 %** (umbrales fijos del SQL). |
+| **MODERADO ALTO** | Moderado alto | Brecha en pesos **alta** (por encima del tercer cuartil del lote) **y** desviación % **≥ 20 %**. |
+| **MODERADO BAJO** | Moderado bajo | Brecha en pesos **media-alta** (por encima de la mediana del lote) **y** desviación % **≥ 10 %**. |
+| **NO CRÍTICO** | Alineado | No entra en las anteriores. |
+
+Los **cuartiles** (Q1, Q2, Q3) e **IQR** se calculan sobre **todas las referencias** del **mismo resultado** del reporte (misma corrida y filtros). Por eso, si cambias filtros o recargas datos, **puede cambiar** el semáforo de una misma referencia.
+
+**Importante:** el semáforo **no** es lo mismo que “¿subió mucho entre penúltima y última compra?” Eso lo miden **`Var_PrecioCOP`** y los umbrales **|Δ compra|** más arriba en la pantalla.
+"""
+
+
 def _auditoria_normalizar_etiqueta_semaforo(val: object) -> str:
     """Normaliza `Semaforo_Variacion` para comparar con etiquetas SQL (CRÍTICO → CRITICO)."""
     return str(val or "").upper().strip().replace("Í", "I")
@@ -5359,7 +5462,7 @@ def _auditoria_ui_filtros_y_df_filtrado(ctx: dict) -> pd.DataFrame | None:
 
     if costo_inv_col and precio_ult_cop_col:
         # Regla de negocio: el factor logístico afecta el precio de compra en COP,
-        # no el costo promedio de inventario.
+        # no el costo promedio de inventario. (Las Var vs costo en SQL usan precio×factor desde 00_Reportes_SQL.)
         df_fil["_Precio_Ultima_Log_COP"] = df_fil[precio_ult_cop_col] * df_fil["_Factor_Logistico"]
         den_ult = df_fil[costo_inv_col].replace(0, pd.NA)
         df_fil["_Var_Ultima_vs_CostoLog_Pct"] = ((df_fil["_Precio_Ultima_Log_COP"] - den_ult) / den_ult) * 100.0
@@ -5473,6 +5576,8 @@ def _render_tab_auditoria_referencias() -> None:
         return
 
     st.markdown('<h4 class="auditoria-tab-h">Auditoría referencias</h4>', unsafe_allow_html=True)
+    with st.expander("📖 Cómo se calcula el semáforo (y qué significa cada categoría)", expanded=False):
+        st.markdown(_auditoria_doc_semaforo_markdown())
 
     ctx = _auditoria_inicializar_dataframe(df)
     _result = _auditoria_ui_filtros_y_df_filtrado(ctx)
@@ -5512,9 +5617,12 @@ def _render_tab_auditoria_referencias() -> None:
         "<p><strong>Cuadro de mando</strong> del conjunto filtrado: cuántas filas superan cada umbral en los "
         "<strong>dos problemas</strong> (variación <strong>última vs penúltima compra</strong> y "
         "<strong>última vs costo prom. inv.</strong>). <strong>Valor inv.</strong> ≈ impacto económico del slice en inventario.</p>"
-        "<p><strong>Semáforo</strong> (<code>Semaforo_Variacion</code>): alineación precio última compra vs costos extremos "
-        "(mín./máx. por referencia), con reglas sobre <code>ABSVar_Costo</code> / <code>ABSVar_Costo_Pct</code> y cuartiles en SQL. "
-        "Es **distinto** de «subió mucho entre penúltima y última compra» (<code>Var_PrecioCOP</code> y umbrales |Δ compra| arriba).</p>"
+        "<p><strong>Semáforo:</strong> compara la <strong>última compra en COP × factor país</strong> (Brasil / USA / EUR según <code>config.ini</code>) "
+        "con los <strong>costos mín. y máx.</strong> de inventario; usa las columnas <code>ABSVar_Costo</code> (pesos) y "
+        "<code>ABSVar_Costo_Pct</code> (%) más los cuartiles del mismo reporte. "
+        "<strong>Abre el desplegable 📖 arriba</strong> para ver la lógica completa y las categorías.</p>"
+        "<p>Es <strong>distinto</strong> de «subió mucho entre penúltima y última compra» "
+        "(<code>Var_PrecioCOP</code> y los umbrales |Δ compra|).</p>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -5527,8 +5635,8 @@ def _render_tab_auditoria_referencias() -> None:
     k2.metric(
         "Semáforo crítico",
         f"{criticos:,.0f}",
-        help="Filas con categoría **Crítico** en datos (SQL: CRÍTICO). No confunde con **Alineado** (SQL: NO CRÍTICO). "
-        "El semáforo refleja alineación última compra vs costos extremos; ver texto aclaratorio arriba.",
+        help="Cuenta referencias con categoría **Crítico** (última compra ajustada muy lejos del costo min/max vs el resto del lote, y % ≥ 30 %). "
+        "Detalle de reglas: desplegable **📖 Cómo se calcula el semáforo** arriba.",
     )
     k3.metric(
         "% ≥ umbral |Δ compra|",
@@ -5646,10 +5754,9 @@ def _render_tab_auditoria_referencias() -> None:
         with subtabs[1]:
             st.markdown("##### Vista táctica — diagnosticar cada referencia")
             st.caption(
-                "**Una fila = una referencia**, todas las columnas. **Orden de lectura:** identificación → **semáforo** → "
-                "**Δ última vs penúltima** (días, var. USD/COP/TRM) → **costo prom. inv.** → **Δ vs costo** (SQL) → "
-                "contexto (costos bodega, stock, lista) → **evidencia** (fechas y precios última/penúltima compra) → "
-                "**ajustes app** (factor logístico, precios COP ajustados, |Δ| y score)."
+                "**Una fila = una referencia**. Por defecto ves un **bloque corto** (identificación, **semáforo**, **score**, "
+                "variación entre compras, **costo prom. inv.**, Δ vs costo SQL, |Δ| de la app, **última compra COP** y **stock**). "
+                "Usa **Solo columnas estratégicas** para reset rápido o el buscador + lista para añadir/quitar sin recargar toda la pestaña (requiere Streamlit ≥1.33)."
             )
             orden_cols = _auditoria_column_order_full(df_vista, lower_map, costo_inv_col)
             df_full = df_vista[orden_cols].copy()
@@ -5659,13 +5766,71 @@ def _render_tab_auditoria_referencias() -> None:
             _auditoria_df_map_semaforo_ui(df_full, sem_col, alias_cols)
             cfg_full = _auditoria_build_column_config(orden_cols, alias_cols)
             cfg_full = {k: v for k, v in cfg_full.items() if k in df_full.columns}
-            st.dataframe(
-                df_full,
-                width="stretch",
-                height=680,
-                hide_index=True,
-                column_config=cfg_full,
+
+            all_lbl = list(df_full.columns)
+            orig_est = _auditoria_tactica_columnas_estrategicas_originales(
+                df_vista, lower_map, costo_inv_col
             )
+            default_lbl: list[str] = []
+            for o in orig_est:
+                lbl = alias_cols.get(o, o)
+                if lbl in df_full.columns:
+                    default_lbl.append(lbl)
+            if not default_lbl:
+                default_lbl = all_lbl[: min(12, len(all_lbl))]
+
+            @_streamlit_fragment_optional()
+            def _aud_vista_tactica_selector_y_tabla() -> None:
+                r1, r2 = st.columns([1, 2], gap="small")
+                with r1:
+                    if st.button(
+                        "↺ Solo columnas estratégicas",
+                        key="aud_tac_reset_strategic",
+                        help="Restaura el conjunto corto inicial (sin abrir el listado completo de columnas).",
+                    ):
+                        st.session_state["aud_tactica_cols_multiselect_v2"] = list(default_lbl)
+                with r2:
+                    q_filt = st.text_input(
+                        "Filtrar nombres de columna",
+                        value="",
+                        key="aud_tac_col_name_filter",
+                        placeholder="Escribe parte del nombre…",
+                        help="Reduce la lista desplegable para marcar o desmarcar más rápido.",
+                    )
+                q = (q_filt or "").strip().lower()
+                _raw_prev = st.session_state.get("aud_tactica_cols_multiselect_v2")
+                prev_sel = list(_raw_prev) if _raw_prev is not None else list(default_lbl)
+                if q:
+                    opts_filtradas = [c for c in all_lbl if q in c.lower()]
+                    prev_valid = [c for c in prev_sel if c in all_lbl]
+                    options_ms = list(dict.fromkeys(prev_valid + opts_filtradas))
+                else:
+                    options_ms = all_lbl
+
+                sel = st.multiselect(
+                    "Columnas visibles (marca para añadir o quitar)",
+                    options=options_ms,
+                    default=default_lbl,
+                    key="aud_tactica_cols_multiselect_v2",
+                    help="Con Streamlit 1.33+, solo este bloque se vuelve a dibujar al cambiar la selección. "
+                    "Usa el filtro de texto para acortar la lista.",
+                )
+                if not sel:
+                    st.warning("Selecciona al menos una columna; se restaura la vista estratégica por defecto.")
+                    sel = list(default_lbl)
+                orden_sel = [c for c in df_full.columns if c in sel]
+                df_tactica_show = df_full[orden_sel]
+                cfg_tactica = {k: v for k, v in cfg_full.items() if k in sel}
+
+                st.dataframe(
+                    df_tactica_show,
+                    width="stretch",
+                    height=680,
+                    hide_index=True,
+                    column_config=cfg_tactica,
+                )
+
+            _aud_vista_tactica_selector_y_tabla()
     
         with subtabs[2]:
             st.markdown("##### Vista operativa — revisar y exportar")

@@ -476,7 +476,7 @@ def calcular_en_duckdb():
         """)
 
         # Normalización + cast explícito a DOUBLE (doble garantía)
-        con.execute("""
+        con.execute(f"""
             CREATE OR REPLACE TABLE origen_importaciones_norm AS
             SELECT
                 CAST(Referencia_Principal AS VARCHAR) AS Referencia_Principal,

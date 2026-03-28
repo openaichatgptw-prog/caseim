@@ -390,7 +390,40 @@ WHERE
     AND i.f120_ind_tipo_item IN (1,3);
 """
 
-SQL_AUDITORIA = """
+
+def _factores_logistica_config() -> tuple[str, str, str]:
+    """Literales para DECLARE en SQL_AUDITORIA; deben coincidir con [FACTORES] en config.ini / Config.ini."""
+    defaults = (1.25, 1.25, 1.5)
+    br, usa, eur = defaults
+    for candidate in (BASE_DIR / "config.ini", BASE_DIR / "Config.ini"):
+        if not candidate.exists():
+            continue
+        cfg = configparser.ConfigParser()
+        cfg.read(candidate, encoding="utf-8")
+        if "FACTORES" not in cfg:
+            continue
+        sec = cfg["FACTORES"]
+        try:
+            br = float(sec.get("factor_br", str(defaults[0])))
+            usa = float(sec.get("factor_usa", str(defaults[1])))
+            eur = float(sec.get("factor_eur", str(defaults[2])))
+        except ValueError:
+            br, usa, eur = defaults
+        break
+
+    def _fmt(v: float) -> str:
+        s = f"{v:.10f}".rstrip("0").rstrip(".")
+        return s if s else "0"
+
+    return (_fmt(br), _fmt(usa), _fmt(eur))
+
+
+def _inyectar_factores_en_sql_auditoria(sql: str) -> str:
+    br, usa, eur = _factores_logistica_config()
+    return sql.replace("__FACTOR_BR__", br).replace("__FACTOR_USA__", usa).replace("__FACTOR_EUR__", eur)
+
+
+SQL_AUDITORIA_TEMPLATE = """
 USE [UnoEE];
 GO
 SET NOCOUNT ON;
@@ -404,6 +437,11 @@ DECLARE @ReferenciaAlternaFiltro   VARCHAR(50)  = NULL;
 DECLARE @UmbralPctCritico          DECIMAL(5,4) = 0.30;
 DECLARE @UmbralPctModAlto          DECIMAL(5,4) = 0.20;
 DECLARE @UmbralPctModBajo          DECIMAL(5,4) = 0.10;
+
+-- Factores logísticos (precio compra USD×TRM comparable a costo de bodega; [FACTORES] en config.ini)
+DECLARE @FactorBR  DECIMAL(9,4) = __FACTOR_BR__;
+DECLARE @FactorUSA DECIMAL(9,4) = __FACTOR_USA__;
+DECLARE @FactorEUR DECIMAL(9,4) = __FACTOR_EUR__;
 
 -------------------------------------------------------------------------------
 -- LIMPIEZA
@@ -827,41 +865,105 @@ FactBase AS (
     LEFT JOIN Ultima    u1 ON bp.Referencia = u1.f120_referencia
     LEFT JOIN Penultima u2 ON bp.Referencia = u2.f120_referencia
 ),
-VariacionesBase AS (
+-- Precio COP × factor (solo para Var_* / Dif_* / ABSVar; no se exponen columnas extra al resultado final)
+FactParaVar AS (
     SELECT
         fb.*,
-        CAST(CASE WHEN fb.Costo_Min > 0 AND fb.Precio_Lista_09 > 0
-                  THEN ((fb.Precio_Lista_09 - fb.Costo_Min) / fb.Precio_Lista_09) * 100
-             END AS DECIMAL(18,2)) AS Margen_Min_Pct,
-        CAST(CASE WHEN fb.Costo_Intermedio > 0 AND fb.Precio_Lista_09 > 0
-                  THEN ((fb.Precio_Lista_09 - fb.Costo_Intermedio) / fb.Precio_Lista_09) * 100
-             END AS DECIMAL(18,2)) AS Margen_Intermedio_Pct,
-        CAST(CASE WHEN fb.Costo_Max > 0 AND fb.Precio_Lista_09 > 0
-                  THEN ((fb.Precio_Lista_09 - fb.Costo_Max) / fb.Precio_Lista_09) * 100
-             END AS DECIMAL(18,2)) AS Margen_Max_Pct,
-        DATEDIFF(DAY, fb.Fecha_Penultima_Compra, fb.Fecha_Ultima_Compra) AS Dias_Entre_Compras,
-        CAST(CASE WHEN fb.Precio_USD_Penultima IS NULL OR fb.Precio_USD_Penultima = 0 THEN NULL
-                  ELSE (fb.Precio_USD_Ultima - fb.Precio_USD_Penultima) / fb.Precio_USD_Penultima
-             END AS DECIMAL(18,4)) AS Var_PrecioUSD,
-        CAST(CASE WHEN fb.Precio_COP_Penultima IS NULL OR fb.Precio_COP_Penultima = 0 THEN NULL
-                  ELSE (fb.Precio_COP_Ultima - fb.Precio_COP_Penultima) / fb.Precio_COP_Penultima
-             END AS DECIMAL(18,4)) AS Var_PrecioCOP,
-        CAST(CASE WHEN fb.TRM_Penultima IS NULL OR fb.TRM_Penultima = 0 THEN NULL
-                  ELSE (fb.TRM_Ultima - fb.TRM_Penultima) / fb.TRM_Penultima
-             END AS DECIMAL(18,4)) AS Var_TRM,
-        CAST(CASE WHEN fb.Precio_COP_Ultima IS NULL OR fb.Costo_Min IS NULL OR fb.Costo_Min = 0 THEN NULL
-                  ELSE (fb.Precio_COP_Ultima - fb.Costo_Min) / fb.Costo_Min
-             END AS DECIMAL(18,4)) AS VarMinPct,
-        CAST(CASE WHEN fb.Precio_COP_Ultima IS NULL OR fb.Costo_Max IS NULL OR fb.Costo_Max = 0 THEN NULL
-                  ELSE (fb.Precio_COP_Ultima - fb.Costo_Max) / fb.Costo_Max
-             END AS DECIMAL(18,4)) AS VarMaxPct,
-        CAST(CASE WHEN fb.Precio_COP_Ultima IS NULL OR fb.Costo_Min IS NULL THEN NULL
-                  ELSE fb.Costo_Min - fb.Precio_COP_Ultima
-             END AS DECIMAL(18,2)) AS Dif_CostoMin_COP,
-        CAST(CASE WHEN fb.Precio_COP_Ultima IS NULL OR fb.Costo_Max IS NULL THEN NULL
-                  ELSE fb.Costo_Max - fb.Precio_COP_Ultima
-             END AS DECIMAL(18,2)) AS Dif_CostoMax_COP
+        CAST(
+            CASE
+                WHEN fb.Precio_COP_Ultima IS NULL THEN NULL
+                ELSE fb.Precio_COP_Ultima * CASE fb.Pais_Ultima
+                    WHEN 'Brazil' THEN @FactorBR
+                    WHEN 'USA' THEN @FactorUSA
+                    WHEN 'Otros' THEN @FactorEUR
+                    ELSE @FactorEUR
+                END
+            END AS DECIMAL(18,2)
+        ) AS _PxUltVar,
+        CAST(
+            CASE
+                WHEN fb.Precio_COP_Penultima IS NULL THEN NULL
+                ELSE fb.Precio_COP_Penultima * CASE fb.Pais_Penultima
+                    WHEN 'Brazil' THEN @FactorBR
+                    WHEN 'USA' THEN @FactorUSA
+                    WHEN 'Otros' THEN @FactorEUR
+                    ELSE @FactorEUR
+                END
+            END AS DECIMAL(18,2)
+        ) AS _PxPenVar
     FROM FactBase fb
+),
+VariacionesBase AS (
+    SELECT
+        f.Referencia,
+        f.[U.M.],
+        f.Descripcion,
+        f.Referencias_Alternas,
+        f.Costo_Min,
+        f.Bodega_CostoMin,
+        f.Costo_Intermedio,
+        f.Costo_Max,
+        f.Bodega_CostoMax,
+        f.Existencia_Min,
+        f.Existencia_Intermedio,
+        f.Existencia_Max,
+        f.Existencia_Total_Siesa,
+        f.Disponible_Min,
+        f.Disponible_Intermedio,
+        f.Disponible_Max,
+        f.NroBod_Min,
+        f.NroBod_Intermedio,
+        f.NroBod_Max,
+        f.Precio_Lista_09,
+        f.NumCostosValidos,
+        f.EsCostoUnico,
+        f.Fecha_Ultima_Compra,
+        f.Pais_Ultima,
+        f.Proveedor_Ultima,
+        f.Comprador_Ultima,
+        f.Precio_USD_Ultima,
+        f.Precio_COP_Ultima,
+        f.TRM_Ultima,
+        f.Fecha_Penultima_Compra,
+        f.Pais_Penultima,
+        f.Proveedor_Penultima,
+        f.Comprador_Penultima,
+        f.Precio_USD_Penultima,
+        f.Precio_COP_Penultima,
+        f.TRM_Penultima,
+        CAST(CASE WHEN f.Costo_Min > 0 AND f.Precio_Lista_09 > 0
+                  THEN ((f.Precio_Lista_09 - f.Costo_Min) / f.Precio_Lista_09) * 100
+             END AS DECIMAL(18,2)) AS Margen_Min_Pct,
+        CAST(CASE WHEN f.Costo_Intermedio > 0 AND f.Precio_Lista_09 > 0
+                  THEN ((f.Precio_Lista_09 - f.Costo_Intermedio) / f.Precio_Lista_09) * 100
+             END AS DECIMAL(18,2)) AS Margen_Intermedio_Pct,
+        CAST(CASE WHEN f.Costo_Max > 0 AND f.Precio_Lista_09 > 0
+                  THEN ((f.Precio_Lista_09 - f.Costo_Max) / f.Precio_Lista_09) * 100
+             END AS DECIMAL(18,2)) AS Margen_Max_Pct,
+        DATEDIFF(DAY, f.Fecha_Penultima_Compra, f.Fecha_Ultima_Compra) AS Dias_Entre_Compras,
+        CAST(CASE WHEN f.Precio_USD_Penultima IS NULL OR f.Precio_USD_Penultima = 0 THEN NULL
+                  ELSE (f.Precio_USD_Ultima - f.Precio_USD_Penultima) / f.Precio_USD_Penultima
+             END AS DECIMAL(18,4)) AS Var_PrecioUSD,
+        CAST(CASE WHEN f._PxPenVar IS NULL OR f._PxPenVar = 0 THEN NULL
+                  WHEN f._PxUltVar IS NULL THEN NULL
+                  ELSE (f._PxUltVar - f._PxPenVar) / f._PxPenVar
+             END AS DECIMAL(18,4)) AS Var_PrecioCOP,
+        CAST(CASE WHEN f.TRM_Penultima IS NULL OR f.TRM_Penultima = 0 THEN NULL
+                  ELSE (f.TRM_Ultima - f.TRM_Penultima) / f.TRM_Penultima
+             END AS DECIMAL(18,4)) AS Var_TRM,
+        CAST(CASE WHEN f._PxUltVar IS NULL OR f.Costo_Min IS NULL OR f.Costo_Min = 0 THEN NULL
+                  ELSE (f._PxUltVar - f.Costo_Min) / f.Costo_Min
+             END AS DECIMAL(18,4)) AS VarMinPct,
+        CAST(CASE WHEN f._PxUltVar IS NULL OR f.Costo_Max IS NULL OR f.Costo_Max = 0 THEN NULL
+                  ELSE (f._PxUltVar - f.Costo_Max) / f.Costo_Max
+             END AS DECIMAL(18,4)) AS VarMaxPct,
+        CAST(CASE WHEN f._PxUltVar IS NULL OR f.Costo_Min IS NULL THEN NULL
+                  ELSE f.Costo_Min - f._PxUltVar
+             END AS DECIMAL(18,2)) AS Dif_CostoMin_COP,
+        CAST(CASE WHEN f._PxUltVar IS NULL OR f.Costo_Max IS NULL THEN NULL
+                  ELSE f.Costo_Max - f._PxUltVar
+             END AS DECIMAL(18,2)) AS Dif_CostoMax_COP
+    FROM FactParaVar f
 ),
 VariacionesExtremas AS (
     SELECT
@@ -1150,6 +1252,8 @@ ORDER BY
     END,
     Referencia;
 """
+
+SQL_AUDITORIA = _inyectar_factores_en_sql_auditoria(SQL_AUDITORIA_TEMPLATE)
 
 SQL_REPORTS = [
     ("consulta_interna_precio_margen_siesa", "margen_siesa_raw", SQL_PRECIO_MARGEN_SIESA),

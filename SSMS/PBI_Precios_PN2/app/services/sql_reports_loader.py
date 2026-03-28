@@ -49,7 +49,7 @@ def _build_conn_str() -> str:
     password = cfg["SQLSERVER"]["db_pass"].strip('"')
     return (
         "DRIVER={ODBC Driver 17 for SQL Server};"
-        f"SERVER={server};DATABASE={database};UID={user};PWD={password};TrustServerCertificate=yes;Connection Timeout=30;"
+        f"SERVER={server};DATABASE={database};UID={user};PWD={password};TrustServerCertificate=yes;Connection Timeout=60;"
     )
 
 
@@ -285,7 +285,17 @@ def _persist_query_to_duckdb(
             except Exception:
                 pass
 
-            is_network = "08S01" in str(exc) or "10054" in str(exc) or "Communication link" in str(exc)
+            s_exc = str(exc)
+            # 08S01/10054: corte durante consulta; 08001 + timeout/TCP: fallo al conectar (VPN, cola, servidor ocupado)
+            is_network = (
+                "08S01" in s_exc
+                or "10054" in s_exc
+                or "08001" in s_exc
+                or "Communication link" in s_exc
+                or "Login timeout" in s_exc
+                or "TCP Provider" in s_exc
+                or "timed out" in s_exc.lower()
+            )
             if is_network and attempt < _MAX_PERSIST_RETRIES:
                 wait = _RETRY_WAIT_SECS[min(attempt - 1, len(_RETRY_WAIT_SECS) - 1)]
                 if log_callback:
