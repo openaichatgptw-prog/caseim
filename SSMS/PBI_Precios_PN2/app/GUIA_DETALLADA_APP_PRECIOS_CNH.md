@@ -188,33 +188,44 @@ El cotizador trabaja **fila a fila** sobre el mismo resultado que la tabla de co
     Costo_Min = misma columna que en consulta masiva (cruce inventario).
 ```
 
-##### Guías internas lista / venta vs «repo» (no visibles en la app)
+##### Guías internas lista / venta / últ. compra vs **reposición importación** (no visibles en la app)
 
-En la app Streamlit **no** se muestran columnas de % de guía (evita ruido frente a **Alertas** y al precio recomendado). El motor **sí** calcula las mismas brechas en `_consulta_masiva_cotizador_alertas` para el **score** y el texto de alertas.
+En la app Streamlit **no** se muestran columnas de % de guía (evita ruido frente a **Alertas**). El motor calcula las brechas en `_consulta_masiva_cotizador_alertas` para el **score** y el texto de alertas.
 
-En la app, **“repo”** (reposición) significa el **precio recomendado en COP** (`P_recomendado_COP`) **antes** de anularlo por alertas — es la referencia contra la que se mide qué tan lejos están la lista y la última venta.
-
-**Guía lista vs repo** (lógica interna; antes `Guia_lista09_vs_repo_pct`):
+**Referencia P_repo (reposición importación, sin margen de venta):**
 
 ```text
-Guía_lista (%)  =  | Precio_Lista_09 − P_rec |  ÷  max(Precio_Lista_09 , P_rec)  ×  100
+P_repo  =  USD_base × TRM
+
+USD_base  =  mismo «USD base (cotiz.)» de la fila: Mejor_Precio_Ajustado  o  Último Valor USD × factor país (País última compra).
+TRM       =  TRM del slider del cotizador.
 ```
 
-**Guía venta vs repo** (lógica interna; antes `Guia_venta_vs_repo_pct`):
+**No** se usa `P_recomendado_COP` ni el margen **m** ni el piso **X** en estas guías.
+
+**Guía lista vs P_repo:**
 
 ```text
-Guía_venta (%)  =  | Ult_venta − P_rec |  ÷  max(Ult_venta , P_rec)  ×  100
+Guía_lista (%)  =  | Precio_Lista_09 − P_repo |  ÷  max(Precio_Lista_09 , P_repo)  ×  100
 ```
 
-(`Ult_venta` = **Últ. Precio Venta** del cruce masivo; `P_rec` = precio recomendado en COP.)
+**Guía venta vs P_repo:**
 
-Solo se calculan si **ambos** operandos existen y son &gt; 0. Son **métricas de brecha / alineación** respecto al precio de reposición **propuesto por el cotizador**, no márgenes contables.
+```text
+Guía_venta (%)  =  | Ult_venta − P_repo |  ÷  max(Ult_venta , P_repo)  ×  100
+```
 
-**Valores vacíos (—):** si no hay `P_rec` usable, o falta lista 09 / última venta, la guía correspondiente no se calcula (`None`).
+**Guía última compra vs P_repo** (columna **`Precio_COP_Ultima`** del cruce / auditoría):
 
-**Si el estado anula el recomendado** («Precio no calculable…»), las guías se evalúan igual con el **P_rec intermedio** antes de anularlo (solo dentro del motor de alertas); el usuario ve el efecto en **Alertas** / estado, no en columnas de %.
+```text
+Guía_compra (%)  =  | Precio_COP_Ultima − P_repo |  ÷  max(Precio_COP_Ultima , P_repo)  ×  100
+```
 
-**Uso en alertas:** si la brecha lista/repo supera el **umbral %** configurado en la app (slider «lista 09 vs precio recomendado», **35 %** por defecto) o la brecha venta/repo supera el otro slider (**40 %** por defecto), suman **score** y texto en **Alertas**. Eso **no** cambia la fórmula del precio; solo dispara revisión.
+Solo se calculan si **ambos** operandos existen y son &gt; 0. Si no hay **USD base**, no hay **P_repo** y las tres guías quedan sin aplicar.
+
+**Uso en alertas:** umbrales **%** configurables (sliders; por defecto 35 % lista, 40 % venta, 40 % compra). **Inventario muy justo:** existencia total en **(0, N]** unidades; **N** configurable (slider; defecto **3**).
+
+**Anulación del recomendado:** las guías dependen de **P_repo** y datos de lista/venta/compra; el **P. recomendado** mostrado puede anularse por score global sin cambiar la definición anterior.
 
 ##### Estado de cotización y alertas (score)
 
@@ -222,11 +233,12 @@ Solo se calculan si **ambos** operandos existen y son &gt; 0. Son **métricas de
 
 | Señal (resumen) | Efecto en score (típico) |
 |-----------------|---------------------------|
-| Existencia total ∈ (0, 3] unidades | +1 |
+| Existencia total ∈ **(0, N]** unidades (N = slider inventario justo; defecto 3) | +1 |
 | Costo máx. vs costo mín.: **(máx − mín) ÷ mín** &gt; 35 % | +2 |
 | ≥ 2 orígenes USD válidos y dispersión **(máx − mín) ÷ mín** &gt; 35 % (o &gt; 55 % → más peso) | +2 o +4 |
-| Guía lista vs repo &gt; umbral % (slider; defecto 35 %) | +2 |
-| Guía venta vs repo &gt; umbral % (slider; defecto 40 %) | +1 |
+| Guía lista vs **P_repo** (USD base×TRM) &gt; umbral % (slider; defecto 35 %) | +2 |
+| Guía venta vs **P_repo** &gt; umbral % (slider; defecto 40 %) | +1 |
+| Guía últ. compra (COP) vs **P_repo** &gt; umbral % (slider; defecto 40 %) | +1 |
 | Piso domina y experto &lt; 50 % del piso | +1 |
 | Sin USD base **y** sin costo mín. | Estado bloqueado, sin recomendación |
 
@@ -453,8 +465,9 @@ Referencias cruzadas: **SQL** = definido en `00_Reportes_SQL.py` / motor SQL Ser
 | Medida | Qué es |
 |--------|--------|
 | **P. recomendado (COP)** | `max(experto, piso)` con experto = USD×TRM/(1−m) y piso = Costo_Min/(1−X). |
-| **Guía lista vs repo (interno)** | `|PL09 − P_rec| ÷ max(PL09, P_rec) × 100`; alimenta score/alertas; **no** hay columna en la app (§3.2). |
-| **Guía venta vs repo (interno)** | `|UltVenta − P_rec| ÷ max(UltVenta, P_rec) × 100`; igual; **no** hay columna en la app (§3.2). |
+| **Guía lista vs P_repo (interno)** | `|PL09 − P_repo| ÷ max(PL09, P_repo) × 100` con `P_repo = USD_base×TRM`; **no** hay columna en la app (§3.2). |
+| **Guía venta vs P_repo (interno)** | `|UltVenta − P_repo| ÷ max(UltVenta, P_repo) × 100`; igual. |
+| **Guía últ. compra vs P_repo (interno)** | `|Precio_COP_Ultima − P_repo| ÷ max(…) × 100` si existe columna; +1 score. |
 | **Estado cotización** | Resultado del score de alertas (OK → bloqueado). |
 | **Alertas** | Texto concatenado de las reglas de `_consulta_masiva_cotizador_alertas`. |
 
