@@ -235,7 +235,7 @@ Solo se calculan si **ambos** operandos existen y son &gt; 0. Si no hay **USD ba
 |-----------------|---------------------------|
 | Existencia total ∈ **(0, N]** unidades (N = slider inventario justo; defecto 3) | +1 |
 | Costo máx. vs costo mín.: **(máx − mín) ÷ mín** &gt; 35 % | +2 |
-| ≥ 2 orígenes USD válidos y dispersión **(máx − mín) ÷ mín** &gt; 35 % (o &gt; 55 % → más peso) | +2 o +4 |
+| ≥ 2 orígenes **Brasil/USA** con disp. &gt; umbral y dispersión **(máx − mín) ÷ mín** &gt; 35 % (o &gt; 55 % → más peso); **Europa** solo entra en el cálculo si **Mejor_Origen** es Europa | +2 o +4 |
 | Guía lista vs **P_repo** (USD base×TRM) &gt; umbral % (slider; defecto 35 %) | +2 |
 | Guía venta vs **P_repo** &gt; umbral % (slider; defecto 40 %) | +1 |
 | Guía últ. compra (COP) vs **P_repo** &gt; umbral % (slider; defecto 40 %) | +1 |

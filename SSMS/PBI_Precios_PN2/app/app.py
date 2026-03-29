@@ -2829,19 +2829,33 @@ def _consulta_masiva_encabezados_id(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns={k: v for k, v in m.items() if k in df.columns})
 
 
+def _cot_mejor_origen_es_europa(mejor: object) -> bool:
+    """True si el ganador regional es Europa (para incluir EU en dispersión USD)."""
+    s = str(mejor or "").upper().strip()
+    return "EUROPA" in s or "EUROPE" in s or s in ("EUR", "EU")
+
+
 def _consulta_masiva_origenes_usd_ajustados(
     row: pd.Series,
     factor_usabr: float,
     factor_euro: float,
     disp_umbral: float,
+    *,
+    incluir_europa: bool = True,
 ) -> list[float]:
-    """Precios USD ajustados por origen (misma lógica que mejor precio) para medir dispersión."""
+    """Precios USD ajustados por origen (misma lógica que mejor precio) para medir dispersión.
+
+    Por defecto incluye los tres orígenes. Si ``incluir_europa`` es False, solo Brasil y USA
+    entran en la lista: EU es apoyo y no debe inflar el score cuando el mejor precio es BR/USA.
+    """
     out: list[float] = []
-    for pcol, dcol, fac in (
+    bloques: list[tuple[str, str, float]] = [
         ("Precio Brasil", "disp_br", float(factor_usabr)),
         ("Precio Usa", "disp_usa", float(factor_usabr)),
-        ("Precio Europa", "disp_eur", float(factor_euro)),
-    ):
+    ]
+    if incluir_europa:
+        bloques.append(("Precio Europa", "disp_eur", float(factor_euro)))
+    for pcol, dcol, fac in bloques:
         pv = row.get(pcol)
         dv = row.get(dcol)
         if pv is None or pd.isna(pv) or dv is None or pd.isna(dv):
@@ -2930,7 +2944,10 @@ def _consulta_masiva_cotizador_alertas(
             alertas.append(f"Costo mín. vs costo máx. inventario muy desalineados (~{spr_cm * 100:.0f}%)")
             score += 2
 
-    adjs = _consulta_masiva_origenes_usd_ajustados(row, factor_usabr, factor_euro, disp_umbral)
+    incluir_eu_disp = _cot_mejor_origen_es_europa(row.get("Mejor_Origen"))
+    adjs = _consulta_masiva_origenes_usd_ajustados(
+        row, factor_usabr, factor_euro, disp_umbral, incluir_europa=incluir_eu_disp
+    )
     if len(adjs) >= 2:
         mx, mn = max(adjs), min(adjs)
         if mn > 1e-12:
@@ -3760,7 +3777,7 @@ Cuando existen ambos términos. En **Alertas**, lista 09, última venta y últim
             st.markdown(
                 """
 **Alertas y “precio no calculable automáticamente”**  
-Se señala si: existencia total en **(0, N]** unidades (**N** = slider «inventario justo»); dispersión alta entre **orígenes USD**; **costo mín. vs costo máx.** inventario muy distintos; **lista 09**, **últ. venta** o **últ. compra (COP)** muy lejos de **USD base × TRM** (umbrales % en sliders). El **costo mín.** alimenta la cotización (piso y contexto), sin comparar contra costo prom.  
+Se señala si: existencia total en **(0, N]** unidades (**N** = slider «inventario justo»); dispersión alta entre **Brasil y USA** en USD ajustado (Europa solo cuenta en esa dispersión si **Mejor_Origen** es Europa); **costo mín. vs costo máx.** inventario muy distintos; **lista 09**, **últ. venta** o **últ. compra (COP)** muy lejos de **USD base × TRM** (umbrales % en sliders). El **costo mín.** alimenta la cotización (piso y contexto), sin comparar contra costo prom.  
 
 Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el estado pasa a **“Precio no calculable automáticamente”** y se **anula** el precio recomendado (revisión manual obligatoria).
                 """.strip()
