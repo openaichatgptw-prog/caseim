@@ -464,12 +464,20 @@ Referencias cruzadas: **SQL** = definido en `00_Reportes_SQL.py` / motor SQL Ser
 
 | Medida | Qué es |
 |--------|--------|
-| **P. recomendado (COP)** | `max(experto, piso)` con experto = USD×TRM/(1−m) y piso = Costo_Min/(1−X). |
-| **Guía lista vs P_repo (interno)** | `|PL09 − P_repo| ÷ max(PL09, P_repo) × 100` con `P_repo = USD_base×TRM`; **no** hay columna en la app (§3.2). |
-| **Guía venta vs P_repo (interno)** | `|UltVenta − P_repo| ÷ max(UltVenta, P_repo) × 100`; igual. |
-| **Guía últ. compra vs P_repo (interno)** | `|Precio_COP_Ultima − P_repo| ÷ max(…) × 100` si existe columna; +1 score. |
+| **P. recomendado (COP)** | Máximo entre **experto** y **piso**: experto = USD base × TRM ÷ (1 − *m*); piso = Costo_Min ÷ (1 − *X*). *m* y *X* = sliders del cotizador. |
+| **Guía lista vs P_repo (interno)** | Brecha simétrica **lista 09** vs **P_repo** (diferencia absoluta ÷ el mayor de los dos × 100). **P_repo** = USD base × TRM, **sin** margen de venta. Umbrales en sliders; +2 al score. No hay columna en pantalla; ver §3.2. |
+| **Guía venta vs P_repo (interno)** | Igual, con **último precio de venta** vs **P_repo**. +1 al score si supera umbral. |
+| **Guía últ. compra vs P_repo (interno)** | Igual, con **Precio_COP_Ultima** (auditoría) vs **P_repo**, si la columna existe en el cruce. +1 al score. |
 | **Estado cotización** | Resultado del score de alertas (OK → bloqueado). |
 | **Alertas** | Texto concatenado de las reglas de `_consulta_masiva_cotizador_alertas`. |
+
+Fórmulas compactas (evitan `|` para que no rompan tablas Markdown):
+
+```text
+P_repo = USD_base × TRM
+
+Guía_% =  abs(A − P_repo) / max(A, P_repo) × 100     con A = lista 09, últ. venta o Precio_COP_Ultima
+```
 
 ### 10.3 Consulta individual (ficha HTML)
 
