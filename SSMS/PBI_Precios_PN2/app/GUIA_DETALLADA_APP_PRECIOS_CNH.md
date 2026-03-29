@@ -194,44 +194,46 @@ El cotizador trabaja **fila a fila** sobre el mismo resultado que la tabla de co
     Costo_Min = misma columna que en consulta masiva (cruce inventario).
 ```
 
-##### Guías internas lista / venta / últ. compra vs **reposición importación** (no visibles en la app)
+##### Guías internas lista / venta / últ. compra (no visibles como columnas % en la app)
 
 En la app Streamlit **no** se muestran columnas de % de guía (evita ruido frente a **Alertas**). El motor calcula las brechas en `_consulta_masiva_cotizador_alertas` para el **score** y el texto de alertas.
 
-**Referencia P_repo (reposición importación, sin margen de venta):**
+**Referencias (mismo USD base y TRM del cotizador; *m* = margen objetivo sobre venta del slider):**
 
 ```text
-P_repo  =  USD_base × TRM
+P_costo_import_COP  =  USD_base × TRM                    (sin margen de venta)
 
-USD_base  =  mismo «USD base (cotiz.)» de la fila: Mejor_Precio_Ajustado  o  Último Valor USD × factor país (País última compra).
+P_precio_repos_COP  =  USD_base × TRM ÷ (1 − m)          (= P_experto cuando hay USD base)
+
+USD_base  =  «USD base (cotiz.)»: Mejor_Precio_Ajustado  o  Último Valor USD × factor país.
 TRM       =  TRM del slider del cotizador.
 ```
 
-**No** se usa `P_recomendado_COP` ni el margen **m** ni el piso **X** en estas guías.
+**No** se usa `P_recomendado_COP` como denominador de estas brechas; **lista** y **venta** sí usan el margen **m** vía **P_precio_repos_COP**.
 
-**Guía lista vs P_repo:**
-
-```text
-Guía_lista (%)  =  | Precio_Lista_09 − P_repo |  ÷  max(Precio_Lista_09 , P_repo)  ×  100
-```
-
-**Guía venta vs P_repo:**
+**Guía lista vs precio reposición:**
 
 ```text
-Guía_venta (%)  =  | Ult_venta − P_repo |  ÷  max(Ult_venta , P_repo)  ×  100
+Guía_lista (%)  =  | Precio_Lista_09 − P_precio_repos_COP |  ÷  max(Precio_Lista_09 , P_precio_repos_COP)  ×  100
 ```
 
-**Guía última compra vs P_repo** (columna **`Precio_COP_Ultima`** del cruce / auditoría):
+**Guía venta vs precio reposición:**
 
 ```text
-Guía_compra (%)  =  | Precio_COP_Ultima − P_repo |  ÷  max(Precio_COP_Ultima , P_repo)  ×  100
+Guía_venta (%)  =  | Ult_venta − P_precio_repos_COP |  ÷  max(Ult_venta , P_precio_repos_COP)  ×  100
 ```
 
-Solo se calculan si **ambos** operandos existen y son &gt; 0. Si no hay **USD base**, no hay **P_repo** y las tres guías quedan sin aplicar.
+**Guía última compra vs costo importación COP** (columna **`Precio_COP_Ultima`** del cruce / auditoría):
+
+```text
+Guía_compra (%)  =  | Precio_COP_Ultima − P_costo_import_COP |  ÷  max(Precio_COP_Ultima , P_costo_import_COP)  ×  100
+```
+
+Lista y venta requieren **P_precio_repos_COP** (hay USD base). Compra requiere **P_costo_import_COP**. Si falta USD base, esas guías no aplican.
 
 **Uso en alertas:** umbrales **%** configurables (sliders; por defecto 35 % lista, 40 % venta, 40 % compra). **Inventario muy justo:** existencia total en **(0, N]** unidades; **N** configurable (slider; defecto **3**).
 
-**Anulación del recomendado:** las guías dependen de **P_repo** y datos de lista/venta/compra; el **P. recomendado** mostrado puede anularse por score global sin cambiar la definición anterior.
+**Anulación del recomendado:** el **P. recomendado** mostrado puede anularse por score global; las brechas anteriores son independientes de mostrar o no el recomendado.
 
 ##### Estado de cotización y alertas (score)
 
@@ -242,9 +244,9 @@ Solo se calculan si **ambos** operandos existen y son &gt; 0. Si no hay **USD ba
 | Existencia total ∈ **(0, N]** unidades (N = slider inventario justo; defecto 3) | +1 |
 | Costo máx. vs costo mín.: **(máx − mín) ÷ mín** &gt; 35 % | +2 |
 | ≥ 2 orígenes **Brasil/USA** con disp. &gt; umbral y dispersión **(máx − mín) ÷ mín** &gt; 35 % (o &gt; 55 % → más peso); **Europa** solo entra en el cálculo si **Mejor_Origen** es Europa | +2 o +4 |
-| Guía lista vs **P_repo** (USD base×TRM) &gt; umbral % (slider; defecto 35 %) | +2 |
-| Guía venta vs **P_repo** &gt; umbral % (slider; defecto 40 %) | +1 |
-| Guía últ. compra (COP) vs **P_repo** &gt; umbral % (slider; defecto 40 %) | +1 |
+| Guía lista vs **precio reposición** (USD base×TRM÷(1−*m*)) &gt; umbral % (slider; defecto 35 %) | +2 |
+| Guía venta vs **precio reposición** (misma referencia) &gt; umbral % (slider; defecto 40 %) | +1 |
+| Guía últ. compra (COP) vs **USD base×TRM** (sin margen) &gt; umbral % (slider; defecto 40 %) | +1 |
 | Piso domina y experto &lt; 50 % del piso | +1 |
 | Sin USD base **y** sin costo mín. | Estado bloqueado, sin recomendación |
 
@@ -471,18 +473,21 @@ Referencias cruzadas: **SQL** = definido en `00_Reportes_SQL.py` / motor SQL Ser
 | Medida | Qué es |
 |--------|--------|
 | **P. recomendado (COP)** | Máximo entre **experto** y **piso**: experto = USD base × TRM ÷ (1 − *m*); piso = Costo_Min ÷ (1 − *X*). *m* y *X* = sliders del cotizador. |
-| **Guía lista vs P_repo (interno)** | Brecha simétrica **lista 09** vs **P_repo** (diferencia absoluta ÷ el mayor de los dos × 100). **P_repo** = USD base × TRM, **sin** margen de venta. Umbrales en sliders; +2 al score. No hay columna en pantalla; ver §3.2. |
-| **Guía venta vs P_repo (interno)** | Igual, con **último precio de venta** vs **P_repo**. +1 al score si supera umbral. |
-| **Guía últ. compra vs P_repo (interno)** | Igual, con **Precio_COP_Ultima** (auditoría) vs **P_repo**, si la columna existe en el cruce. +1 al score. |
+| **Guía lista vs precio reposición (interno)** | Brecha **lista 09** vs **USD base × TRM ÷ (1 − *m*)** (= P experto). Umbrales en sliders; +2 al score. Ver §3.2. |
+| **Guía venta vs precio reposición (interno)** | Brecha **últ. precio venta** vs la misma **precio reposición**. +1 al score si supera umbral. |
+| **Guía últ. compra vs costo importación (interno)** | Brecha **Precio_COP_Ultima** vs **USD base × TRM** (sin margen), si la columna existe en el cruce. +1 al score. |
 | **Estado cotización** | Resultado del score de alertas (OK → bloqueado). |
 | **Alertas** | Texto concatenado de las reglas de `_consulta_masiva_cotizador_alertas`. |
 
 Fórmulas compactas (evitan `|` para que no rompan tablas Markdown):
 
 ```text
-P_repo = USD_base × TRM
+P_costo_import_COP = USD_base × TRM
 
-Guía_% =  abs(A − P_repo) / max(A, P_repo) × 100     con A = lista 09, últ. venta o Precio_COP_Ultima
+P_precio_repos_COP = USD_base × TRM ÷ (1 − m)
+
+Guía lista/venta:  abs(A − P_precio_repos_COP) / max(A, P_precio_repos_COP) × 100
+Guía compra:       abs(A − P_costo_import_COP) / max(A, P_costo_import_COP) × 100   con A = Precio_COP_Ultima
 ```
 
 ### 10.3 Consulta individual (ficha HTML)
