@@ -233,7 +233,7 @@ Guía_compra (%)  =  | Precio_COP_Ultima − P_costo_import_COP |  ÷  max(Preci
 
 Lista y venta requieren **P_precio_repos_COP** (hay USD base). Compra requiere **P_costo_import_COP**. Si falta USD base, esas guías no aplican.
 
-**Uso en alertas / score:** un **único** umbral **%** para **mercado vs reposición** aplicado solo a **guía venta** y **guía compra** (la mayor de las dos disponibles); **lista** queda fuera. Además sliders de dispersión moderada/crítica, **costo mín. vs máx.** y **ratio experto vs piso** cuando manda el piso. **Existencia baja** no suma al score.
+**Uso en alertas / score:** umbral **%** para **mercado vs reposición** (solo **guía venta** y **guía compra**); **lista** queda fuera. Otro umbral **%** para **piso vs precio reposición** cuando el recomendado es **P experto**. Además sliders de dispersión moderada/crítica, **costo mín. vs máx.** y **ratio experto vs piso** cuando manda el piso. **Existencia baja** no suma al score.
 
 **Anulación del recomendado:** solo el **score acumulado** decide estado y si se vacía **P. recomendado** (`_cotizador_estado_y_anulacion_desde_score` en `app.py`). Con score **2–4** o **≥ 5** el recomendado se anula; con **0–1** se muestra. La columna **Score_cotizacion** en el cotizador exporta el total (vacío si no hubo insumos).
 
@@ -247,6 +247,7 @@ Lista y venta requieren **P_precio_repos_COP** (hay USD base). Compra requiere *
 | ≥ 2 orígenes con disp. &gt; umbral masivo y dispersión **(máx − mín) ÷ mín** por encima del **umbral moderado** (slider cotizador; antes fijo 35 %) → +2; si además supera el **umbral crítico** (slider; antes 55 %) → +4; **Europa** solo entra si **Mejor_Origen** es Europa | +2 o +4 |
 | **Mercado vs reposición:** la **mayor** de (guía venta, guía compra) &gt; umbral % **único** (slider; defecto 40 %) | +2 (una vez por fila) |
 | Mismo bloque: **venta y compra** ambas &gt; umbral (cuando existen las dos) | +1 adicional |
+| **Piso vs precio reposición:** recomendado = **P experto** y \|piso − experto\| ÷ max(piso, experto) &gt; umbral % (slider; defecto 20 %) | +2 |
 | Piso domina el recomendado y **P. experto** &lt; **X %** del **P. piso** (*X* = slider; antes fijo 50 %) | +1 |
 | Sin USD base **y** sin costo mín. | Estado bloqueado, sin recomendación |
 

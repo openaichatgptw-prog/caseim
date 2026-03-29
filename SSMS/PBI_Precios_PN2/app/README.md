@@ -75,7 +75,7 @@ Si la **mayor** de las dos brechas disponibles supera el umbral del slider, suma
 
 La exportación incluye **lista ref. urg.**, **brecha mercado máx. (%)** (solo venta/compra), **mercado: guías > umbral** y **margen implícito vs costo mín. (%)** sobre el precio calculado.
 
-**Otras señales del score** (resumen): **costo mín. vs máx.** (slider %); **dispersión entre orígenes USD** (sliders moderado/crítico); **experto vs piso** cuando el recomendado es el piso (slider: % del piso por debajo del cual el experto dispara alerta); falta total de USD base y costo mín. **La existencia baja no suma score**. Ver `_consulta_masiva_cotizador_alertas` en `app.py`.
+**Otras señales del score** (resumen): **costo mín. vs máx.** (slider %); **dispersión entre orígenes USD** (sliders moderado/crítico); **experto vs piso** cuando el recomendado es el piso (slider: % del piso por debajo del cual el experto dispara alerta); **piso vs precio reposición** cuando el recomendado es **P experto** (slider %; brecha relativa entre piso inventario y precio reposición; defecto 20 %; **+2** si supera el umbral); falta total de USD base y costo mín. **La existencia baja no suma score**. Ver `_consulta_masiva_cotizador_alertas` en `app.py`.
 
 ---
 

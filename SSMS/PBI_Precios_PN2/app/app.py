@@ -1291,11 +1291,45 @@ def _consulta_html_reposicion_panel(
     pr_s = html.escape(_fmt_money_cop_local(pr, decimals=0))
     trm_s = html.escape(_fmt_num_local(float(trm), decimals=0))
     mg_s = html.escape(_fmt_num_local(float(margin_pct), decimals=0))
+    _fuente = r.get("USD_base_fuente")
+    _fac_uc = r.get("Factor_ultima_compra_aplicado")
+    _fuente_dyn = ""
+    if _fuente is not None and str(_fuente).strip():
+        fs = str(_fuente).strip()
+        if fs == "Mejor_Precio_Ajustado":
+            _fuente_dyn = (
+                "<strong>Esta referencia:</strong> USD base sale del <strong>mejor origen de catálogo</strong> "
+                "(menor precio ajustado entre BR/USA/EUR con disponibilidad <strong>&gt;</strong> umbral de consulta)."
+            )
+        elif "Ult." in fs or "lista" in fs.lower():
+            fac_s = ""
+            try:
+                if _fac_uc is not None and not pd.isna(_fac_uc):
+                    fac_s = f" Factor aplicado a la última compra/lista: <strong>{float(_fac_uc):.2f}</strong>."
+            except (TypeError, ValueError):
+                fac_s = ""
+            _fuente_dyn = (
+                "<strong>Esta referencia:</strong> USD base es <strong>respaldo</strong>: "
+                "<em>Último valor USD</em> (lista/última compra) × factor según <em>país últ. compra</em>"
+                f"{fac_s} Se usa cuando <strong>ningún</strong> origen BR/USA/EUR cumple disponibilidad &gt; umbral "
+                "o no hay precio regional válido."
+            )
+        else:
+            _fuente_dyn = f"<strong>Esta referencia:</strong> fuente USD base: <code>{html.escape(fs)}</code>."
     cap = (
         f'<p class="consulta-note consulta-note--repo-formulas">Fórmulas (alineadas al cotizador en lote): '
         f"<strong>Costo reposición</strong> = USD base × TRM ({trm_s}); "
-        f"<strong>Precio reposición</strong> = USD base × TRM ÷ (1 − {mg_s}% margen sobre venta). "
-        f"USD base = mejor precio lista por región × factor BR/USA o EUR según el origen ganador.</p>"
+        f"<strong>Precio reposición</strong> = USD base × TRM ÷ (1 − {mg_s}% margen sobre venta).</p>"
+        f'<p class="consulta-note consulta-note--repo-formulas"><strong>USD base</strong> (en este orden): '
+        f"(1) <strong>Mejor origen catálogo</strong> — precio lista del origen ganador (BR/USA/EUR) × factor BR/USA o EUR, "
+        f"solo si ese origen tiene disponibilidad <strong>estrictamente mayor</strong> al umbral del primer bloque; "
+        f"(2) si no hay candidato válido, <strong>respaldo</strong>: último valor USD de lista/última compra × factor "
+        f"según país de la última compra (misma lógica que el cotizador en lote).</p>"
+        + (
+            f'<p class="consulta-note consulta-note--repo-formulas">{_fuente_dyn}</p>'
+            if _fuente_dyn
+            else ""
+        )
     )
     grid = (
         f'<div class="consulta-compra-grid consulta-compra-grid--two">'
@@ -2160,6 +2194,10 @@ BUSINESS_LABELS: Final[dict[str, str]] = {
     "Estado_cotizacion": "Estado cotización",
     "Score_cotizacion": "Score cotización",
     "Brecha_lista09_vs_repo_pct": "Lista 09 vs repo (ref. urg. %)",
+    "Brecha_repo_vs_piso_pct": "Vigía: repo vs piso (%)",
+    "Brecha_minmax_costo_pct": "Brecha costo mín/máx inv. (%)",
+    "Valor_inventario_COP": "Valor inventario (COP)",
+    "Banda_valor_inv": "Banda valor inventario",
     "Brecha_mercado_max_pct": "Brecha mercado máx. (%)",
     "Mercado_guias_sobre_umbral": "Mercado: guías > umbral",
     "Margen_impl_pct_costo_min": "Margen impl. vs c. mín. (%)",
@@ -3122,44 +3160,114 @@ def _consulta_masiva_origenes_usd_ajustados(
     return out
 
 
-# --- Motor de alertas cotizador: pesos, umbrales fijos y bandas de estado (solo el score define el estado).
+# --- Cotizador: umbrales y pesos de score (estructura de datos + incoherencias de referencia).
 _COT_ALERT_SPREAD_ORIGEN_PCT = 0.35
 _COT_ALERT_SPREAD_ORIGEN_CRIT_PCT = 0.55
-_COT_ALERT_COSTO_MIN_MAX_PCT = 0.35  # defecto UI / parámetro costo mín vs máx.
-_COT_RATIO_EXPERTO_VS_PISO_DEFAULT = 0.5  # alerta si experto < piso × ratio (antes fijo 50 %).
+_COT_ALERT_COSTO_MIN_MAX_PCT = 0.35
+_COT_UMBRAL_COHERENCIA_DEFAULT = 0.40  # brechas relativas: compra vs importación, compra vs piso/venta, etc. (slider %).
 _COT_W_COSTO_MIN_MAX = 2
 _COT_W_USD_ORIGEN_MOD = 2
 _COT_W_USD_ORIGEN_CRIT = 4
-_COT_UMBRAL_MERCADO_DEFAULT = 0.40  # venta / compra vs reposición (lista 09 no entra al score; solo columna ref.).
-_COT_W_MERCADO = 2  # brecha máxima por encima del umbral (una vez).
-_COT_W_MERCADO_MULT = 1  # venta y compra ambas > umbral (refuerzo multifuente).
-_COT_W_PISO_DOMINA = 1
+_COT_W_INCOHERENCIA_REFERENCIA = 2  # últ. compra COP vs importación (origen catálogo) o vs piso/venta (sin catálogo).
+_COT_W_AVISO_SIN_COP = 1  # solo USD lista sin Precio_COP_Ultima para contrastar.
+_COT_W_REPO_VS_PISO = 2  # vigía: brecha P. reposición (experto) vs piso inventario (costo mín. + margen piso).
 _COT_SCORE_BLOQUEO = 5
+_COT_UMBRAL_REPO_VS_PISO_DEFAULT = 0.30  # % brecha relativa reposición↔piso que dispara vigía (+score).
+_COT_UMBRAL_MINMAX_HOMOGENEO_DEFAULT = 0.20  # (max−min)/min; por debajo se usa promedio min/max para el piso.
+_COT_TOL_PISO_SOBRE_REPO_BAJA_DEFAULT = 0.15  # banda valor baja: si piso ≤ repo×(1+tol), prima reposición.
+_COT_VALOR_INV_COP_BAJO_DEFAULT = 500_000.0  # valor stock = exist × costo unit.; bandas materialidad (COP).
+_COT_VALOR_INV_COP_ALTO_DEFAULT = 5_000_000.0
+
+
+def _cot_rel_gap(a: float, b: float) -> float:
+    """Brecha relativa |a−b| / max(a,b)."""
+    if a <= 0 or b <= 0:
+        return 0.0
+    return abs(float(a) - float(b)) / max(float(a), float(b))
+
+
+def _cot_costo_unitario_inventario(
+    costo_min: object,
+    costo_max: object,
+    *,
+    pct_min_max_homogeneo: float,
+) -> tuple[float | None, float | None, bool]:
+    """Costo unitario COP para piso: promedio min/max si la brecha es pequeña; si no, incomparable.
+
+    Retorna ``(costo_unitario_rep, spread_rel_min_max | None, incomparable)``.
+    Si solo hay mínimo válido, se usa el mínimo (no hay brecha).
+    """
+    if costo_min is None or pd.isna(costo_min) or float(costo_min) <= 0:
+        return None, None, False
+    cm = float(costo_min)
+    um = min(max(float(pct_min_max_homogeneo), 0.05), 0.95)
+    if costo_max is None or pd.isna(costo_max) or float(costo_max) <= 0:
+        return cm, None, False
+    cx = float(costo_max)
+    lo, hi = (min(cm, cx), max(cm, cx))
+    if lo <= 1e-12:
+        return cm, None, False
+    spr = (hi - lo) / lo
+    if spr > um:
+        return None, float(spr), True
+    return (lo + hi) / 2.0, float(spr), False
+
+
+def _cot_banda_valor_inventario(valor_stock_cop: float, um_bajo_cop: float, um_alto_cop: float) -> str:
+    """``baja`` | ``media`` | ``alta`` según valor total inventario (exist × costo unit.)."""
+    lo = min(float(um_bajo_cop), float(um_alto_cop))
+    hi = max(float(um_bajo_cop), float(um_alto_cop))
+    if hi <= 0:
+        return "media"
+    v = max(0.0, float(valor_stock_cop))
+    if v < lo:
+        return "baja"
+    if v < hi:
+        return "media"
+    return "alta"
+
+
+def _cot_merge_precio_repo_y_piso(
+    p_expert: float,
+    p_piso_rec: float | None,
+    banda: str,
+    *,
+    pct_tol_piso_sobre_repo_baja: float,
+    prefijo_regla: str,
+) -> tuple[float, str]:
+    """Combina precio reposición (margen) y piso inventario según banda de materialidad."""
+    pe = float(p_expert)
+    tol = min(max(float(pct_tol_piso_sobre_repo_baja), 0.0), 0.95)
+    if p_piso_rec is None or pd.isna(p_piso_rec):
+        return pe, f"{prefijo_regla}: reposición; sin piso inventario (sin existencias o costo min/max no comparable)."
+    pp = float(p_piso_rec)
+    if pp <= pe + 1e-6:
+        return max(pe, pp), f"{prefijo_regla}: max(reposición, piso) [banda {banda}]."
+    if str(banda).lower() == "baja":
+        if pe > 1e-12 and (pp - pe) / pe > tol:
+            return pp, f"{prefijo_regla}: banda valor baja — piso supera reposición > {tol * 100:.0f} % → aplica piso."
+        return pe, f"{prefijo_regla}: banda valor baja — prima reposición (piso solo algo mayor, ≤ {tol * 100:.0f} %)."
+    return max(pe, pp), f"{prefijo_regla}: max(reposición, piso) [banda {banda} — inventario relevante]."
 
 
 def _cotizador_estado_y_anulacion_desde_score(score: int) -> tuple[str, bool]:
-    """Una sola regla: score acumulado → etiqueta y si se anula P. recomendado.
+    """Score → etiqueta y si se anula P. recomendado.
 
-    - 0 → OK (sin alertas).
-    - 1 → OK (con observaciones); una sola señal leve; el precio recomendado sigue visible.
-    - 2…4 → Revisar manual; se anula P. recomendado (el número calculado no se ofrece como decisión).
+    - ≤1 → **OK** (0 sin notas; 1 aviso leve — mismo estado para no generar confusión).
+    - 2…4 → Revisar manual; anulado.
     - ≥5 → Precio no calculable automáticamente; anulado.
     """
-    if score <= 0:
+    if score <= 1:
         return "OK", False
-    if score == 1:
-        return "OK (con observaciones)", False
     if score < _COT_SCORE_BLOQUEO:
         return "Revisar manual", True
     return "Precio no calculable automáticamente", True
 
 
-def _consulta_masiva_cotizador_alertas(
+def _cotizador_riesgos_y_guias(
     row: pd.Series,
     *,
-    p_rec: float | None,
     p_expert: float | None,
-    p_piso: float | None,
     p_adj: float | None,
     p_repo_para_guias: float | None,
     costo_min: float | None,
@@ -3170,57 +3278,25 @@ def _consulta_masiva_cotizador_alertas(
     factor_usabr: float,
     factor_euro: float,
     disp_umbral: float,
-    pct_umbral_mercado: float = _COT_UMBRAL_MERCADO_DEFAULT,
     pct_umbral_dispersion_origen_usd: float = _COT_ALERT_SPREAD_ORIGEN_PCT,
     pct_umbral_dispersion_origen_usd_crit: float = _COT_ALERT_SPREAD_ORIGEN_CRIT_PCT,
     pct_umbral_costo_min_max: float = _COT_ALERT_COSTO_MIN_MAX_PCT,
-    ratio_experto_bajo_piso: float = _COT_RATIO_EXPERTO_VS_PISO_DEFAULT,
-) -> tuple[str, str, bool, float | None, float | None, float | None, int | None]:
+) -> tuple[list[str], int, float | None, float | None, float | None]:
+    """Riesgos de **estructura de datos** (costo min/max, dispersión USD) + guías % para export.
+
+    No incluye la lógica de negocio del precio (eso va en ``_consulta_masiva_cotizador_df``).
     """
-    Devuelve: estado_cotización, texto alertas, si se anula P recomendado,
-    tres guías relativas internas (lista09 **solo export**, últ. venta, últ. compra) y **score** (``None`` si no hubo insumos).
-
-    El **estado** y la **anulación** del precio recomendado salen **solo** del score acumulado
-    (`_cotizador_estado_y_anulacion_desde_score`), no del número de mensajes en pantalla.
-
-    **Precio recomendado** (en ``_consulta_masiva_cotizador_df``): por defecto el **precio desde reposición
-    importación** (USD×TRM con margen sobre venta = P experto). Si eso implicaría **vender por debajo del piso
-    de inventario** (costo mín. cargado con margen piso), se usa ``max(experto, piso)`` para no forzar margen
-    negativo frente al costo de stock actual.
-
-    **Lista 09 vs reposición** se calcula como guía **solo informativa** (columna exportada); **no suma al score** ni
-    entra en «mercado vs reposición» — sirve como referencia de **urgencia de actualizar lista**, no define P recomendado.
-    **Score mercado vs reposición:** la **mayor** brecha entre últ. venta (vs P experto) y últ. compra COP (vs USD×TRM);
-    si supera el umbral → **+2**. Si **ambas** guías existen y superan el umbral → **+1** extra. Más: dispersión USD,
-    costo mín/máx., experto vs piso cuando manda el piso.
-    """
-    pct_mercado = min(max(float(pct_umbral_mercado), 0.05), 0.95)
     pct_disp_o = min(max(float(pct_umbral_dispersion_origen_usd), 0.05), 0.90)
     pct_crit_o = min(max(float(pct_umbral_dispersion_origen_usd_crit), 0.10), 0.95)
     if pct_crit_o <= pct_disp_o:
         pct_crit_o = min(pct_disp_o + 0.05, 0.95)
     pct_cm = min(max(float(pct_umbral_costo_min_max), 0.05), 0.95)
-    ratio_ep = min(max(float(ratio_experto_bajo_piso), 0.10), 0.95)
 
     alertas: list[str] = []
     score = 0
     guia_pl: float | None = None
     guia_vt: float | None = None
     guia_uc: float | None = None
-
-    tiene_usd = p_adj is not None and pd.notna(p_adj)
-    tiene_costo = costo_min is not None and pd.notna(costo_min) and float(costo_min) > 0
-
-    if not tiene_usd and not tiene_costo:
-        return (
-            "Precio no calculable automáticamente",
-            "Sin USD base (mejor ajustado ni último USD lista) y sin costo mín. inventario.",
-            True,
-            None,
-            None,
-            None,
-            None,
-        )
 
     if (
         costo_min is not None
@@ -3234,7 +3310,7 @@ def _consulta_masiva_cotizador_alertas(
         hi = max(float(costo_min), float(costo_max))
         spr_cm = (hi - lo) / lo if lo > 1e-12 else 0.0
         if spr_cm > pct_cm:
-            alertas.append(f"Costo mín. vs costo máx. inventario muy desalineados (~{spr_cm * 100:.0f}%)")
+            alertas.append(f"Costos inventario min/max muy distintos (~{spr_cm * 100:.0f}%)")
             score += _COT_W_COSTO_MIN_MAX
 
     incluir_eu_disp = _cot_mejor_origen_es_europa(row.get("Mejor_Origen"))
@@ -3246,70 +3322,28 @@ def _consulta_masiva_cotizador_alertas(
         if mn > 1e-12:
             spr = (mx - mn) / mn
             if spr > pct_disp_o:
-                alertas.append(f"Dispersión alta entre orígenes USD (~{spr * 100:.0f}%)")
+                alertas.append(f"Precios USD entre orígenes muy dispersos (~{spr * 100:.0f}%)")
                 score += _COT_W_USD_ORIGEN_MOD if spr <= pct_crit_o else _COT_W_USD_ORIGEN_CRIT
 
     if pl09 is not None and pd.notna(pl09) and float(pl09) > 0:
-        p_lista_ref = (
-            float(p_expert)
-            if p_expert is not None and pd.notna(p_expert) and float(p_expert) > 0
-            else None
-        )
-        if p_lista_ref is not None:
-            guia_pl = abs(float(pl09) - p_lista_ref) / max(float(pl09), p_lista_ref)
+        if p_expert is not None and pd.notna(p_expert) and float(p_expert) > 0:
+            guia_pl = _cot_rel_gap(float(pl09), float(p_expert))
 
     if ult_venta is not None and pd.notna(ult_venta) and float(ult_venta) > 0:
-        p_venta_ref = (
-            float(p_expert)
-            if p_expert is not None and pd.notna(p_expert) and float(p_expert) > 0
-            else None
-        )
-        if p_venta_ref is not None:
-            guia_vt = abs(float(ult_venta) - p_venta_ref) / max(float(ult_venta), p_venta_ref)
-
-    prg = p_repo_para_guias
-    if prg is not None and pd.notna(prg) and float(prg) > 0:
-        prf = float(prg)
-        if precio_cop_ult_compra is not None and pd.notna(precio_cop_ult_compra) and float(precio_cop_ult_compra) > 0:
-            uc = float(precio_cop_ult_compra)
-            guia_uc = abs(uc - prf) / max(uc, prf)
-
-    # Lista 09 vs reposición: no entra al score (solo columna Brecha_lista09_vs_repo_pct en el export).
-    mercado_cands: list[tuple[str, float]] = []
-    if guia_vt is not None:
-        mercado_cands.append(("Últ. venta vs precio reposición", guia_vt))
-    if guia_uc is not None:
-        mercado_cands.append(("Últ. compra vs costo importación (USD×TRM)", guia_uc))
-    if mercado_cands:
-        peor_lab, peor_g = max(mercado_cands, key=lambda x: x[1])
-        n_mercado_sobre = sum(1 for _, g in mercado_cands if g > pct_mercado)
-        if peor_g > pct_mercado:
-            otros = [f"{lab} ~{g * 100:.0f}%" for lab, g in mercado_cands if g > pct_mercado and lab != peor_lab]
-            suf = (" · " + ", ".join(otros)) if otros else ""
-            alertas.append(f"Mercado vs reposición (peor: {peor_lab} ~{peor_g * 100:.0f}%){suf}")
-            score += _COT_W_MERCADO
-            if n_mercado_sobre >= 2:
-                alertas.append(
-                    "Mercado multifuente — venta y compra por encima del umbral (revisar ambas vs reposición)"
-                )
-                score += _COT_W_MERCADO_MULT
+        if p_expert is not None and pd.notna(p_expert) and float(p_expert) > 0:
+            guia_vt = _cot_rel_gap(float(ult_venta), float(p_expert))
 
     if (
-        p_expert is not None
-        and p_piso is not None
-        and p_rec == p_piso
-        and float(p_expert) < float(p_piso) * ratio_ep
+        p_repo_para_guias is not None
+        and pd.notna(p_repo_para_guias)
+        and float(p_repo_para_guias) > 0
+        and precio_cop_ult_compra is not None
+        and pd.notna(precio_cop_ult_compra)
+        and float(precio_cop_ult_compra) > 0
     ):
-        alertas.append(
-            f"Piso inventario domina; experto < {ratio_ep * 100:.0f}% del piso (revisar USD/margen/TRM)"
-        )
-        score += _COT_W_PISO_DOMINA
+        guia_uc = _cot_rel_gap(float(precio_cop_ult_compra), float(p_repo_para_guias))
 
-    texto = " · ".join(alertas) if alertas else ""
-    estado_cot, anular_rec = _cotizador_estado_y_anulacion_desde_score(score)
-    if score >= _COT_SCORE_BLOQUEO and not texto:
-        texto = "Demasiadas señales de riesgo."
-    return estado_cot, texto, anular_rec, guia_pl, guia_vt, guia_uc, score
+    return alertas, score, guia_pl, guia_vt, guia_uc
 
 
 def _consulta_masiva_cotizador_df(
@@ -3322,25 +3356,21 @@ def _consulta_masiva_cotizador_df(
     factor_euro: float = 1.55,
     factor_otros: float | None = None,
     disp_umbral: float = 0.0,
-    pct_umbral_mercado: float = _COT_UMBRAL_MERCADO_DEFAULT,
+    pct_umbral_coherencia: float = _COT_UMBRAL_COHERENCIA_DEFAULT,
+    pct_umbral_repo_vs_piso: float = _COT_UMBRAL_REPO_VS_PISO_DEFAULT,
     pct_umbral_dispersion_origen_usd: float = _COT_ALERT_SPREAD_ORIGEN_PCT,
     pct_umbral_dispersion_origen_usd_crit: float = _COT_ALERT_SPREAD_ORIGEN_CRIT_PCT,
     pct_umbral_costo_min_max: float = _COT_ALERT_COSTO_MIN_MAX_PCT,
-    ratio_experto_bajo_piso: float = _COT_RATIO_EXPERTO_VS_PISO_DEFAULT,
+    pct_umbral_minmax_homogeneo: float = _COT_UMBRAL_MINMAX_HOMOGENEO_DEFAULT,
+    pct_tol_piso_sobre_repo_banda_baja: float = _COT_TOL_PISO_SOBRE_REPO_BAJA_DEFAULT,
+    valor_inventario_cop_umbral_bajo: float = _COT_VALOR_INV_COP_BAJO_DEFAULT,
+    valor_inventario_cop_umbral_alto: float = _COT_VALOR_INV_COP_ALTO_DEFAULT,
 ) -> pd.DataFrame:
     """
-    Cotización COP a partir del mejor USD (ya lleva factor BR/USA/EUR de la consulta masiva).
-    - Costo_reposicion_COP = USD_base × TRM (sin margen de venta).
-    - Precio_reposicion_COP = USD_base × TRM / (1 − margen) (= P_venta_experto_COP cuando hay USD base).
-    - P_experto = USD_base × TRM / (1 − margen), margen en % sobre precio de venta.
-    - P_piso inventario = Costo_Min / (1 - X%), con X configurable.
-    - P_recomendado = max(P_experto, P_piso) cuando ambos existen (salvo bloqueo por alertas): prioriza **reposición con margen**;
-      el **piso inventario** solo sube el precio cuando el costo de stock exige no vender por debajo de esa lógica de importación.
-    **Lista 09** vs reposición: columna **Brecha_lista09_vs_repo_pct** (urgencia de actualizar lista); **no** suma score.
-    Alertas **mercado vs reposición**: mayor brecha **últ. venta** (vs P experto) / **últ. compra COP** (vs USD×TRM)
-    vs umbral (**+2**); si **ambas** superan el umbral → **+1**. Exporta **Brecha_mercado_max_pct** (solo venta/compra),
-    **Mercado_guias_sobre_umbral**, **Margen_impl_pct_costo_min**.
-    Estado y anulación por **score** (`_cotizador_estado_y_anulacion_desde_score`). Umbrales desde sliders.
+    Cotización COP — reposición como ancla; piso inventario solo con **existencias** y costo min/max **homogéneo**
+    (promedio si brecha ≤ umbral; si no, no aplica piso automático). **Bandas de valor stock** (exist × costo unit.):
+    baja → prima reposición si el piso solo supera un poco a la reposición; media/alta → max(reposición, piso).
+    Coherencia compra/venta, vigía repo↔piso y riesgos de datos como antes.
     """
     m = float(margin_pct) / 100.0
     m = min(max(m, 0.01), 0.95)
@@ -3368,12 +3398,24 @@ def _consulta_masiva_cotizador_df(
             return float(factor_euro)
         return factor_otros_f
 
+    um_coh = min(max(float(pct_umbral_coherencia), 0.05), 0.95)
+    um_rp = min(max(float(pct_umbral_repo_vs_piso), 0.05), 0.95)
+    um_hom = min(max(float(pct_umbral_minmax_homogeneo), 0.05), 0.95)
+    tol_baja = min(max(float(pct_tol_piso_sobre_repo_banda_baja), 0.0), 0.95)
+    v_baj = max(0.0, float(valor_inventario_cop_umbral_bajo))
+    v_alt = max(0.0, float(valor_inventario_cop_umbral_alto))
     rows: list[dict] = []
     for _, row in df.iterrows():
-        p_adj = row.get("Mejor_Precio_Ajustado")
-        fuente_usd = "Mejor_Precio_Ajustado"
+        p_mejor = row.get("Mejor_Precio_Ajustado")
+        use_mejor_origen = p_mejor is not None and not pd.isna(p_mejor)
+
+        p_adj = None
+        fuente_usd = ""
         factor_ultima_aplicado: float | None = None
-        if pd.isna(p_adj) or p_adj is None:
+        if use_mejor_origen:
+            p_adj = float(p_mejor)
+            fuente_usd = "Mejor_Precio_Ajustado"
+        else:
             ult_usd = row.get("Ultimo Valor USD")
             if ult_usd is not None and pd.notna(ult_usd):
                 factor_ultima_aplicado = _factor_por_pais_ultima_compra(row.get("Pais_Ultima"))
@@ -3404,40 +3446,180 @@ def _consulta_masiva_cotizador_df(
         if p_adj is not None and pd.notna(p_adj):
             p_expert = float(p_adj) * trm_f / denom
 
+        costo_unit_inv, spr_minmax, inv_incomparable = _cot_costo_unitario_inventario(
+            costo_min, costo_max, pct_min_max_homogeneo=um_hom
+        )
         p_piso: float | None = None
-        if costo_min is not None and pd.notna(costo_min) and float(costo_min) > 0:
-            p_piso = float(costo_min) / denom_piso
+        if costo_unit_inv is not None and float(costo_unit_inv) > 0:
+            p_piso = float(costo_unit_inv) / denom_piso
 
-        p_rec: float | None = None
-        regla = ""
-        if p_expert is not None and p_piso is not None:
-            p_rec = max(p_expert, p_piso)
-            if abs(p_expert - p_piso) < 1e-6:
-                regla = "Reposición con margen = piso inventario"
-            elif p_rec == p_piso:
-                regla = (
-                    f"Piso inventario — costo stock presiona sobre reposición import. "
-                    f"(min.÷(1−{piso_margin_pct:.0f}%))"
-                )
-            else:
-                regla = "Reposición import. con margen (USD×TRM÷(1−m))"
-        elif p_expert is not None:
-            p_rec = p_expert
-            regla = "Reposición import. con margen (sin piso inventario calculable)"
-        elif p_piso is not None:
-            p_rec = p_piso
-            regla = "Solo piso inventario (sin USD base para reposición)"
+        exist_f = 0.0
+        if exist is not None and pd.notna(exist):
+            try:
+                exist_f = max(0.0, float(exist))
+            except (TypeError, ValueError):
+                exist_f = 0.0
+        p_piso_rec: float | None = p_piso if (exist_f > 0.0 and p_piso is not None) else None
+        valor_stock_cop: float | None = None
+        if exist_f > 0 and costo_unit_inv is not None:
+            valor_stock_cop = round(exist_f * float(costo_unit_inv), 2)
+        banda = "media"
+        if inv_incomparable:
+            banda = "media"
+        elif valor_stock_cop is not None:
+            banda = _cot_banda_valor_inventario(float(valor_stock_cop), v_baj, v_alt)
+        banda_lbl = str(banda)
+
+        tiene_usd = p_adj is not None and pd.notna(p_adj)
+        tiene_costo = costo_min is not None and pd.notna(costo_min) and float(costo_min) > 0
 
         p_adj_for_alert = p_adj if p_adj is not None and pd.notna(p_adj) else None
         p_repo_para_guias: float | None = None
         if p_adj_for_alert is not None and float(p_adj_for_alert) > 0:
             p_repo_para_guias = float(p_adj_for_alert) * trm_f
 
-        estado_cot, alertas_txt, anular_rec, guia_pl_r, guia_vt_r, guia_uc_r, score_cot = _consulta_masiva_cotizador_alertas(
+        if not tiene_usd and not tiene_costo:
+            rows.append(
+                {
+                    "Referencia_Entrada": row.get("Referencia_Entrada"),
+                    "Referencia_Cruce": row.get("Referencia_Cruce"),
+                    "Estado": row.get("Estado"),
+                    "Mejor_Origen": row.get("Mejor_Origen"),
+                    "USD_base": None,
+                    "USD_base_unidades_disp": (
+                        float(row.get("Mejor_Disponibilidad"))
+                        if row.get("Mejor_Disponibilidad") is not None and pd.notna(row.get("Mejor_Disponibilidad"))
+                        else None
+                    ),
+                    "USD_base_fuente": None,
+                    "Factor_ultima_compra_aplicado": None,
+                    "Costo_Min": float(costo_min) if costo_min is not None and pd.notna(costo_min) else None,
+                    "Costo_Max": float(costo_max) if costo_max is not None and pd.notna(costo_max) else None,
+                    "Existencia_Total": float(exist) if exist is not None and pd.notna(exist) else None,
+                    "Precio_Lista_09": float(pl09) if pl09 is not None and pd.notna(pl09) else None,
+                    "Ult_venta_guia": float(ult_venta) if ult_venta is not None and pd.notna(ult_venta) else None,
+                    "Margen_pct_cot": margin_pct,
+                    "TRM_cot": trm_f,
+                    "Costo_reposicion_COP": None,
+                    "Precio_reposicion_COP": None,
+                    "P_venta_experto_COP": None,
+                    "P_piso_inventario_COP": None,
+                    "P_recomendado_COP": None,
+                    "Brecha_lista09_vs_repo_pct": None,
+                    "Brecha_repo_vs_piso_pct": None,
+                    "Brecha_minmax_costo_pct": None,
+                    "Valor_inventario_COP": None,
+                    "Banda_valor_inv": None,
+                    "Brecha_mercado_max_pct": None,
+                    "Mercado_guias_sobre_umbral": None,
+                    "Margen_impl_pct_costo_min": None,
+                    "Regla_precio": "Sin insumos: no hay USD ni costo mín. inventario.",
+                    "Estado_cotizacion": "Precio no calculable automáticamente",
+                    "Score_cotizacion": _COT_SCORE_BLOQUEO,
+                    "Alertas_detalle": "Sin USD base (catálogo ni lista) y sin costo mín. inventario.",
+                }
+            )
+            continue
+
+        alertas_pri: list[str] = []
+        score_pri = 0
+        p_rec: float | None = None
+        regla = ""
+
+        if inv_incomparable and exist_f > 0 and p_expert is not None:
+            alertas_pri.append(
+                f"Costo mín./máx. no homogéneo (brecha > {um_hom * 100:.0f} %): sin promedio confiable; "
+                "piso inventario no aplica — prima reposición."
+            )
+
+        if use_mejor_origen and p_expert is not None:
+            pr_imp = float(p_repo_para_guias) if p_repo_para_guias is not None and float(p_repo_para_guias) > 0 else 0.0
+            ok_uc = True
+            if precio_uc is not None and pr_imp > 0:
+                if _cot_rel_gap(float(precio_uc), pr_imp) > um_coh:
+                    ok_uc = False
+            if not ok_uc:
+                score_pri += _COT_W_INCOHERENCIA_REFERENCIA
+                alertas_pri.append("Última compra COP muy distinta del costo importación (USD×TRM) del mejor origen.")
+            pref_mo = "1. Mejor origen (BR/USA/EUR)"
+            if not ok_uc:
+                pref_mo += " — revisar últ. compra vs importación"
+            p_rec, regla = _cot_merge_precio_repo_y_piso(
+                float(p_expert),
+                p_piso_rec,
+                banda,
+                pct_tol_piso_sobre_repo_baja=tol_baja,
+                prefijo_regla=pref_mo,
+            )
+        elif p_expert is not None:
+            uv = float(ult_venta) if ult_venta is not None and pd.notna(ult_venta) and float(ult_venta) > 0 else None
+            if precio_uc is not None:
+                gaps_uc: list[float] = []
+                if p_piso is not None:
+                    gaps_uc.append(_cot_rel_gap(float(precio_uc), float(p_piso)))
+                if uv is not None:
+                    gaps_uc.append(_cot_rel_gap(float(precio_uc), uv))
+                if gaps_uc:
+                    if max(gaps_uc) <= um_coh:
+                        p_rec = float(precio_uc)
+                        regla = "3. Sin orígenes catálogo: última compra COP coherente con piso y última venta."
+                    else:
+                        score_pri += _COT_W_INCOHERENCIA_REFERENCIA
+                        p_rec, regla = _cot_merge_precio_repo_y_piso(
+                            float(p_expert),
+                            p_piso_rec,
+                            banda,
+                            pct_tol_piso_sobre_repo_baja=tol_baja,
+                            prefijo_regla="3. Sin catálogo (últ. compra vs piso/venta incoherentes)",
+                        )
+                        alertas_pri.append("Última compra COP muy lejana del piso o de la última venta — validar manual.")
+                else:
+                    p_rec = float(precio_uc)
+                    regla = "3. Última compra COP (sin piso ni venta para contrastar)."
+            else:
+                score_pri += _COT_W_AVISO_SIN_COP
+                p_rec, regla = _cot_merge_precio_repo_y_piso(
+                    float(p_expert),
+                    p_piso_rec,
+                    banda,
+                    pct_tol_piso_sobre_repo_baja=tol_baja,
+                    prefijo_regla="3b. USD lista sin COP en auditoría",
+                )
+                alertas_pri.append("Sin Precio_COP_Ultima en el cruce: no se contrastó la última compra.")
+        elif p_piso is not None and exist_f > 0:
+            p_rec = float(p_piso)
+            regla = "4. Sin USD: solo piso inventario (hay existencias y costo min/max comparable)."
+        elif p_piso is not None and exist_f <= 0:
+            p_rec = None
+            score_pri = _COT_SCORE_BLOQUEO
+            regla = "Sin USD y sin existencias: no aplica piso inventario; falta reposición para sugerir precio."
+            alertas_pri.append("Hay costo comparable pero sin stock: el piso no condiciona el precio sin reposición.")
+        else:
+            p_rec = None
+            score_pri = _COT_SCORE_BLOQUEO
+            regla = "Sin datos suficientes para cotizar."
+            alertas_pri.append("Caso no cubierto: revisar columnas de precio e inventario.")
+
+        brecha_repo_vs_piso_pct: float | None = None
+        if p_expert is not None and p_piso is not None:
+            g_rp = _cot_rel_gap(float(p_expert), float(p_piso))
+            brecha_repo_vs_piso_pct = round(float(g_rp) * 100.0, 2)
+            if g_rp > um_rp:
+                score_pri += _COT_W_REPO_VS_PISO
+                if float(p_piso) > float(p_expert) + 1e-6:
+                    alertas_pri.append(
+                        f"Vigía inventario vs mercado (USA/BR/EUR): piso >> reposición (~{g_rp * 100:.0f} %): "
+                        "costo en bodega presiona por encima del catálogo importado."
+                    )
+                else:
+                    alertas_pri.append(
+                        f"Vigía inventario vs mercado (USA/BR/EUR): piso << reposición (~{g_rp * 100:.0f} %): "
+                        "costo stock muy bajo frente a precio de reposición importación."
+                    )
+
+        alertas_r, score_r, guia_pl_r, guia_vt_r, guia_uc_r = _cotizador_riesgos_y_guias(
             row,
-            p_rec=p_rec,
             p_expert=p_expert,
-            p_piso=p_piso,
             p_adj=p_adj_for_alert,
             p_repo_para_guias=p_repo_para_guias,
             costo_min=float(costo_min) if costo_min is not None and pd.notna(costo_min) else None,
@@ -3448,12 +3630,16 @@ def _consulta_masiva_cotizador_df(
             factor_usabr=factor_usabr,
             factor_euro=factor_euro,
             disp_umbral=disp_umbral,
-            pct_umbral_mercado=pct_umbral_mercado,
             pct_umbral_dispersion_origen_usd=pct_umbral_dispersion_origen_usd,
             pct_umbral_dispersion_origen_usd_crit=pct_umbral_dispersion_origen_usd_crit,
             pct_umbral_costo_min_max=pct_umbral_costo_min_max,
-            ratio_experto_bajo_piso=ratio_experto_bajo_piso,
         )
+        score_cot = int(score_pri) + int(score_r)
+        todas_alertas = alertas_pri + alertas_r
+        alertas_txt = " · ".join(todas_alertas) if todas_alertas else ""
+        estado_cot, anular_rec = _cotizador_estado_y_anulacion_desde_score(score_cot)
+        if score_cot >= _COT_SCORE_BLOQUEO and not alertas_txt:
+            alertas_txt = "Demasiadas señales de riesgo en datos de soporte."
 
         p_rec_final = None if anular_rec else p_rec
 
@@ -3463,8 +3649,7 @@ def _consulta_masiva_cotizador_df(
         if guias_mercado_vals:
             gmax = max(guias_mercado_vals)
             brecha_mercado_max_pct = round(float(gmax) * 100.0, 2)
-            um = min(max(float(pct_umbral_mercado), 0.05), 0.95)
-            mercado_guias_sobre_umbral = sum(1 for g in guias_mercado_vals if float(g) > um)
+            mercado_guias_sobre_umbral = sum(1 for g in guias_mercado_vals if float(g) > um_coh)
 
         brecha_lista09_vs_repo_pct: float | None = None
         if guia_pl_r is not None:
@@ -3512,6 +3697,10 @@ def _consulta_masiva_cotizador_df(
                 "P_piso_inventario_COP": p_piso,
                 "P_recomendado_COP": p_rec_final,
                 "Brecha_lista09_vs_repo_pct": brecha_lista09_vs_repo_pct,
+                "Brecha_repo_vs_piso_pct": brecha_repo_vs_piso_pct,
+                "Brecha_minmax_costo_pct": round(float(spr_minmax) * 100.0, 2) if spr_minmax is not None else None,
+                "Valor_inventario_COP": valor_stock_cop,
+                "Banda_valor_inv": banda_lbl,
                 "Brecha_mercado_max_pct": brecha_mercado_max_pct,
                 "Mercado_guias_sobre_umbral": mercado_guias_sobre_umbral,
                 "Margen_impl_pct_costo_min": margen_impl_pct,
@@ -3597,6 +3786,23 @@ def _cot_umbral_mercado_txt_to_slider() -> None:
         )
 
 
+def _cot_umbral_repo_vs_piso_slider_to_txt() -> None:
+    st.session_state["consulta_masiva_cot_umbral_repo_vs_piso_txt"] = str(
+        int(st.session_state["consulta_masiva_cot_umbral_repo_vs_piso"])
+    )
+
+
+def _cot_umbral_repo_vs_piso_txt_to_slider() -> None:
+    try:
+        v = float(str(st.session_state["consulta_masiva_cot_umbral_repo_vs_piso_txt"]).replace(",", ".").strip())
+        v = min(max(v, 5.0), 90.0)
+        st.session_state["consulta_masiva_cot_umbral_repo_vs_piso"] = int(round(v))
+    except (ValueError, TypeError):
+        st.session_state["consulta_masiva_cot_umbral_repo_vs_piso_txt"] = str(
+            int(st.session_state["consulta_masiva_cot_umbral_repo_vs_piso"])
+        )
+
+
 def _cot_dispersion_origen_slider_to_txt() -> None:
     st.session_state["consulta_masiva_cot_dispersion_origen_txt"] = str(
         int(st.session_state["consulta_masiva_cot_dispersion_origen"])
@@ -3648,20 +3854,37 @@ def _cot_costo_min_max_txt_to_slider() -> None:
         )
 
 
-def _cot_experto_piso_slider_to_txt() -> None:
-    st.session_state["consulta_masiva_cot_experto_vs_piso_txt"] = str(
-        int(st.session_state["consulta_masiva_cot_experto_vs_piso"])
+def _cot_homogeneo_minmax_slider_to_txt() -> None:
+    st.session_state["consulta_masiva_cot_homogeneo_minmax_txt"] = str(
+        int(st.session_state["consulta_masiva_cot_homogeneo_minmax"])
     )
 
 
-def _cot_experto_piso_txt_to_slider() -> None:
+def _cot_homogeneo_minmax_txt_to_slider() -> None:
     try:
-        v = float(str(st.session_state["consulta_masiva_cot_experto_vs_piso_txt"]).replace(",", ".").strip())
-        v = min(max(v, 10.0), 90.0)
-        st.session_state["consulta_masiva_cot_experto_vs_piso"] = int(round(v))
+        v = float(str(st.session_state["consulta_masiva_cot_homogeneo_minmax_txt"]).replace(",", ".").strip())
+        v = min(max(v, 5.0), 90.0)
+        st.session_state["consulta_masiva_cot_homogeneo_minmax"] = int(round(v))
     except (ValueError, TypeError):
-        st.session_state["consulta_masiva_cot_experto_vs_piso_txt"] = str(
-            int(st.session_state["consulta_masiva_cot_experto_vs_piso"])
+        st.session_state["consulta_masiva_cot_homogeneo_minmax_txt"] = str(
+            int(st.session_state["consulta_masiva_cot_homogeneo_minmax"])
+        )
+
+
+def _cot_tol_piso_baja_slider_to_txt() -> None:
+    st.session_state["consulta_masiva_cot_tol_piso_baja_txt"] = str(
+        int(st.session_state["consulta_masiva_cot_tol_piso_baja"])
+    )
+
+
+def _cot_tol_piso_baja_txt_to_slider() -> None:
+    try:
+        v = float(str(st.session_state["consulta_masiva_cot_tol_piso_baja_txt"]).replace(",", ".").strip())
+        v = min(max(v, 0.0), 90.0)
+        st.session_state["consulta_masiva_cot_tol_piso_baja"] = int(round(v))
+    except (ValueError, TypeError):
+        st.session_state["consulta_masiva_cot_tol_piso_baja_txt"] = str(
+            int(st.session_state["consulta_masiva_cot_tol_piso_baja"])
         )
 
 
@@ -4313,33 +4536,37 @@ Si no hay origen válido, respaldo: **Último valor USD** de la lista de precios
             )
             st.divider()
             st.markdown("**Piso por inventario (COP)**")
-            st.latex(r"P_{\mathrm{piso}} = \frac{C_{\min}}{1 - X}")
+            st.latex(r"P_{\mathrm{piso}} = \frac{C_{\mathrm{rep}}}{1 - X}")
             st.caption(
-                "**C_min** = costo mínimo de inventario (misma columna **Costo_Min** que en consulta masiva). "
-                "**X** = margen piso inventario (slider de esta pantalla)."
+                "**C_rep** = costo unitario representativo: si hay **Costo_Min** y **Costo_Max** y la brecha (máx−mín)/mín "
+                "≤ umbral de **homogeneidad**, entonces **(mín + máx) / 2**; si solo hay mínimo, el mínimo; si la brecha es mayor, "
+                "**no** hay piso automático (prima reposición). **X** = margen piso inventario. El piso **solo condiciona** el "
+                "recomendado si **Existencia_Total > 0**."
             )
             st.divider()
-            st.markdown("**Precio recomendado al negocio**")
-            st.latex(
-                r"P_{\mathrm{rec}} = \max\left(P_{\mathrm{experto}},\; P_{\mathrm{piso}}\right)"
-            )
+            st.markdown("**Precio recomendado (orden de decisión)**")
             st.markdown(
                 """
-Cuando existen ambos términos. **Lista 09 vs precio reposición** se muestra como columna **ref. urgencia** (actualizar lista); **no suma al score** ni condiciona el recomendado. **Mercado vs reposición** en el score usa solo **últ. venta** vs precio reposición (USD base × TRM ÷ (1 − margen cot.), como *P experto*) y **últ. compra (COP)** vs **USD base × TRM**. Un umbral: peor brecha → **+2**; si **venta y compra** superan el umbral → **+1** extra. La tabla exporta **lista ref.**, **brecha mercado máx.** (venta/compra), **guías > umbral** y **margen implícito vs costo mín.**
+1. **Reposición (precio con margen)** como ancla cuando hay USD base (catálogo o respaldo última compra USD).
+2. **Piso inventario** solo con **existencias** y costo min/max **homogéneo**; combinación con reposición según **banda de valor**
+   inventario (exist × costo unit.): **baja** → si el piso supera poco a la reposición, prima reposición (tolerancia %);
+   **media/alta** → **max(reposición, piso)**. Si min/max muy distintos → sin piso automático y alerta.
+3. **Sin catálogo** con USD lista: última compra COP coherente con piso/venta → precio = compra; si no, merge reposición/piso.
+   **Sin USD** y con stock + costo comparable → solo piso. **Sin USD y sin existencias** → no hay sugerido automático.
+   **Lista 09** y **vigía repo↔piso** como diagnóstico; dispersión USD y costo mín./máx. en el score.
                 """.strip()
             )
             st.divider()
             st.markdown(
                 """
 **Motor de score y estados**  
-Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** dependen **solo** del total (**columna Score cotización** en la tabla):
+El total (**Score cotización**) define el **estado** y si se **anula** el **P. recomendado**:
 
-- **0** → **OK** (precio recomendado visible).
-- **1** → **OK (con observaciones)** (una señal leve; precio recomendado visible).
-- **2 a 4** → **Revisar manual** (precio recomendado **anulado**; siguen visibles experto, piso, costo/precio reposición y alertas).
-- **≥ 5** o **sin insumos** (ni USD base ni costo mín.) → **Precio no calculable automáticamente** (recomendado anulado).
+- **≤ 1** → **OK** (precio recomendado visible; avisos leves cuentan como OK para no mezclar etiquetas).
+- **2 a 4** → **Revisar manual** (recomendado anulado; quedan columnas de diagnóstico y alertas).
+- **≥ 5** o **sin insumos** (ni USD ni costo mín.) → **Precio no calculable automáticamente**.
 
-**Señales** (resumen): dispersión orígenes USD (sliders moderado/crítico); **costo mín. vs máx.** (slider %); **incoherencia experto vs piso** cuando manda el piso (slider % del piso); **mercado vs reposición** solo **venta + compra** (+2 peor brecha; +1 si ambas pasan umbral). **Lista 09** no entra al score. **El inventario bajo no suma score**.
+**Señales típicas:** brecha **reposición vs piso** (vigía inventario vs USA/BR/EUR); incoherencia compra vs importación o vs piso/venta; sin COP en auditoría; dispersión USD entre orígenes; costo mín. vs máx. muy distintos.
                 """.strip()
             )
 
@@ -4352,10 +4579,12 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
         ("consulta_masiva_cot_piso_margen", 40),
         ("consulta_masiva_cot_piso_margen_txt", "40"),
         ("consulta_masiva_cot_umbral_mercado", 40),
+        ("consulta_masiva_cot_umbral_repo_vs_piso", 30),
         ("consulta_masiva_cot_dispersion_origen", 35),
         ("consulta_masiva_cot_dispersion_origen_crit", 55),
         ("consulta_masiva_cot_costo_min_max", 35),
-        ("consulta_masiva_cot_experto_vs_piso", 50),
+        ("consulta_masiva_cot_homogeneo_minmax", 20),
+        ("consulta_masiva_cot_tol_piso_baja", 15),
     )
     for _k, _v in _cot_defaults:
         if _k not in st.session_state:
@@ -4363,6 +4592,10 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
     if "consulta_masiva_cot_umbral_mercado_txt" not in st.session_state:
         st.session_state["consulta_masiva_cot_umbral_mercado_txt"] = str(
             int(st.session_state.get("consulta_masiva_cot_umbral_mercado", 40))
+        )
+    if "consulta_masiva_cot_umbral_repo_vs_piso_txt" not in st.session_state:
+        st.session_state["consulta_masiva_cot_umbral_repo_vs_piso_txt"] = str(
+            int(st.session_state.get("consulta_masiva_cot_umbral_repo_vs_piso", 30))
         )
     if "consulta_masiva_cot_dispersion_origen_txt" not in st.session_state:
         st.session_state["consulta_masiva_cot_dispersion_origen_txt"] = str(
@@ -4376,11 +4609,18 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
         st.session_state["consulta_masiva_cot_costo_min_max_txt"] = str(
             int(st.session_state.get("consulta_masiva_cot_costo_min_max", 35))
         )
-    if "consulta_masiva_cot_experto_vs_piso_txt" not in st.session_state:
-        st.session_state["consulta_masiva_cot_experto_vs_piso_txt"] = str(
-            int(st.session_state.get("consulta_masiva_cot_experto_vs_piso", 50))
+    if "consulta_masiva_cot_homogeneo_minmax_txt" not in st.session_state:
+        st.session_state["consulta_masiva_cot_homogeneo_minmax_txt"] = str(
+            int(st.session_state.get("consulta_masiva_cot_homogeneo_minmax", 20))
         )
-
+    if "consulta_masiva_cot_tol_piso_baja_txt" not in st.session_state:
+        st.session_state["consulta_masiva_cot_tol_piso_baja_txt"] = str(
+            int(st.session_state.get("consulta_masiva_cot_tol_piso_baja", 15))
+        )
+    if "consulta_masiva_cot_valor_inv_bajo_cop" not in st.session_state:
+        st.session_state["consulta_masiva_cot_valor_inv_bajo_cop"] = float(_COT_VALOR_INV_COP_BAJO_DEFAULT)
+    if "consulta_masiva_cot_valor_inv_alto_cop" not in st.session_state:
+        st.session_state["consulta_masiva_cot_valor_inv_alto_cop"] = float(_COT_VALOR_INV_COP_ALTO_DEFAULT)
     c_mg, c_trm, c_piso = st.columns(3)
     with c_mg:
         st.caption("**Margen objetivo**")
@@ -4424,7 +4664,8 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
             value=40,
             step=1,
             key="consulta_masiva_cot_piso_margen",
-            help="Se usa en P_piso = Costo_Min / (1 - X/100).",
+            help="P_piso = costo unitario representativo ÷ (1 − X/100). El costo unitario es promedio min/max si "
+            "(máx−mín)/mín ≤ umbral de homogeneidad; si no, no hay piso automático.",
             on_change=_cot_piso_slider_to_txt,
         )
         st.text_input(
@@ -4434,9 +4675,9 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
         )
 
     st.caption(
-        "**Score mercado:** **últ. venta** vs **precio reposición** (USD×TRM÷(1−margen cot.)); "
-        "**últ. compra (COP)** vs **USD×TRM** (sin margen). **Lista 09** no suma score — columna *Lista 09 vs repo (ref. urg.)*. "
-        "El USD base ya lleva factor por origen o última compra lista."
+        "**Vigía inventario vs mercado:** el umbral **reposición vs piso** mide si el **P. venta experto** (importación con margen) "
+        "y el **piso inventario** están muy separados — señal de desalineación costo bodega vs catálogo USA/BR/EUR. "
+        "**Coherencia** (bloque siguiente): **últ. compra COP** vs importación o vs **piso** y **últ. venta** sin catálogo."
     )
     st.caption(
         "**Dispersión entre orígenes USD:** precios ya ajustados por factor BR/USA (y Europa si aplica); "
@@ -4485,75 +4726,130 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
             on_change=_cot_dispersion_origen_crit_txt_to_slider,
             help="Rango 10–90 %. Debe ser mayor que el moderado para distinguir +2 vs +4.",
         )
-    st.caption("**Costo inventario y coherencia USD vs piso**")
-    c_cm, c_ep = st.columns(2)
+    st.caption(
+        "**Inventario en el precio:** piso solo con **existencias > 0** y min/max **homogéneos** (promedio si la brecha es baja). "
+        "**Bandas de valor** (exist × costo unit.): baja → prima reposición si el piso solo supera un poco a la reposición; "
+        "media/alta → max(reposición, piso). **Vigía** reposición↔piso y coherencia compra/mercado en el bloque siguiente."
+    )
     _h_cm = (
         "Si existen **Costo_Min** y **Costo_Max** y **(máx − mín) ÷ mín** supera este %, suma **+2** al score. "
         "Detecta costos de bodega muy dispares."
     )
-    _h_ep = (
-        "Solo si el **precio recomendado** lo marca el **piso** (inventario): si **P. experto** es **menor** que "
-        "este **% del P. piso**, alerta de incoherencia entre mundo importación (USD×TRM÷margen) y costo inventario. "
-        "Ej. 50 %: experto menor que la mitad del piso. +1 al score."
+    _h_coh = (
+        "Brecha relativa máxima aceptada: con **mejor origen** compara **últ. compra COP** vs **USD×TRM** del origen; "
+        "sin catálogo compara **últ. compra** vs **piso** y vs **últ. venta**. Si la brecha supera este % → revisión manual (+2)."
     )
-    with c_cm:
-        st.slider(
-            "Umbral: costo mín. vs máx. inventario (%)",
-            min_value=5,
-            max_value=90,
-            value=35,
-            step=1,
-            key="consulta_masiva_cot_costo_min_max",
-            help=_h_cm,
-            on_change=_cot_costo_min_max_slider_to_txt,
-        )
-        st.text_input(
-            "Umbral costo mín vs máx (%) manual",
-            key="consulta_masiva_cot_costo_min_max_txt",
-            on_change=_cot_costo_min_max_txt_to_slider,
-            help="Rango 5–90 %.",
-        )
-    with c_ep:
-        st.slider(
-            "Umbral: experto vs piso — incoherencia USD/inventario (%)",
-            min_value=10,
-            max_value=90,
-            value=50,
-            step=1,
-            key="consulta_masiva_cot_experto_vs_piso",
-            help=_h_ep,
-            on_change=_cot_experto_piso_slider_to_txt,
-        )
-        st.text_input(
-            "Umbral experto vs piso (%) manual",
-            key="consulta_masiva_cot_experto_vs_piso_txt",
-            on_change=_cot_experto_piso_txt_to_slider,
-            help="Rango 10–90 %. Fracción del piso por debajo de la cual el experto dispara la alerta.",
-        )
-    c_um = st.columns(1)[0]
-    _h_mercado = (
-        "**Mercado vs reposición (score):** solo **últ. venta** y **últ. compra COP** vs reposición — "
-        "|últ. venta − precio reposición| ÷ max(…), con precio reposición = USD×TRM÷(1−margen cot.); "
-        "|últ. compra COP − USD×TRM| ÷ max(…). **Lista 09** no suma score; ver columna *Lista 09 vs repo (ref. urg.)*. "
-        "La **mayor** brecha de las dos: si supera el umbral → **+2**; si **ambas** superan el umbral → **+1** extra."
+    st.slider(
+        "Umbral: costo mín. vs máx. inventario (%)",
+        min_value=5,
+        max_value=90,
+        value=35,
+        step=1,
+        key="consulta_masiva_cot_costo_min_max",
+        help=_h_cm,
+        on_change=_cot_costo_min_max_slider_to_txt,
     )
-    with c_um:
-        st.slider(
-            "Umbral: mercado vs reposición (%)",
-            min_value=5,
-            max_value=90,
-            value=40,
-            step=1,
-            key="consulta_masiva_cot_umbral_mercado",
-            help=_h_mercado,
-            on_change=_cot_umbral_mercado_slider_to_txt,
-        )
-        st.text_input(
-            "Umbral mercado vs reposición (%) manual",
-            key="consulta_masiva_cot_umbral_mercado_txt",
-            on_change=_cot_umbral_mercado_txt_to_slider,
-            help="Rango 5–90 %. Acepta coma o punto decimal.",
-        )
+    st.text_input(
+        "Umbral costo mín vs máx (%) manual",
+        key="consulta_masiva_cot_costo_min_max_txt",
+        on_change=_cot_costo_min_max_txt_to_slider,
+        help="Rango 5–90 %.",
+    )
+    _h_hom = (
+        "Si **Costo_Min** y **Costo_Max** existen y **(máx − mín) ÷ mín** es **mayor** que este %, **no** se usa promedio "
+        "para el piso (costos no comparables) y prima **reposición** hasta corregir datos. Si es menor o igual, "
+        "costo unitario = **(mín + máx) / 2**."
+    )
+    st.slider(
+        "Umbral: homogeneidad costo mín/máx para piso (%)",
+        min_value=5,
+        max_value=90,
+        value=20,
+        step=1,
+        key="consulta_masiva_cot_homogeneo_minmax",
+        help=_h_hom,
+        on_change=_cot_homogeneo_minmax_slider_to_txt,
+    )
+    st.text_input(
+        "Umbral homogeneidad mín/máx (%) manual",
+        key="consulta_masiva_cot_homogeneo_minmax_txt",
+        on_change=_cot_homogeneo_minmax_txt_to_slider,
+        help="Rango 5–90 %.",
+    )
+    _h_tol_baja = (
+        "Solo en **banda valor inventario baja**: si el **piso** supera la **reposición** en menos de este % relativo, "
+        "se mantiene la **reposición**; si supera más, aplica el **piso**."
+    )
+    st.slider(
+        "Tolerancia piso sobre reposición — banda valor baja (%)",
+        min_value=0,
+        max_value=50,
+        value=15,
+        step=1,
+        key="consulta_masiva_cot_tol_piso_baja",
+        help=_h_tol_baja,
+        on_change=_cot_tol_piso_baja_slider_to_txt,
+    )
+    st.text_input(
+        "Tolerancia piso banda baja (%) manual",
+        key="consulta_masiva_cot_tol_piso_baja_txt",
+        on_change=_cot_tol_piso_baja_txt_to_slider,
+        help="Rango 0–50 %.",
+    )
+    st.number_input(
+        "Valor inventario COP — corte banda baja / media (COP)",
+        min_value=0.0,
+        max_value=500_000_000.0,
+        value=float(st.session_state.get("consulta_masiva_cot_valor_inv_bajo_cop", _COT_VALOR_INV_COP_BAJO_DEFAULT)),
+        step=50_000.0,
+        key="consulta_masiva_cot_valor_inv_bajo_cop",
+        help="Valor stock = existencias × costo unitario. Por debajo → banda **baja** (prima reposición ante piso leve).",
+    )
+    st.number_input(
+        "Valor inventario COP — corte banda media / alta (COP)",
+        min_value=0.0,
+        max_value=500_000_000.0,
+        value=float(st.session_state.get("consulta_masiva_cot_valor_inv_alto_cop", _COT_VALOR_INV_COP_ALTO_DEFAULT)),
+        step=500_000.0,
+        key="consulta_masiva_cot_valor_inv_alto_cop",
+        help="Entre corte bajo y este → banda **media**. Por encima → banda **alta** (max reposición/piso).",
+    )
+    _h_rp = (
+        "**Vigía:** brecha relativa entre **P. venta experto** (reposición importación BR/USA/EUR con margen) y **piso inventario**. "
+        "Por encima de este % suma **+2** al score y genera alerta (inventario caro o muy barato vs mercado importado)."
+    )
+    st.slider(
+        "Umbral vigía: reposición vs piso inventario (%)",
+        min_value=5,
+        max_value=90,
+        value=30,
+        step=1,
+        key="consulta_masiva_cot_umbral_repo_vs_piso",
+        help=_h_rp,
+        on_change=_cot_umbral_repo_vs_piso_slider_to_txt,
+    )
+    st.text_input(
+        "Umbral vigía repo vs piso (%) manual",
+        key="consulta_masiva_cot_umbral_repo_vs_piso_txt",
+        on_change=_cot_umbral_repo_vs_piso_txt_to_slider,
+        help="Rango 5–90 %.",
+    )
+    st.slider(
+        "Umbral: coherencia compra / importación / mercado (%)",
+        min_value=5,
+        max_value=90,
+        value=40,
+        step=1,
+        key="consulta_masiva_cot_umbral_mercado",
+        help=_h_coh,
+        on_change=_cot_umbral_mercado_slider_to_txt,
+    )
+    st.text_input(
+        "Umbral coherencia (%) manual",
+        key="consulta_masiva_cot_umbral_mercado_txt",
+        on_change=_cot_umbral_mercado_txt_to_slider,
+        help="Rango 5–90 %. Acepta coma o punto decimal.",
+    )
 
     margen_cot = float(st.session_state["consulta_masiva_cot_margen"])
     trm_cot = float(st.session_state["consulta_masiva_cot_trm"])
@@ -4568,18 +4864,22 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
         factor_euro=float(factor_euro),
         factor_otros=float(factor_euro),
         disp_umbral=float(disp_umbral_masivo),
-        pct_umbral_mercado=float(st.session_state["consulta_masiva_cot_umbral_mercado"]) / 100.0,
+        pct_umbral_coherencia=float(st.session_state["consulta_masiva_cot_umbral_mercado"]) / 100.0,
+        pct_umbral_repo_vs_piso=float(st.session_state["consulta_masiva_cot_umbral_repo_vs_piso"]) / 100.0,
         pct_umbral_dispersion_origen_usd=float(st.session_state["consulta_masiva_cot_dispersion_origen"]) / 100.0,
         pct_umbral_dispersion_origen_usd_crit=(
             float(st.session_state["consulta_masiva_cot_dispersion_origen_crit"]) / 100.0
         ),
         pct_umbral_costo_min_max=float(st.session_state["consulta_masiva_cot_costo_min_max"]) / 100.0,
-        ratio_experto_bajo_piso=float(st.session_state["consulta_masiva_cot_experto_vs_piso"]) / 100.0,
+        pct_umbral_minmax_homogeneo=float(st.session_state["consulta_masiva_cot_homogeneo_minmax"]) / 100.0,
+        pct_tol_piso_sobre_repo_banda_baja=float(st.session_state["consulta_masiva_cot_tol_piso_baja"]) / 100.0,
+        valor_inventario_cop_umbral_bajo=float(st.session_state["consulta_masiva_cot_valor_inv_bajo_cop"]),
+        valor_inventario_cop_umbral_alto=float(st.session_state["consulta_masiva_cot_valor_inv_alto_cop"]),
     )
     if "Estado_cotizacion" in df_cot.columns:
         _estado = df_cot["Estado_cotizacion"].astype(str)
         k_ok, k_rev, k_bloq = st.columns(3, gap="small")
-        k_ok.metric("OK / observaciones", f"{int((_estado == 'OK').sum() + (_estado == 'OK (con observaciones)').sum()):,}")
+        k_ok.metric("OK", f"{int((_estado == 'OK').sum()):,}")
         k_rev.metric("Revisar manual", f"{int((_estado == 'Revisar manual').sum()):,}")
         k_bloq.metric("No calculable", f"{int((_estado == 'Precio no calculable automáticamente').sum()):,}")
     with st.container(border=True):
@@ -4594,7 +4894,8 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
                     value=float(st.session_state.get("consulta_masiva_riesgo_x", 2.0)),
                     step=0.5,
                     key="consulta_masiva_riesgo_x",
-                    help="Umbral de inventario para riesgo. Se filtra cuando `Existencia_Total <= X` junto con estado crítico de cotización.",
+                    help="Opcional: filtra filas con `Existencia_Total <= X` **y** estado de cotización crítico. "
+                    "La ausencia o el bajo inventario **no** definen el precio por sí solos; solo acota este filtro de vista.",
                 )
             )
         with r2:
@@ -4719,6 +5020,10 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
             "Estado_cotizacion",
             "Score_cotizacion",
             "Brecha_lista09_vs_repo_pct",
+            "Brecha_repo_vs_piso_pct",
+            "Brecha_minmax_costo_pct",
+            "Valor_inventario_COP",
+            "Banda_valor_inv",
             "Brecha_mercado_max_pct",
             "Mercado_guias_sobre_umbral",
             "Margen_impl_pct_costo_min",
@@ -4768,8 +5073,9 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
             "respaldo `Ult. Fecha Compra / lista (USD, ajustado)` según `País últ. compra`. "
             "**Costo reposición (COP)** = USD base × TRM; **Precio reposición (COP)** = USD base × TRM ÷ (1 − margen %). "
             "**Lista 09 vs repo (ref. urg.)** = brecha lista vs precio reposición (**no** suma al score). "
-            "**Brecha mercado máx.** = mayor brecha entre **últ. venta** y **últ. compra** vs reposición (sí entran al score). "
-            "**Mercado: guías > umbral** = cuántas de esas dos superan el slider; "
+            "**Vigía: repo vs piso** = |P. experto − piso| ÷ max(…) × 100; el umbral *vigía* del panel suma **+2** si se supera. "
+            "**Brecha mercado máx.** = mayor brecha entre **últ. venta** y **últ. compra** vs referencias (diagnóstico vs slider coherencia). "
+            "**Mercado: guías > umbral** = cuántas guías superan el umbral de coherencia; "
             "**Margen impl. vs c. mín.** = (P. rec. − costo mín.) ÷ P. rec. × 100 (sobre el precio calculado, aunque el recomendado quede anulado por score)."
         )
         csv_out = df_out.to_csv(index=False).encode("utf-8-sig")
