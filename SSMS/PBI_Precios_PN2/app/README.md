@@ -52,14 +52,24 @@ El **USD base** alimenta el cotizador: **Mejor precio ajustado** del cruce, o si
 | Costo reposición (importación, sin margen de venta) | USD base × TRM |
 | Precio reposición / P experto (*m* = margen objetivo sobre venta) | USD base × TRM ÷ (1 − *m*) |
 | Piso inventario | Costo_Min ÷ (1 − *X*) |
-| Precio recomendado | max(P experto, P piso) cuando aplica; puede **anularse** por score de riesgo |
+| Precio recomendado | max(P experto, P piso) cuando aplica; se **anula** si el **score** entra en zona de revisión o bloqueo (ver abajo) |
+
+**Score → estado** (suma de puntos por señales; columna **Score cotización** en la tabla):
+
+| Score | Estado | P. recomendado |
+|------:|--------|----------------|
+| 0 | OK | Visible |
+| 1 | OK (con observaciones) | Visible |
+| 2–4 | Revisar manual | **Anulado** (siguen experto, piso, alertas) |
+| ≥ 5 | Precio no calculable automáticamente | Anulado |
+| (sin USD base ni costo mín.) | Precio no calculable automáticamente | Anulado |
 
 **Brechas que usan umbral** (|A − B| ÷ max(A, B)):
 
 - **Lista 09** y **últ. venta** → referencia **precio reposición** (= P experto, misma fórmula de arriba). Requieren USD base.
 - **Últ. compra (COP)** (`Precio_COP_Ultima` en el cruce) → referencia **USD base × TRM** (costo importación en COP, sin margen).
 
-**Otras señales del score** (resumen): inventario muy justo; costo mín. vs máx.; dispersión entre orígenes USD (Brasil/USA; Europa según mejor origen); piso que domina con experto muy bajo; falta total de USD base y costo mín. Ver implementación en `_consulta_masiva_cotizador_alertas` en `app.py`.
+**Otras señales del score** (resumen): inventario muy justo; costo mín. vs máx.; **dispersión entre orígenes USD** (umbrales **moderado** y **crítico** en sliders del cotizador; Brasil/USA; Europa según mejor origen); piso que domina con experto muy bajo; falta total de USD base y costo mín. Ver `_consulta_masiva_cotizador_alertas` en `app.py`.
 
 ---
 

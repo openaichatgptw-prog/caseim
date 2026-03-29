@@ -2158,6 +2158,7 @@ BUSINESS_LABELS: Final[dict[str, str]] = {
     "P_recomendado_COP": "P. recomendado (COP)",
     "Regla_precio": "Regla precio",
     "Estado_cotizacion": "Estado cotización",
+    "Score_cotizacion": "Score cotización",
     "Alertas_detalle": "Alertas",
     "Ult_venta_guia": "Últ. venta (guía)",
     "Referencia_Original": "Ref original",
@@ -3117,6 +3118,38 @@ def _consulta_masiva_origenes_usd_ajustados(
     return out
 
 
+# --- Motor de alertas cotizador: pesos, umbrales fijos y bandas de estado (solo el score define el estado).
+_COT_ALERT_SPREAD_ORIGEN_PCT = 0.35
+_COT_ALERT_SPREAD_ORIGEN_CRIT_PCT = 0.55
+_COT_ALERT_COSTO_MIN_MAX_PCT = 0.35
+_COT_W_INV_JUSTO = 1
+_COT_W_COSTO_MIN_MAX = 2
+_COT_W_USD_ORIGEN_MOD = 2
+_COT_W_USD_ORIGEN_CRIT = 4
+_COT_W_LISTA = 2
+_COT_W_VENTA = 1
+_COT_W_COMPRA = 1
+_COT_W_PISO_DOMINA = 1
+_COT_SCORE_BLOQUEO = 5
+
+
+def _cotizador_estado_y_anulacion_desde_score(score: int) -> tuple[str, bool]:
+    """Una sola regla: score acumulado → etiqueta y si se anula P. recomendado.
+
+    - 0 → OK (sin alertas).
+    - 1 → OK (con observaciones); una sola señal leve; el precio recomendado sigue visible.
+    - 2…4 → Revisar manual; se anula P. recomendado (el número calculado no se ofrece como decisión).
+    - ≥5 → Precio no calculable automáticamente; anulado.
+    """
+    if score <= 0:
+        return "OK", False
+    if score == 1:
+        return "OK (con observaciones)", False
+    if score < _COT_SCORE_BLOQUEO:
+        return "Revisar manual", True
+    return "Precio no calculable automáticamente", True
+
+
 def _consulta_masiva_cotizador_alertas(
     row: pd.Series,
     *,
@@ -3138,24 +3171,30 @@ def _consulta_masiva_cotizador_alertas(
     pct_umbral_venta_vs_repo: float = 0.40,
     pct_umbral_compra_vs_repo: float = 0.40,
     umbral_existencia_justa: float = 3.0,
-) -> tuple[str, str, bool, float | None, float | None, float | None]:
+    pct_umbral_dispersion_origen_usd: float = _COT_ALERT_SPREAD_ORIGEN_PCT,
+    pct_umbral_dispersion_origen_usd_crit: float = _COT_ALERT_SPREAD_ORIGEN_CRIT_PCT,
+) -> tuple[str, str, bool, float | None, float | None, float | None, int | None]:
     """
     Devuelve: estado_cotización, texto alertas, si se anula P recomendado,
-    y tres guías internas (lista09, últ. venta, últ. compra) solo para umbrales de score.
+    tres guías internas (lista09, últ. venta, últ. compra) y **score** (entero; ``None`` si no hubo insumos).
+
+    El **estado** y la **anulación** del precio recomendado salen **solo** del score acumulado
+    (`_cotizador_estado_y_anulacion_desde_score`), no del número de mensajes en pantalla.
 
     - **Lista 09** y **últ. venta** se comparan con **precio reposición** = USD_base × TRM ÷ (1 − margen cot.)
       (= **P_experto** cuando hay USD base).
     - **Últ. compra (COP)** se compara con **USD_base × TRM** (costo importación, sin margen).
+    - **Dispersión orígenes USD:** umbrales **moderado** y **crítico** (fracción 0–1) desde la UI; si crítico ≤ moderado,
+      en runtime se separan al menos 5 pp.
     """
-    # Umbrales (negocio: guía + alertas, no ley absoluta)
-    pct_spread_origen = 0.35
-    pct_spread_origen_crit = 0.55
     inv_justo_max = min(max(float(umbral_existencia_justa), 1.0), 500.0)
     pct_lista_vs_repo = min(max(float(pct_umbral_lista_vs_repo), 0.01), 0.99)
     pct_venta_vs_repo = min(max(float(pct_umbral_venta_vs_repo), 0.01), 0.99)
     pct_compra_vs_repo = min(max(float(pct_umbral_compra_vs_repo), 0.01), 0.99)
-    pct_costo_min_vs_max = 0.35
-    score_bloqueo = 5
+    pct_disp_o = min(max(float(pct_umbral_dispersion_origen_usd), 0.05), 0.90)
+    pct_crit_o = min(max(float(pct_umbral_dispersion_origen_usd_crit), 0.10), 0.95)
+    if pct_crit_o <= pct_disp_o:
+        pct_crit_o = min(pct_disp_o + 0.05, 0.95)
 
     alertas: list[str] = []
     score = 0
@@ -3174,11 +3213,12 @@ def _consulta_masiva_cotizador_alertas(
             None,
             None,
             None,
+            None,
         )
 
     if exist is not None and pd.notna(exist) and 0 < float(exist) <= inv_justo_max:
         alertas.append(f"Inventario muy justo (≤{inv_justo_max:.0f} uds.)")
-        score += 1
+        score += _COT_W_INV_JUSTO
 
     if (
         costo_min is not None
@@ -3191,9 +3231,9 @@ def _consulta_masiva_cotizador_alertas(
         lo = min(float(costo_min), float(costo_max))
         hi = max(float(costo_min), float(costo_max))
         spr_cm = (hi - lo) / lo if lo > 1e-12 else 0.0
-        if spr_cm > pct_costo_min_vs_max:
+        if spr_cm > _COT_ALERT_COSTO_MIN_MAX_PCT:
             alertas.append(f"Costo mín. vs costo máx. inventario muy desalineados (~{spr_cm * 100:.0f}%)")
-            score += 2
+            score += _COT_W_COSTO_MIN_MAX
 
     incluir_eu_disp = _cot_mejor_origen_es_europa(row.get("Mejor_Origen"))
     adjs = _consulta_masiva_origenes_usd_ajustados(
@@ -3203,9 +3243,9 @@ def _consulta_masiva_cotizador_alertas(
         mx, mn = max(adjs), min(adjs)
         if mn > 1e-12:
             spr = (mx - mn) / mn
-            if spr > pct_spread_origen:
+            if spr > pct_disp_o:
                 alertas.append(f"Dispersión alta entre orígenes USD (~{spr * 100:.0f}%)")
-                score += 2 if spr <= pct_spread_origen_crit else 4
+                score += _COT_W_USD_ORIGEN_MOD if spr <= pct_crit_o else _COT_W_USD_ORIGEN_CRIT
 
     if pl09 is not None and pd.notna(pl09) and float(pl09) > 0:
         p_lista_ref = (
@@ -3219,7 +3259,7 @@ def _consulta_masiva_cotizador_alertas(
                 alertas.append(
                     f"Lista 09 vs precio reposición (USD base×TRM÷(1−margen cot.)) muy distinto (~{guia_pl * 100:.0f}%)"
                 )
-                score += 2
+                score += _COT_W_LISTA
 
     if ult_venta is not None and pd.notna(ult_venta) and float(ult_venta) > 0:
         p_venta_ref = (
@@ -3233,7 +3273,7 @@ def _consulta_masiva_cotizador_alertas(
                 alertas.append(
                     f"Últ. venta vs precio reposición (USD base×TRM÷(1−margen cot.)) muy distinto (~{guia_vt * 100:.0f}%)"
                 )
-                score += 1
+                score += _COT_W_VENTA
 
     prg = p_repo_para_guias
     if prg is not None and pd.notna(prg) and float(prg) > 0:
@@ -3245,7 +3285,7 @@ def _consulta_masiva_cotizador_alertas(
                 alertas.append(
                     f"Últ. compra (COP) vs reposición importación (USD base×TRM) muy distinto (~{guia_uc * 100:.0f}%)"
                 )
-                score += 1
+                score += _COT_W_COMPRA
 
     if (
         p_expert is not None
@@ -3254,24 +3294,13 @@ def _consulta_masiva_cotizador_alertas(
         and float(p_expert) < float(p_piso) * 0.5
     ):
         alertas.append("Piso inventario domina; experto muy por debajo (revisar USD/margen/TRM)")
-        score += 1
+        score += _COT_W_PISO_DOMINA
 
     texto = " · ".join(alertas) if alertas else ""
-
-    if score >= score_bloqueo:
-        return (
-            "Precio no calculable automáticamente",
-            texto or "Demasiadas señales de riesgo.",
-            True,
-            guia_pl,
-            guia_vt,
-            guia_uc,
-        )
-    if score >= 2 or len(alertas) >= 2:
-        return "Revisar manual", texto, False, guia_pl, guia_vt, guia_uc
-    if alertas:
-        return "OK (con observaciones)", texto, False, guia_pl, guia_vt, guia_uc
-    return "OK", "", False, guia_pl, guia_vt, guia_uc
+    estado_cot, anular_rec = _cotizador_estado_y_anulacion_desde_score(score)
+    if score >= _COT_SCORE_BLOQUEO and not texto:
+        texto = "Demasiadas señales de riesgo."
+    return estado_cot, texto, anular_rec, guia_pl, guia_vt, guia_uc, score
 
 
 def _consulta_masiva_cotizador_df(
@@ -3288,6 +3317,8 @@ def _consulta_masiva_cotizador_df(
     pct_umbral_venta_vs_repo: float = 0.40,
     pct_umbral_compra_vs_repo: float = 0.40,
     umbral_existencia_justa: float = 3.0,
+    pct_umbral_dispersion_origen_usd: float = _COT_ALERT_SPREAD_ORIGEN_PCT,
+    pct_umbral_dispersion_origen_usd_crit: float = _COT_ALERT_SPREAD_ORIGEN_CRIT_PCT,
 ) -> pd.DataFrame:
     """
     Cotización COP a partir del mejor USD (ya lleva factor BR/USA/EUR de la consulta masiva).
@@ -3297,7 +3328,8 @@ def _consulta_masiva_cotizador_df(
     - P_piso inventario = Costo_Min / (1 - X%), con X configurable.
     - P_recomendado = max(P_experto, P_piso) cuando ambos existen (salvo bloqueo por alertas).
     Alertas **lista 09** y **últ. venta** vs **precio reposición** (= P_experto). **Últ. compra (COP)** vs **USD_base × TRM**
-    (costo importación sin margen).
+    (costo importación sin margen). Estado y anulación de **P_recomendado** por **score** acumulado (`_cotizador_estado_y_anulacion_desde_score`).
+    Columna **Score_cotizacion** expone el total por fila.
     """
     m = float(margin_pct) / 100.0
     m = min(max(m, 0.01), 0.95)
@@ -3387,7 +3419,7 @@ def _consulta_masiva_cotizador_df(
         if p_adj_for_alert is not None and float(p_adj_for_alert) > 0:
             p_repo_para_guias = float(p_adj_for_alert) * trm_f
 
-        estado_cot, alertas_txt, anular_rec, _, _, _ = _consulta_masiva_cotizador_alertas(
+        estado_cot, alertas_txt, anular_rec, _, _, _, score_cot = _consulta_masiva_cotizador_alertas(
             row,
             p_rec=p_rec,
             p_expert=p_expert,
@@ -3407,6 +3439,8 @@ def _consulta_masiva_cotizador_df(
             pct_umbral_venta_vs_repo=pct_umbral_venta_vs_repo,
             pct_umbral_compra_vs_repo=pct_umbral_compra_vs_repo,
             umbral_existencia_justa=umbral_existencia_justa,
+            pct_umbral_dispersion_origen_usd=pct_umbral_dispersion_origen_usd,
+            pct_umbral_dispersion_origen_usd_crit=pct_umbral_dispersion_origen_usd_crit,
         )
 
         p_rec_final = None if anular_rec else p_rec
@@ -3448,6 +3482,7 @@ def _consulta_masiva_cotizador_df(
                 "P_recomendado_COP": p_rec_final,
                 "Regla_precio": regla or None,
                 "Estado_cotizacion": estado_cot,
+                "Score_cotizacion": score_cot,
                 "Alertas_detalle": alertas_txt or None,
             }
         )
@@ -3456,12 +3491,17 @@ def _consulta_masiva_cotizador_df(
 
 def _consulta_masiva_cotizador_format_map(df: pd.DataFrame) -> dict[str, str]:
     """Formato tras `_renombrar_negocio` en el cotizador.
-    Regla UI: todas las columnas numéricas con máximo 2 decimales.
+    Regla UI: columnas monetarias con 2 decimales; score entero sin decimales.
     """
     fmt: dict[str, str] = {}
     for c in df.columns:
-        if pd.api.types.is_numeric_dtype(df[c]):
-            fmt[str(c)] = "{:,.2f}"
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            continue
+        lbl = str(c)
+        if lbl in ("Score cotización", "Score_cotizacion"):
+            fmt[lbl] = "{:,.0f}"
+        else:
+            fmt[lbl] = "{:,.2f}"
     return fmt
 
 
@@ -3570,6 +3610,40 @@ def _cot_inv_justo_txt_to_slider() -> None:
     except (ValueError, TypeError):
         st.session_state["consulta_masiva_cot_inv_justo_txt"] = str(
             int(st.session_state["consulta_masiva_cot_inv_justo"])
+        )
+
+
+def _cot_dispersion_origen_slider_to_txt() -> None:
+    st.session_state["consulta_masiva_cot_dispersion_origen_txt"] = str(
+        int(st.session_state["consulta_masiva_cot_dispersion_origen"])
+    )
+
+
+def _cot_dispersion_origen_txt_to_slider() -> None:
+    try:
+        v = float(str(st.session_state["consulta_masiva_cot_dispersion_origen_txt"]).replace(",", ".").strip())
+        v = min(max(v, 5.0), 85.0)
+        st.session_state["consulta_masiva_cot_dispersion_origen"] = int(round(v))
+    except (ValueError, TypeError):
+        st.session_state["consulta_masiva_cot_dispersion_origen_txt"] = str(
+            int(st.session_state["consulta_masiva_cot_dispersion_origen"])
+        )
+
+
+def _cot_dispersion_origen_crit_slider_to_txt() -> None:
+    st.session_state["consulta_masiva_cot_dispersion_origen_crit_txt"] = str(
+        int(st.session_state["consulta_masiva_cot_dispersion_origen_crit"])
+    )
+
+
+def _cot_dispersion_origen_crit_txt_to_slider() -> None:
+    try:
+        v = float(str(st.session_state["consulta_masiva_cot_dispersion_origen_crit_txt"]).replace(",", ".").strip())
+        v = min(max(v, 10.0), 90.0)
+        st.session_state["consulta_masiva_cot_dispersion_origen_crit"] = int(round(v))
+    except (ValueError, TypeError):
+        st.session_state["consulta_masiva_cot_dispersion_origen_crit_txt"] = str(
+            int(st.session_state["consulta_masiva_cot_dispersion_origen_crit"])
         )
 
 
@@ -4239,10 +4313,15 @@ Cuando existen ambos términos. En **Alertas**, **lista 09** y **última venta**
             st.divider()
             st.markdown(
                 """
-**Alertas y “precio no calculable automáticamente”**  
-Se señala si: existencia total en **(0, N]** unidades (**N** = slider «inventario justo»); dispersión alta entre **Brasil y USA** en USD ajustado (Europa solo cuenta en esa dispersión si **Mejor_Origen** es Europa); **costo mín. vs costo máx.** inventario muy distintos; **lista 09** o **últ. venta** muy lejos del **precio reposición** (USD×TRM÷(1−margen)); **últ. compra (COP)** muy lejos de **USD base × TRM** (umbrales % en sliders). El **costo mín.** alimenta la cotización (piso y contexto), sin comparar contra costo prom.  
+**Motor de score y estados**  
+Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** dependen **solo** del total (**columna Score cotización** en la tabla):
 
-Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el estado pasa a **“Precio no calculable automáticamente”** y se **anula** el precio recomendado (revisión manual obligatoria).
+- **0** → **OK** (precio recomendado visible).
+- **1** → **OK (con observaciones)** (una señal leve; precio recomendado visible).
+- **2 a 4** → **Revisar manual** (precio recomendado **anulado**; siguen visibles experto, piso, costo/precio reposición y alertas).
+- **≥ 5** o **sin insumos** (ni USD base ni costo mín.) → **Precio no calculable automáticamente** (recomendado anulado).
+
+**Señales** (resumen): inventario en **(0, N]**; dispersión alta entre orígenes USD (**umbrales % en sliders**: moderado +2, por encima del umbral crítico +4; Brasil/USA; Europa solo si **Mejor_Origen** es Europa); **costo mín. vs máx.**; **lista 09** / **últ. venta** vs precio reposición; **últ. compra (COP)** vs USD×TRM; piso que domina con experto muy bajo.
                 """.strip()
             )
 
@@ -4258,6 +4337,8 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
         ("consulta_masiva_cot_umbral_venta_repo", 40),
         ("consulta_masiva_cot_umbral_compra_repo", 40),
         ("consulta_masiva_cot_inv_justo", 3),
+        ("consulta_masiva_cot_dispersion_origen", 35),
+        ("consulta_masiva_cot_dispersion_origen_crit", 55),
     )
     for _k, _v in _cot_defaults:
         if _k not in st.session_state:
@@ -4277,6 +4358,14 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
     if "consulta_masiva_cot_inv_justo_txt" not in st.session_state:
         st.session_state["consulta_masiva_cot_inv_justo_txt"] = str(
             int(st.session_state.get("consulta_masiva_cot_inv_justo", 3))
+        )
+    if "consulta_masiva_cot_dispersion_origen_txt" not in st.session_state:
+        st.session_state["consulta_masiva_cot_dispersion_origen_txt"] = str(
+            int(st.session_state.get("consulta_masiva_cot_dispersion_origen", 35))
+        )
+    if "consulta_masiva_cot_dispersion_origen_crit_txt" not in st.session_state:
+        st.session_state["consulta_masiva_cot_dispersion_origen_crit_txt"] = str(
+            int(st.session_state.get("consulta_masiva_cot_dispersion_origen_crit", 55))
         )
 
     c_mg, c_trm, c_piso = st.columns(3)
@@ -4335,6 +4424,53 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
         "**Alertas:** **lista 09** y **últ. venta** vs **precio reposición** (USD base × TRM ÷ (1 − margen cot.)); "
         "**últ. compra (COP)** vs **USD base × TRM** (sin margen). El USD base ya lleva factor por origen o última compra lista."
     )
+    st.caption(
+        "**Dispersión entre orígenes USD:** precios ya ajustados por factor BR/USA (y Europa si aplica); "
+        "solo orígenes con disponibilidad **>** umbral de consulta masiva."
+    )
+    c_disp, c_disp2 = st.columns(2)
+    _h_disp_mod = (
+        "Si **(máx − mín) ÷ mín** entre esos USD supera este %, cuenta alerta de dispersión y suma **+2** al score "
+        "(mientras la dispersión no supere el umbral crítico)."
+    )
+    _h_disp_crit = (
+        "Por encima del umbral **moderado** y de este %, la misma alerta suma **+4** al score. "
+        "Si el crítico quedara ≤ moderado, en cálculo se separan al menos 5 puntos porcentuales."
+    )
+    with c_disp:
+        st.slider(
+            "Umbral dispersión orígenes USD — moderado (%)",
+            min_value=5,
+            max_value=85,
+            value=35,
+            step=1,
+            key="consulta_masiva_cot_dispersion_origen",
+            help=_h_disp_mod,
+            on_change=_cot_dispersion_origen_slider_to_txt,
+        )
+        st.text_input(
+            "Umbral dispersión moderado (%) manual",
+            key="consulta_masiva_cot_dispersion_origen_txt",
+            on_change=_cot_dispersion_origen_txt_to_slider,
+            help="Rango 5–85 %. Acepta coma o punto decimal.",
+        )
+    with c_disp2:
+        st.slider(
+            "Umbral dispersión orígenes USD — crítico (%)",
+            min_value=10,
+            max_value=90,
+            value=55,
+            step=1,
+            key="consulta_masiva_cot_dispersion_origen_crit",
+            help=_h_disp_crit,
+            on_change=_cot_dispersion_origen_crit_slider_to_txt,
+        )
+        st.text_input(
+            "Umbral dispersión crítico (%) manual",
+            key="consulta_masiva_cot_dispersion_origen_crit_txt",
+            on_change=_cot_dispersion_origen_crit_txt_to_slider,
+            help="Rango 10–90 %. Debe ser mayor que el moderado para distinguir +2 vs +4.",
+        )
     c_ul, c_uv, c_uc = st.columns(3)
     _h_repo = (
         "Referencia **P_repo** = USD base (cotizador) × TRM de la pantalla. "
@@ -4442,6 +4578,10 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
         pct_umbral_venta_vs_repo=float(st.session_state["consulta_masiva_cot_umbral_venta_repo"]) / 100.0,
         pct_umbral_compra_vs_repo=float(st.session_state["consulta_masiva_cot_umbral_compra_repo"]) / 100.0,
         umbral_existencia_justa=float(st.session_state["consulta_masiva_cot_inv_justo"]),
+        pct_umbral_dispersion_origen_usd=float(st.session_state["consulta_masiva_cot_dispersion_origen"]) / 100.0,
+        pct_umbral_dispersion_origen_usd_crit=(
+            float(st.session_state["consulta_masiva_cot_dispersion_origen_crit"]) / 100.0
+        ),
     )
     if "Estado_cotizacion" in df_cot.columns:
         _estado = df_cot["Estado_cotizacion"].astype(str)
@@ -4584,6 +4724,7 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
             "Referencia_Cruce",
             "Mejor_Origen",
             "Estado_cotizacion",
+            "Score_cotizacion",
             "P_recomendado_COP",
             "P_venta_experto_COP",
             "P_piso_inventario_COP",
