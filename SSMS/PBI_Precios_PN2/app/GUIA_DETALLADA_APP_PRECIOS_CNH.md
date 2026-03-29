@@ -170,7 +170,7 @@ Para cada fila, entre orígenes con disponibilidad válida:
 
 **Filtro rápido de riesgo:** reduce la tabla del cotizador a filas con existencia ≤ X y estado de cotización en «Revisar manual» o «No calculable».
 
-**Vista analítica del cotizador:** toggle que muestra más columnas de diagnóstico y permite **multiselect de columnas adicionales** del `df_out` de consulta (merge al cotizador). Botones **Solo columnas estratégicas** / **Seleccionar todas**. Bloque en **fragmento** para reruns parciales.
+**Vista analítica del cotizador:** toggle que activa el **bloque de diagnóstico** (columnas analíticas del propio cotizador) y el **multiselect único** de columnas adicionales desde `df_out` (merge). Atajos explícitos: **Solo columnas estratégicas** y **Todas las columnas de consulta** (sin checkbox duplicado que desincronizara el multiselect). Bloque en **fragmento** para reruns parciales.
 
 **Descargas CSV:**  
 - Resultado base de consulta masiva.  

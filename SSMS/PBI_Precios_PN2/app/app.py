@@ -3739,40 +3739,50 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
             "➕ Vista analítica del cotizador (más campos)",
             value=False,
             key="consulta_masiva_cot_extra_toggle",
-            help="OFF: vista ejecutiva (compacta). ON: añade métricas de diagnóstico y permite anexar columnas de la consulta masiva.",
+            help="OFF: solo columnas núcleo del cotizador. ON: añade el bloque de diagnóstico (lista 09, alertas, guías…) y permite traer columnas extra de la tabla de consulta masiva.",
         )
         cols_extra_sel: list[str] = []
         if traer_datos_extra and cols_base_disponibles:
             key_cols_extra = "consulta_masiva_cot_extra_cols"
-            current_sel = st.session_state.get(key_cols_extra, cols_base_default)
-            current_sel = [c for c in list(current_sel) if c in cols_base_disponibles]
-            all_selected = bool(cols_base_disponibles) and (set(current_sel) == set(cols_base_disponibles))
-            c_solo, c_all = st.columns([1, 1], gap="small")
+            opt_set = set(cols_base_disponibles)
+            _def = [c for c in cols_base_default if c in opt_set]
+            if key_cols_extra not in st.session_state:
+                st.session_state[key_cols_extra] = list(_def)
+            else:
+                prev = st.session_state[key_cols_extra]
+                if not isinstance(prev, list):
+                    st.session_state[key_cols_extra] = list(_def)
+                else:
+                    cleaned = [c for c in prev if c in opt_set]
+                    # Dataset cambió y la selección guardada ya no es válida → default estratégico
+                    if not cleaned and prev:
+                        st.session_state[key_cols_extra] = list(_def)
+                    else:
+                        st.session_state[key_cols_extra] = cleaned
+
+            c_solo, c_todas = st.columns(2, gap="small")
             with c_solo:
                 if st.button(
                     "↺ Solo columnas estratégicas",
                     key="consulta_masiva_cot_reset_strategic",
-                    help="Restaura el conjunto corto por defecto: coincidencia, orígenes y precios clave de la consulta masiva.",
+                    help="Deja solo el subconjunto recomendado (coincidencia, orígenes y precios clave).",
                 ):
-                    st.session_state[key_cols_extra] = list(cols_base_default)
-            with c_all:
-                select_all_extra = st.checkbox(
-                    "Seleccionar todas",
-                    value=all_selected,
-                    key="consulta_masiva_cot_extra_all",
-                    help="Marca para incluir todas las columnas disponibles en el cotizador.",
-                )
-            if select_all_extra:
-                st.session_state[key_cols_extra] = list(cols_base_disponibles)
-            elif all_selected:
-                st.session_state[key_cols_extra] = list(cols_base_default)
+                    st.session_state[key_cols_extra] = list(_def)
+            with c_todas:
+                if st.button(
+                    "⇢ Todas las columnas de consulta",
+                    key="consulta_masiva_cot_select_all_cols",
+                    help="Añade al cotizador todas las columnas disponibles de la consulta masiva (además del núcleo y del bloque analítico).",
+                ):
+                    st.session_state[key_cols_extra] = list(cols_base_disponibles)
 
             cols_extra_sel = st.multiselect(
-                "Columnas adicionales",
+                "Columnas adicionales desde la consulta masiva",
                 options=cols_base_disponibles,
-                default=cols_base_default,
+                default=_def,
                 key=key_cols_extra,
-                help="Se añaden al final de la tabla del cotizador.",
+                help="Una sola fuente de verdad: lo que marques aquí se fusiona a la tabla del cotizador. "
+                "Usa los dos botones de arriba para atajos sin desincronizar el selector.",
             )
         extra_cols_added: list[str] = []
         df_cot = df_cot_base.copy()
