@@ -95,11 +95,11 @@ Tiene **dos sub-pestañas**: **Consulta individual** y **Consulta en lote (CSV)*
 #### Tras elegir una referencia
 
 1. **`obtener_resumen_referencia(ref_norm)`** — datos desde `resultado_precios_lista` (y columnas relacionadas).
-2. **Enriquecimiento opcional** con la misma lógica masiva (`obtener_resumen_referencias_masivo`) para campos como **Costo_Min, Costo_Max, Existencia_Total, disponibilidad consolidada** cuando existan en el merge aud/inventario.
+2. **Enriquecimiento opcional** con la misma lógica masiva (`obtener_resumen_referencias_masivo`) para campos como **Costo_Min, Costo_Max, Existencia_Total, disponibilidad consolidada**, **Pais_Ultima** y **Tipo_Origen** cuando existan en el merge aud/inventario.
 
 #### Panel HTML («ficha»)
 
-- Muestra **última compra**, **orígenes USD**, **DNET**, **costos**, **existencias** según el resumen; el umbral del slider participa en el cálculo visual del mejor origen.
+- Muestra **última compra**, **orígenes USD**, **DNET**, **costos**, **existencias** y **Origen últ. compra** (país desde auditoría + tipo origen maestro si aplica) según el resumen; el umbral del slider participa en el cálculo visual del mejor origen.
 - Textos de ayuda (íconos **i**) explican diferencias entre fuentes (lista OC vs auditoría, etc.).
 
 #### Existencia por bodega (Siesa)
@@ -214,7 +214,7 @@ Solo se calculan si **ambos** operandos existen y son &gt; 0. Son **métricas de
 
 **Si el estado anula el recomendado** («Precio no calculable…»), las guías se evalúan igual con el **P_rec intermedio** antes de anularlo (solo dentro del motor de alertas); el usuario ve el efecto en **Alertas** / estado, no en columnas de %.
 
-**Uso en alertas:** si la guía lista supera **35 %** o la guía venta supera **40 %** (umbrales fijos en código), suman **score** y texto en **Alertas** (“muy distinto del precio reposición”). Eso **no** cambia la fórmula de la guía; solo dispara revisión.
+**Uso en alertas:** si la brecha lista/repo supera el **umbral %** configurado en la app (slider «lista 09 vs precio recomendado», **35 %** por defecto) o la brecha venta/repo supera el otro slider (**40 %** por defecto), suman **score** y texto en **Alertas**. Eso **no** cambia la fórmula del precio; solo dispara revisión.
 
 ##### Estado de cotización y alertas (score)
 
@@ -225,8 +225,8 @@ Solo se calculan si **ambos** operandos existen y son &gt; 0. Son **métricas de
 | Existencia total ∈ (0, 3] unidades | +1 |
 | Costo máx. vs costo mín.: **(máx − mín) ÷ mín** &gt; 35 % | +2 |
 | ≥ 2 orígenes USD válidos y dispersión **(máx − mín) ÷ mín** &gt; 35 % (o &gt; 55 % → más peso) | +2 o +4 |
-| Guía lista vs repo &gt; 35 % | +2 |
-| Guía venta vs repo &gt; 40 % | +1 |
+| Guía lista vs repo &gt; umbral % (slider; defecto 35 %) | +2 |
+| Guía venta vs repo &gt; umbral % (slider; defecto 40 %) | +1 |
 | Piso domina y experto &lt; 50 % del piso | +1 |
 | Sin USD base **y** sin costo mín. | Estado bloqueado, sin recomendación |
 
