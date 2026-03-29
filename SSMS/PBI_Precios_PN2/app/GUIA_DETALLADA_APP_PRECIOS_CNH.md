@@ -196,7 +196,7 @@ El cotizador trabaja **fila a fila** sobre el mismo resultado que la tabla de co
 
 ##### Guías internas lista / venta / últ. compra (no visibles como columnas % en la app)
 
-En la app Streamlit **no** se muestran columnas de % de guía (evita ruido frente a **Alertas**). El motor calcula las brechas en `_consulta_masiva_cotizador_alertas` para el **score** y el texto de alertas.
+En la app Streamlit **no** se muestran columnas de % de guía salvo las exportadas en el cotizador (brechas %). El motor calcula **lista 09** solo para la columna **ref. urgencia**; el **score** de mercado usa **venta** y **compra** (`_consulta_masiva_cotizador_alertas`).
 
 **Referencias (mismo USD base y TRM del cotizador; *m* = margen objetivo sobre venta del slider):**
 
@@ -211,11 +211,13 @@ TRM       =  TRM del slider del cotizador.
 
 **No** se usa `P_recomendado_COP` como denominador de estas brechas; **lista** y **venta** sí usan el margen **m** vía **P_precio_repos_COP**.
 
-**Guía lista vs precio reposición:**
+**Guía lista vs precio reposición** (solo **referencia de urgencia** de actualización de lista; **no** entra al score ni a «mercado vs reposición»):
 
 ```text
 Guía_lista (%)  =  | Precio_Lista_09 − P_precio_repos_COP |  ÷  max(Precio_Lista_09 , P_precio_repos_COP)  ×  100
 ```
+
+Export: columna **Brecha_lista09_vs_repo_pct** (etiqueta de negocio *Lista 09 vs repo (ref. urg. %)*).
 
 **Guía venta vs precio reposición:**
 
@@ -231,7 +233,7 @@ Guía_compra (%)  =  | Precio_COP_Ultima − P_costo_import_COP |  ÷  max(Preci
 
 Lista y venta requieren **P_precio_repos_COP** (hay USD base). Compra requiere **P_costo_import_COP**. Si falta USD base, esas guías no aplican.
 
-**Uso en alertas:** un **único** umbral **%** para **mercado vs reposición** (la mayor de las tres guías anteriores, si existen); además sliders de dispersión moderada/crítica, **costo mín. vs máx.** y **ratio experto vs piso** cuando manda el piso. **Existencia baja** no suma al score.
+**Uso en alertas / score:** un **único** umbral **%** para **mercado vs reposición** aplicado solo a **guía venta** y **guía compra** (la mayor de las dos disponibles); **lista** queda fuera. Además sliders de dispersión moderada/crítica, **costo mín. vs máx.** y **ratio experto vs piso** cuando manda el piso. **Existencia baja** no suma al score.
 
 **Anulación del recomendado:** solo el **score acumulado** decide estado y si se vacía **P. recomendado** (`_cotizador_estado_y_anulacion_desde_score` en `app.py`). Con score **2–4** o **≥ 5** el recomendado se anula; con **0–1** se muestra. La columna **Score_cotizacion** en el cotizador exporta el total (vacío si no hubo insumos).
 
@@ -243,8 +245,8 @@ Lista y venta requieren **P_precio_repos_COP** (hay USD base). Compra requiere *
 |-----------------|---------------------------|
 | Costo máx. vs costo mín.: **(máx − mín) ÷ mín** &gt; umbral % (slider cotizador; antes fijo 35 %) | +2 |
 | ≥ 2 orígenes con disp. &gt; umbral masivo y dispersión **(máx − mín) ÷ mín** por encima del **umbral moderado** (slider cotizador; antes fijo 35 %) → +2; si además supera el **umbral crítico** (slider; antes 55 %) → +4; **Europa** solo entra si **Mejor_Origen** es Europa | +2 o +4 |
-| **Mercado vs reposición:** la **mayor** de (guía lista, guía venta, guía compra) &gt; umbral % **único** (slider; defecto 40 %) | +2 (una vez por fila) |
-| Mismo bloque: **≥2** guías por encima del umbral (multifuente) | +1 adicional |
+| **Mercado vs reposición:** la **mayor** de (guía venta, guía compra) &gt; umbral % **único** (slider; defecto 40 %) | +2 (una vez por fila) |
+| Mismo bloque: **venta y compra** ambas &gt; umbral (cuando existen las dos) | +1 adicional |
 | Piso domina el recomendado y **P. experto** &lt; **X %** del **P. piso** (*X* = slider; antes fijo 50 %) | +1 |
 | Sin USD base **y** sin costo mín. | Estado bloqueado, sin recomendación |
 
@@ -471,7 +473,8 @@ Referencias cruzadas: **SQL** = definido en `00_Reportes_SQL.py` / motor SQL Ser
 | Medida | Qué es |
 |--------|--------|
 | **P. recomendado (COP)** | Máximo entre **experto** y **piso** cuando el **score** es 0 o 1 (**prioriza reposición con margen**; el piso evita márgenes negativos frente a costo de stock alto). **Vacío** si score 2–4 (**Revisar manual**) o ≥5 / sin insumos. |
-| **Guías lista / venta / compra (interno)** | Tres brechas relativas (§3.2). Score: **+2** si la mayor supera el umbral; **+1** más si ≥2 guías lo superan. Columnas exportadas: **Brecha_mercado_max_pct**, **Mercado_guias_sobre_umbral**, **Margen_impl_pct_costo_min**. |
+| **Guía lista vs repo** | Brecha §3.2; columna **Brecha_lista09_vs_repo_pct**; **no** suma score. |
+| **Guías venta / compra (mercado)** | Score: **+2** si la mayor supera el umbral; **+1** si ambas superan el umbral. **Brecha_mercado_max_pct** y **Mercado_guias_sobre_umbral** solo consideran venta/compra. **Margen_impl_pct_costo_min** sin cambio. |
 | **Score cotización** | Suma ponderada de señales; ver §3.2 y constantes `_COT_W_*` en `app.py`. |
 | **Estado cotización** | Derivado **solo** del score: 0 OK, 1 observaciones, 2–4 revisar, ≥5 bloqueo (más caso sin insumos). |
 | **Alertas** | Texto concatenado de las reglas de `_consulta_masiva_cotizador_alertas`. |
@@ -483,8 +486,9 @@ P_costo_import_COP = USD_base × TRM
 
 P_precio_repos_COP = USD_base × TRM ÷ (1 − m)
 
-Guía lista/venta:  abs(A − P_precio_repos_COP) / max(A, P_precio_repos_COP) × 100
-Guía compra:       abs(A − P_costo_import_COP) / max(A, P_costo_import_COP) × 100   con A = Precio_COP_Ultima
+Guía lista:        abs(A − P_precio_repos_COP) / max(A, P_precio_repos_COP) × 100   con A = Precio_Lista_09  → solo ref. urgencia (export), sin score
+Guía venta:        abs(A − P_precio_repos_COP) / max(A, P_precio_repos_COP) × 100   con A = Ult_venta        → score mercado
+Guía compra:       abs(A − P_costo_import_COP) / max(A, P_costo_import_COP) × 100   con A = Precio_COP_Ultima → score mercado
 ```
 
 ### 10.3 Consulta individual (ficha HTML)

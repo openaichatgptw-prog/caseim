@@ -64,14 +64,16 @@ El **USD base** alimenta el cotizador: **Mejor precio ajustado** del cruce, o si
 | ≥ 5 | Precio no calculable automáticamente | Anulado |
 | (sin USD base ni costo mín.) | Precio no calculable automáticamente | Anulado |
 
-**Mercado vs reposición** (una sola señal en el score, **+2** como máximo por fila): se calculan hasta tres brechas relativas (|A − B| ÷ max(A, B)) y se toma la **mayor** de las que existan:
+**Lista 09 vs precio reposición** se exporta como **Lista 09 vs repo (ref. urg. %)**: referencia de **qué tan desactualizada** está la lista frente a reposición; **no suma al score** ni condiciona el precio recomendado.
 
-- **Lista 09** y **últ. venta** → referencia **precio reposición** (= P experto). Requieren USD base.
-- **Últ. compra (COP)** (`Precio_COP_Ultima` en el cruce) → referencia **USD base × TRM** (sin margen de venta).
+**Mercado vs reposición** (señal de score): solo **últ. venta** y **últ. compra (COP)** (`Precio_COP_Ultima`), con brecha relativa (|A − B| ÷ max(A, B)):
 
-Si esa brecha máxima supera el **umbral único** del slider «mercado vs reposición», suma **+2** (el texto de alerta indica la peor y, si aplica, otras por encima del umbral). Si **dos o más** guías superan el umbral, suma **+1** adicional (coherencia multifuente débil).
+- **Últ. venta** → **precio reposición** (= P experto). Requiere USD base.
+- **Últ. compra (COP)** → **USD base × TRM** (sin margen de venta).
 
-La exportación del cotizador incluye **brecha mercado máx. (%)**, **mercado: guías > umbral** y **margen implícito vs costo mín. (%)** sobre el precio calculado (útil aunque el recomendado quede anulado).
+Si la **mayor** de las dos brechas disponibles supera el umbral del slider, suma **+2**. Si **venta y compra** existen y **ambas** superan el umbral, suma **+1** adicional.
+
+La exportación incluye **lista ref. urg.**, **brecha mercado máx. (%)** (solo venta/compra), **mercado: guías > umbral** y **margen implícito vs costo mín. (%)** sobre el precio calculado.
 
 **Otras señales del score** (resumen): **costo mín. vs máx.** (slider %); **dispersión entre orígenes USD** (sliders moderado/crítico); **experto vs piso** cuando el recomendado es el piso (slider: % del piso por debajo del cual el experto dispara alerta); falta total de USD base y costo mín. **La existencia baja no suma score**. Ver `_consulta_masiva_cotizador_alertas` en `app.py`.
 

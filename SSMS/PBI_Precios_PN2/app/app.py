@@ -2159,6 +2159,7 @@ BUSINESS_LABELS: Final[dict[str, str]] = {
     "Regla_precio": "Regla precio",
     "Estado_cotizacion": "Estado cotización",
     "Score_cotizacion": "Score cotización",
+    "Brecha_lista09_vs_repo_pct": "Lista 09 vs repo (ref. urg. %)",
     "Brecha_mercado_max_pct": "Brecha mercado máx. (%)",
     "Mercado_guias_sobre_umbral": "Mercado: guías > umbral",
     "Margen_impl_pct_costo_min": "Margen impl. vs c. mín. (%)",
@@ -3129,9 +3130,9 @@ _COT_RATIO_EXPERTO_VS_PISO_DEFAULT = 0.5  # alerta si experto < piso × ratio (a
 _COT_W_COSTO_MIN_MAX = 2
 _COT_W_USD_ORIGEN_MOD = 2
 _COT_W_USD_ORIGEN_CRIT = 4
-_COT_UMBRAL_MERCADO_DEFAULT = 0.40  # lista / venta / compra vs referencia reposición (unificado).
+_COT_UMBRAL_MERCADO_DEFAULT = 0.40  # venta / compra vs reposición (lista 09 no entra al score; solo columna ref.).
 _COT_W_MERCADO = 2  # brecha máxima por encima del umbral (una vez).
-_COT_W_MERCADO_MULT = 1  # ≥2 guías por encima del umbral: refuerzo de coherencia multifuente.
+_COT_W_MERCADO_MULT = 1  # venta y compra ambas > umbral (refuerzo multifuente).
 _COT_W_PISO_DOMINA = 1
 _COT_SCORE_BLOQUEO = 5
 
@@ -3177,7 +3178,7 @@ def _consulta_masiva_cotizador_alertas(
 ) -> tuple[str, str, bool, float | None, float | None, float | None, int | None]:
     """
     Devuelve: estado_cotización, texto alertas, si se anula P recomendado,
-    tres guías internas (lista09, últ. venta, últ. compra) y **score** (entero; ``None`` si no hubo insumos).
+    tres guías relativas internas (lista09 **solo export**, últ. venta, últ. compra) y **score** (``None`` si no hubo insumos).
 
     El **estado** y la **anulación** del precio recomendado salen **solo** del score acumulado
     (`_cotizador_estado_y_anulacion_desde_score`), no del número de mensajes en pantalla.
@@ -3187,9 +3188,11 @@ def _consulta_masiva_cotizador_alertas(
     de inventario** (costo mín. cargado con margen piso), se usa ``max(experto, piso)`` para no forzar margen
     negativo frente al costo de stock actual.
 
-    **Score mercado vs reposición:** la **mayor** brecha entre lista 09, últ. venta (vs P experto) y últ. compra COP
-    (vs USD×TRM); si supera el umbral único → **+2**. Si **dos o más** de esas guías superan el umbral → **+1** extra
-    (coherencia multifuente débil). Más: dispersión orígenes USD, costo mín/máx., experto vs piso cuando manda el piso.
+    **Lista 09 vs reposición** se calcula como guía **solo informativa** (columna exportada); **no suma al score** ni
+    entra en «mercado vs reposición» — sirve como referencia de **urgencia de actualizar lista**, no define P recomendado.
+    **Score mercado vs reposición:** la **mayor** brecha entre últ. venta (vs P experto) y últ. compra COP (vs USD×TRM);
+    si supera el umbral → **+2**. Si **ambas** guías existen y superan el umbral → **+1** extra. Más: dispersión USD,
+    costo mín/máx., experto vs piso cuando manda el piso.
     """
     pct_mercado = min(max(float(pct_umbral_mercado), 0.05), 0.95)
     pct_disp_o = min(max(float(pct_umbral_dispersion_origen_usd), 0.05), 0.90)
@@ -3271,9 +3274,8 @@ def _consulta_masiva_cotizador_alertas(
             uc = float(precio_cop_ult_compra)
             guia_uc = abs(uc - prf) / max(uc, prf)
 
+    # Lista 09 vs reposición: no entra al score (solo columna Brecha_lista09_vs_repo_pct en el export).
     mercado_cands: list[tuple[str, float]] = []
-    if guia_pl is not None:
-        mercado_cands.append(("Lista 09 vs precio reposición", guia_pl))
     if guia_vt is not None:
         mercado_cands.append(("Últ. venta vs precio reposición", guia_vt))
     if guia_uc is not None:
@@ -3288,7 +3290,7 @@ def _consulta_masiva_cotizador_alertas(
             score += _COT_W_MERCADO
             if n_mercado_sobre >= 2:
                 alertas.append(
-                    f"Mercado multifuente — {n_mercado_sobre} guías por encima del umbral (revisar lista/venta/compra)"
+                    "Mercado multifuente — venta y compra por encima del umbral (revisar ambas vs reposición)"
                 )
                 score += _COT_W_MERCADO_MULT
 
@@ -3334,9 +3336,10 @@ def _consulta_masiva_cotizador_df(
     - P_piso inventario = Costo_Min / (1 - X%), con X configurable.
     - P_recomendado = max(P_experto, P_piso) cuando ambos existen (salvo bloqueo por alertas): prioriza **reposición con margen**;
       el **piso inventario** solo sube el precio cuando el costo de stock exige no vender por debajo de esa lógica de importación.
-    Alertas **mercado vs reposición**: mayor brecha lista 09 / últ. venta (vs P experto) / últ. compra COP (vs USD×TRM)
-    vs umbral único (**+2**); si **≥2** guías superan el umbral, **+1** adicional. Exporta **Brecha_mercado_max_pct**,
-    **Mercado_guias_sobre_umbral** y **Margen_impl_pct_costo_min** (sobre *P. recomendado* calculado, aunque luego se anule).
+    **Lista 09** vs reposición: columna **Brecha_lista09_vs_repo_pct** (urgencia de actualizar lista); **no** suma score.
+    Alertas **mercado vs reposición**: mayor brecha **últ. venta** (vs P experto) / **últ. compra COP** (vs USD×TRM)
+    vs umbral (**+2**); si **ambas** superan el umbral → **+1**. Exporta **Brecha_mercado_max_pct** (solo venta/compra),
+    **Mercado_guias_sobre_umbral**, **Margen_impl_pct_costo_min**.
     Estado y anulación por **score** (`_cotizador_estado_y_anulacion_desde_score`). Umbrales desde sliders.
     """
     m = float(margin_pct) / 100.0
@@ -3454,7 +3457,7 @@ def _consulta_masiva_cotizador_df(
 
         p_rec_final = None if anular_rec else p_rec
 
-        guias_mercado_vals = [g for g in (guia_pl_r, guia_vt_r, guia_uc_r) if g is not None]
+        guias_mercado_vals = [g for g in (guia_vt_r, guia_uc_r) if g is not None]
         brecha_mercado_max_pct: float | None = None
         mercado_guias_sobre_umbral: int | None = None
         if guias_mercado_vals:
@@ -3462,6 +3465,10 @@ def _consulta_masiva_cotizador_df(
             brecha_mercado_max_pct = round(float(gmax) * 100.0, 2)
             um = min(max(float(pct_umbral_mercado), 0.05), 0.95)
             mercado_guias_sobre_umbral = sum(1 for g in guias_mercado_vals if float(g) > um)
+
+        brecha_lista09_vs_repo_pct: float | None = None
+        if guia_pl_r is not None:
+            brecha_lista09_vs_repo_pct = round(float(guia_pl_r) * 100.0, 2)
 
         margen_impl_pct: float | None = None
         if p_rec is not None and float(p_rec) > 1e-9:
@@ -3504,6 +3511,7 @@ def _consulta_masiva_cotizador_df(
                 "P_venta_experto_COP": p_expert,
                 "P_piso_inventario_COP": p_piso,
                 "P_recomendado_COP": p_rec_final,
+                "Brecha_lista09_vs_repo_pct": brecha_lista09_vs_repo_pct,
                 "Brecha_mercado_max_pct": brecha_mercado_max_pct,
                 "Mercado_guias_sobre_umbral": mercado_guias_sobre_umbral,
                 "Margen_impl_pct_costo_min": margen_impl_pct,
@@ -4317,7 +4325,7 @@ Si no hay origen válido, respaldo: **Último valor USD** de la lista de precios
             )
             st.markdown(
                 """
-Cuando existen ambos términos. En **Alertas**, **mercado vs reposición** usa la **mayor** brecha entre: **lista 09** y **precio reposición** (USD base × TRM ÷ (1 − margen cot.), como *P experto*); **últ. venta** y ese mismo precio reposición; **últ. compra (COP)** y **USD base × TRM** (importación sin margen de venta). Un solo umbral: si la peor brecha lo supera → **+2**; si además **dos o más** guías superan el umbral → **+1** extra (riesgo multifuente). La tabla exporta **brecha máx. %**, **cuántas guías pasan el umbral** y **margen implícito vs costo mín.** (sobre el *P. rec.* calculado).
+Cuando existen ambos términos. **Lista 09 vs precio reposición** se muestra como columna **ref. urgencia** (actualizar lista); **no suma al score** ni condiciona el recomendado. **Mercado vs reposición** en el score usa solo **últ. venta** vs precio reposición (USD base × TRM ÷ (1 − margen cot.), como *P experto*) y **últ. compra (COP)** vs **USD base × TRM**. Un umbral: peor brecha → **+2**; si **venta y compra** superan el umbral → **+1** extra. La tabla exporta **lista ref.**, **brecha mercado máx.** (venta/compra), **guías > umbral** y **margen implícito vs costo mín.**
                 """.strip()
             )
             st.divider()
@@ -4331,7 +4339,7 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
 - **2 a 4** → **Revisar manual** (precio recomendado **anulado**; siguen visibles experto, piso, costo/precio reposición y alertas).
 - **≥ 5** o **sin insumos** (ni USD base ni costo mín.) → **Precio no calculable automáticamente** (recomendado anulado).
 
-**Señales** (resumen): dispersión orígenes USD (sliders moderado/crítico); **costo mín. vs máx.** (slider %); **incoherencia experto vs piso** cuando manda el piso (slider % del piso); **mercado vs reposición** (+2 si la peor guía supera el umbral; +1 más si ≥2 guías lo superan). **El inventario bajo no suma score**.
+**Señales** (resumen): dispersión orígenes USD (sliders moderado/crítico); **costo mín. vs máx.** (slider %); **incoherencia experto vs piso** cuando manda el piso (slider % del piso); **mercado vs reposición** solo **venta + compra** (+2 peor brecha; +1 si ambas pasan umbral). **Lista 09** no entra al score. **El inventario bajo no suma score**.
                 """.strip()
             )
 
@@ -4426,8 +4434,9 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
         )
 
     st.caption(
-        "**Alertas:** **lista 09** y **últ. venta** vs **precio reposición** (USD base × TRM ÷ (1 − margen cot.)); "
-        "**últ. compra (COP)** vs **USD base × TRM** (sin margen). El USD base ya lleva factor por origen o última compra lista."
+        "**Score mercado:** **últ. venta** vs **precio reposición** (USD×TRM÷(1−margen cot.)); "
+        "**últ. compra (COP)** vs **USD×TRM** (sin margen). **Lista 09** no suma score — columna *Lista 09 vs repo (ref. urg.)*. "
+        "El USD base ya lleva factor por origen o última compra lista."
     )
     st.caption(
         "**Dispersión entre orígenes USD:** precios ya ajustados por factor BR/USA (y Europa si aplica); "
@@ -4523,12 +4532,10 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
         )
     c_um = st.columns(1)[0]
     _h_mercado = (
-        "**Mercado vs reposición:** se calculan tres brechas relativas (si hay datos): "
-        "|lista 09 − precio reposición| ÷ max(…); |últ. venta − precio reposición| ÷ max(…), "
-        "con **precio reposición** = USD base × TRM ÷ (1 − margen % cot.) (= *P. venta experto*); "
-        "|últ. compra COP − USD base×TRM| ÷ max(…), con **USD base×TRM** sin margen de venta. "
-        "Se toma la **mayor** de las disponibles; si supera este umbral → **+2**. "
-        "Si **dos o más** guías superan el umbral → **+1** adicional (coherencia multifuente débil)."
+        "**Mercado vs reposición (score):** solo **últ. venta** y **últ. compra COP** vs reposición — "
+        "|últ. venta − precio reposición| ÷ max(…), con precio reposición = USD×TRM÷(1−margen cot.); "
+        "|últ. compra COP − USD×TRM| ÷ max(…). **Lista 09** no suma score; ver columna *Lista 09 vs repo (ref. urg.)*. "
+        "La **mayor** brecha de las dos: si supera el umbral → **+2**; si **ambas** superan el umbral → **+1** extra."
     )
     with c_um:
         st.slider(
@@ -4711,6 +4718,7 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
             "Mejor_Origen",
             "Estado_cotizacion",
             "Score_cotizacion",
+            "Brecha_lista09_vs_repo_pct",
             "Brecha_mercado_max_pct",
             "Mercado_guias_sobre_umbral",
             "Margen_impl_pct_costo_min",
@@ -4759,8 +4767,9 @@ Cada señal suma puntos; el **estado** y si se **anula** el **P. recomendado** d
             "`Mejor_Precio_Ajustado` (origen BR/USA/EUR con factor) o, si no hubo origen válido, "
             "respaldo `Ult. Fecha Compra / lista (USD, ajustado)` según `País últ. compra`. "
             "**Costo reposición (COP)** = USD base × TRM; **Precio reposición (COP)** = USD base × TRM ÷ (1 − margen %). "
-            "**Brecha mercado máx.** = mayor desalineación relativa lista/venta/compra vs reposición; "
-            "**Mercado: guías > umbral** = cuántas de esas brechas superan el slider; "
+            "**Lista 09 vs repo (ref. urg.)** = brecha lista vs precio reposición (**no** suma al score). "
+            "**Brecha mercado máx.** = mayor brecha entre **últ. venta** y **últ. compra** vs reposición (sí entran al score). "
+            "**Mercado: guías > umbral** = cuántas de esas dos superan el slider; "
             "**Margen impl. vs c. mín.** = (P. rec. − costo mín.) ÷ P. rec. × 100 (sobre el precio calculado, aunque el recomendado quede anulado por score)."
         )
         csv_out = df_out.to_csv(index=False).encode("utf-8-sig")
