@@ -52,7 +52,7 @@ El **USD base** alimenta el cotizador: **Mejor precio ajustado** del cruce, o si
 | Costo reposición (importación, sin margen de venta) | USD base × TRM |
 | Precio reposición / P experto (*m* = margen objetivo sobre venta) | USD base × TRM ÷ (1 − *m*) |
 | Piso inventario | Costo_Min ÷ (1 − *X*) |
-| Precio recomendado | max(P experto, P piso) cuando aplica; se **anula** si el **score** entra en zona de revisión o bloqueo (ver abajo) |
+| Precio recomendado | max(P experto, P piso) cuando aplica: **prioriza reposición con margen**; el **piso inventario** solo eleva el precio cuando el costo de stock obliga a no vender por debajo de esa lógica de importación. Se **anula** si el **score** entra en revisión o bloqueo (ver abajo) |
 
 **Score → estado** (suma de puntos por señales; columna **Score cotización** en la tabla):
 
@@ -64,12 +64,16 @@ El **USD base** alimenta el cotizador: **Mejor precio ajustado** del cruce, o si
 | ≥ 5 | Precio no calculable automáticamente | Anulado |
 | (sin USD base ni costo mín.) | Precio no calculable automáticamente | Anulado |
 
-**Brechas que usan umbral** (|A − B| ÷ max(A, B)):
+**Mercado vs reposición** (una sola señal en el score, **+2** como máximo por fila): se calculan hasta tres brechas relativas (|A − B| ÷ max(A, B)) y se toma la **mayor** de las que existan:
 
-- **Lista 09** y **últ. venta** → referencia **precio reposición** (= P experto, misma fórmula de arriba). Requieren USD base.
-- **Últ. compra (COP)** (`Precio_COP_Ultima` en el cruce) → referencia **USD base × TRM** (costo importación en COP, sin margen).
+- **Lista 09** y **últ. venta** → referencia **precio reposición** (= P experto). Requieren USD base.
+- **Últ. compra (COP)** (`Precio_COP_Ultima` en el cruce) → referencia **USD base × TRM** (sin margen de venta).
 
-**Otras señales del score** (resumen): inventario muy justo; costo mín. vs máx.; **dispersión entre orígenes USD** (umbrales **moderado** y **crítico** en sliders del cotizador; Brasil/USA; Europa según mejor origen); piso que domina con experto muy bajo; falta total de USD base y costo mín. Ver `_consulta_masiva_cotizador_alertas` en `app.py`.
+Si esa brecha máxima supera el **umbral único** del slider «mercado vs reposición», suma **+2** (el texto de alerta indica la peor y, si aplica, otras por encima del umbral). Si **dos o más** guías superan el umbral, suma **+1** adicional (coherencia multifuente débil).
+
+La exportación del cotizador incluye **brecha mercado máx. (%)**, **mercado: guías > umbral** y **margen implícito vs costo mín. (%)** sobre el precio calculado (útil aunque el recomendado quede anulado).
+
+**Otras señales del score** (resumen): **costo mín. vs máx.** (slider %); **dispersión entre orígenes USD** (sliders moderado/crítico); **experto vs piso** cuando el recomendado es el piso (slider: % del piso por debajo del cual el experto dispara alerta); falta total de USD base y costo mín. **La existencia baja no suma score**. Ver `_consulta_masiva_cotizador_alertas` en `app.py`.
 
 ---
 

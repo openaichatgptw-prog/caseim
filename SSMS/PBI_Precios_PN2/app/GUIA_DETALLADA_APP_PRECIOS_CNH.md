@@ -231,7 +231,7 @@ Guía_compra (%)  =  | Precio_COP_Ultima − P_costo_import_COP |  ÷  max(Preci
 
 Lista y venta requieren **P_precio_repos_COP** (hay USD base). Compra requiere **P_costo_import_COP**. Si falta USD base, esas guías no aplican.
 
-**Uso en alertas:** umbrales **%** configurables (sliders; por defecto 35 % lista, 40 % venta, 40 % compra). **Inventario muy justo:** existencia total en **(0, N]** unidades; **N** configurable (slider; defecto **3**).
+**Uso en alertas:** un **único** umbral **%** para **mercado vs reposición** (la mayor de las tres guías anteriores, si existen); además sliders de dispersión moderada/crítica, **costo mín. vs máx.** y **ratio experto vs piso** cuando manda el piso. **Existencia baja** no suma al score.
 
 **Anulación del recomendado:** solo el **score acumulado** decide estado y si se vacía **P. recomendado** (`_cotizador_estado_y_anulacion_desde_score` en `app.py`). Con score **2–4** o **≥ 5** el recomendado se anula; con **0–1** se muestra. La columna **Score_cotizacion** en el cotizador exporta el total (vacío si no hubo insumos).
 
@@ -241,13 +241,11 @@ Lista y venta requieren **P_precio_repos_COP** (hay USD base). Compra requiere *
 
 | Señal (resumen) | Efecto en score (típico) |
 |-----------------|---------------------------|
-| Existencia total ∈ **(0, N]** unidades (N = slider inventario justo; defecto 3) | +1 |
-| Costo máx. vs costo mín.: **(máx − mín) ÷ mín** &gt; 35 % | +2 |
+| Costo máx. vs costo mín.: **(máx − mín) ÷ mín** &gt; umbral % (slider cotizador; antes fijo 35 %) | +2 |
 | ≥ 2 orígenes con disp. &gt; umbral masivo y dispersión **(máx − mín) ÷ mín** por encima del **umbral moderado** (slider cotizador; antes fijo 35 %) → +2; si además supera el **umbral crítico** (slider; antes 55 %) → +4; **Europa** solo entra si **Mejor_Origen** es Europa | +2 o +4 |
-| Guía lista vs **precio reposición** (USD base×TRM÷(1−*m*)) &gt; umbral % (slider; defecto 35 %) | +2 |
-| Guía venta vs **precio reposición** (misma referencia) &gt; umbral % (slider; defecto 40 %) | +1 |
-| Guía últ. compra (COP) vs **USD base×TRM** (sin margen) &gt; umbral % (slider; defecto 40 %) | +1 |
-| Piso domina y experto &lt; 50 % del piso | +1 |
+| **Mercado vs reposición:** la **mayor** de (guía lista, guía venta, guía compra) &gt; umbral % **único** (slider; defecto 40 %) | +2 (una vez por fila) |
+| Mismo bloque: **≥2** guías por encima del umbral (multifuente) | +1 adicional |
+| Piso domina el recomendado y **P. experto** &lt; **X %** del **P. piso** (*X* = slider; antes fijo 50 %) | +1 |
 | Sin USD base **y** sin costo mín. | Estado bloqueado, sin recomendación |
 
 | Estado mostrado | Condición (solo el **score** total) | **P. recomendado** |
@@ -472,10 +470,8 @@ Referencias cruzadas: **SQL** = definido en `00_Reportes_SQL.py` / motor SQL Ser
 
 | Medida | Qué es |
 |--------|--------|
-| **P. recomendado (COP)** | Máximo entre **experto** y **piso** cuando el **score** es 0 o 1; **vacío** si score 2–4 (**Revisar manual**) o ≥5 / sin insumos. |
-| **Guía lista vs precio reposición (interno)** | Brecha **lista 09** vs **USD base × TRM ÷ (1 − *m*)** (= P experto). Umbrales en sliders; +2 al score. Ver §3.2. |
-| **Guía venta vs precio reposición (interno)** | Brecha **últ. precio venta** vs la misma **precio reposición**. +1 al score si supera umbral. |
-| **Guía últ. compra vs costo importación (interno)** | Brecha **Precio_COP_Ultima** vs **USD base × TRM** (sin margen), si la columna existe en el cruce. +1 al score. |
+| **P. recomendado (COP)** | Máximo entre **experto** y **piso** cuando el **score** es 0 o 1 (**prioriza reposición con margen**; el piso evita márgenes negativos frente a costo de stock alto). **Vacío** si score 2–4 (**Revisar manual**) o ≥5 / sin insumos. |
+| **Guías lista / venta / compra (interno)** | Tres brechas relativas (§3.2). Score: **+2** si la mayor supera el umbral; **+1** más si ≥2 guías lo superan. Columnas exportadas: **Brecha_mercado_max_pct**, **Mercado_guias_sobre_umbral**, **Margen_impl_pct_costo_min**. |
 | **Score cotización** | Suma ponderada de señales; ver §3.2 y constantes `_COT_W_*` en `app.py`. |
 | **Estado cotización** | Derivado **solo** del score: 0 OK, 1 observaciones, 2–4 revisar, ≥5 bloqueo (más caso sin insumos). |
 | **Alertas** | Texto concatenado de las reglas de `_consulta_masiva_cotizador_alertas`. |
