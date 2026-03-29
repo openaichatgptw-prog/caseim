@@ -144,6 +144,12 @@ Para cada fila, entre orígenes con disponibilidad válida:
 - **Mejor_Origen** = región con **menor** precio ajustado.
 - Si ningún origen cumple disponibilidad: sin mejor origen / precios ajustados nulos según columnas.
 
+#### Brasil, USA y Europa — reglas explícitas
+
+- **Orígenes principales (operación típica):** **Brasil** y **USA** comparten el mismo factor de importación en pantalla (factor USA/Brasil); son la base habitual para comparar precio y disponibilidad.
+- **Europa:** usa el **factor Europa**. Entra en la **misma competencia** que BR/USA para **Mejor_Origen** y para **Mejor_Precio_Ajustado**: si tiene precio y disponibilidad **estrictamente mayor** que el umbral del slider, puede ganar si su precio ajustado es el menor. Así EU actúa como **apoyo** o como **origen ganador** cuando BR/USA no alcanzan umbral o quedan más caros.
+- **Alerta de score «dispersión alta entre orígenes USD»** (ver tabla de alertas más abajo): el % **(máx − mín) ÷ mín** entre precios USD **ya multiplicados por su factor** se calcula, por defecto, **solo con Brasil y USA** que cumplan disponibilidad. **Europa entra en ese cálculo únicamente si `Mejor_Origen` es Europa**; si el mejor precio es BR o USA, un precio EU «lejano» no debe sumar ruido al score de dispersión. Implementación: `_consulta_masiva_origenes_usd_ajustados` con `incluir_europa` según `_cot_mejor_origen_es_europa`.
+
 #### Vista de tabla principal
 
 - **`_consulta_masiva_preparar_vista`** — ordena columnas (entrada, cruce, alternas, estado, etc.) y oculta en UI refs duplicadas internas si aplica.
