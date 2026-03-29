@@ -3017,6 +3017,9 @@ _CONSULTA_MASIVA_COLS_EXTRA_ORDER: Final[tuple[str, ...]] = (
 )
 _CONSULTA_MASIVA_COLS_EXTRA: Final[frozenset[str]] = frozenset(_CONSULTA_MASIVA_COLS_EXTRA_ORDER)
 
+# Máximo de filas en tablas de la pestaña «Consulta en lote»; el CSV descargado lleva el total.
+_CONSULTA_MASIVA_TABLA_VISTA_MAX: Final[int] = 500
+
 # Ocultas solo en pantalla (siguen en el CSV descargado).
 _CONSULTA_MASIVA_COLS_OCULTAR_UI: Final[frozenset[str]] = frozenset(
     {"Referencia_Original", "Referencia_Normalizada"}
@@ -4497,8 +4500,19 @@ def _render_tab_consulta_masiva() -> None:
                 return
 
         fmt_map = _consulta_masiva_build_format_map(df_tab)
+        n_tab = len(df_tab)
+        df_tab_vista = (
+            df_tab.head(_CONSULTA_MASIVA_TABLA_VISTA_MAX)
+            if n_tab > _CONSULTA_MASIVA_TABLA_VISTA_MAX
+            else df_tab
+        )
+        if n_tab > _CONSULTA_MASIVA_TABLA_VISTA_MAX:
+            st.caption(
+                f"Vista previa: **{_CONSULTA_MASIVA_TABLA_VISTA_MAX:,}** de **{n_tab:,}** referencias en pantalla. "
+                "El archivo completo está en **Descargar resultado consulta (CSV)** (más abajo, tras el cotizador)."
+            )
         st.dataframe(
-            df_tab.style.format(fmt_map).apply(_consulta_masiva_style_mejor_origen, axis=1),
+            df_tab_vista.style.format(fmt_map).apply(_consulta_masiva_style_mejor_origen, axis=1),
             width="stretch",
             hide_index=True,
         )
@@ -4621,6 +4635,15 @@ El total (**Score cotización**) define el **estado** y si se **anula** el **P. 
         st.session_state["consulta_masiva_cot_valor_inv_bajo_cop"] = float(_COT_VALOR_INV_COP_BAJO_DEFAULT)
     if "consulta_masiva_cot_valor_inv_alto_cop" not in st.session_state:
         st.session_state["consulta_masiva_cot_valor_inv_alto_cop"] = float(_COT_VALOR_INV_COP_ALTO_DEFAULT)
+    _h_margen_venta = (
+        "Margen sobre venta para **precio de reposición en COP**: (USD base × TRM) ÷ (1 − margen/100). "
+        "Entero o decimal con punto."
+    )
+    _h_trm_cot = "Tipo de cambio **COP por USD** para convertir el USD base a costo y precio de reposición."
+    _h_piso_margen = (
+        "Margen **X** del piso con inventario: P_piso = costo unitario ÷ (1−X/100). "
+        "Costo unit. = promedio mín/máx si homogéneo; el piso solo aplica con **existencias > 0**."
+    )
     _h_disp_mod = (
         "Si **(máx − mín) ÷ mín** entre precios USD ajustados (BR/USA/EUR) supera este %, alerta **+2** al score "
         "(mientras no supere el umbral crítico)."
@@ -4646,181 +4669,44 @@ El total (**Score cotización**) define el **estado** y si se **anula** el **P. 
     _h_rp = (
         "Vigía: brecha |P. experto − piso| ÷ max(…). Por encima → **+2** y alerta (bodega vs catálogo importación)."
     )
+    _h_valor_inv_bajo = (
+        "**Valor inventario** = existencias × costo unit. Por debajo de este monto (COP) la fila cae en banda **baja**."
+    )
+    _h_valor_inv_alto = (
+        "Entre el corte **baja↔media** y este valor (COP) → banda **media**; por encima → **alta**. "
+        "Sirve para mezclar piso y reposición según tamaño de stock."
+    )
 
     st.caption(
-        "Parámetros en **3 pestañas** para compactar la vista. "
-        "Los sliders sincronizan las cajas del desplegable **Ajuste manual** al moverlos."
+        "Parámetros del cotizador solo en **Ajuste manual** (cajas de texto y cortes COP). "
+        "El umbral de disponibilidad regional sigue en el bloque superior de consulta masiva."
     )
-    tab_base, tab_inv, tab_alert = st.tabs(["Precio base", "Inventario y bandas", "Alertas y coherencia"])
 
-    with tab_base:
-        b1, b2, b3 = st.columns(3)
-        with b1:
-            st.slider(
-                "Margen objetivo sobre venta (%)",
-                min_value=10,
-                max_value=50,
-                value=25,
-                step=1,
-                key="consulta_masiva_cot_margen",
-                help="Divisor precio reposición: (1 − margen/100).",
-                on_change=_cot_margen_slider_to_txt,
-            )
-        with b2:
-            st.slider(
-                "TRM (COP por USD)",
-                min_value=3500,
-                max_value=6000,
-                value=4200,
-                step=10,
-                key="consulta_masiva_cot_trm",
-                help="TRM para pasar USD base a COP.",
-                on_change=_cot_trm_slider_to_txt,
-            )
-        with b3:
-            st.slider(
-                "Margen piso inventario X (%)",
-                min_value=5,
-                max_value=80,
-                value=40,
-                step=1,
-                key="consulta_masiva_cot_piso_margen",
-                help="P_piso = costo unitario ÷ (1−X/100). Costo unit. = promedio min/max si homogéneos; piso solo aplica con existencias.",
-                on_change=_cot_piso_slider_to_txt,
-            )
-
-    with tab_inv:
+    with st.expander("Ajuste manual (cajas de texto — %, TRM y COP)", expanded=False):
         st.caption(
-            "**Piso** solo con **existencias > 0** y min/max homogéneos. **Valor stock** = exist × costo unit. "
-            "→ bandas **baja / media / alta** (COP) para mezclar con la reposición."
+            "**Piso** solo con existencias y min/máx homogéneos. Al salir de cada campo se actualiza el motor del cotizador."
         )
-        i1, i2 = st.columns(2)
-        with i1:
-            st.slider(
-                "Homogeneidad costo mín/máx para piso (%)",
-                min_value=5,
-                max_value=90,
-                value=20,
-                step=1,
-                key="consulta_masiva_cot_homogeneo_minmax",
-                help=_h_hom,
-                on_change=_cot_homogeneo_minmax_slider_to_txt,
-            )
-        with i2:
-            st.slider(
-                "Tolerancia piso vs reposición — banda baja (%)",
-                min_value=0,
-                max_value=50,
-                value=15,
-                step=1,
-                key="consulta_masiva_cot_tol_piso_baja",
-                help=_h_tol_baja,
-                on_change=_cot_tol_piso_baja_slider_to_txt,
-            )
-        i3, i4 = st.columns(2)
-        with i3:
-            st.number_input(
-                "Corte COP: banda baja ↔ media",
-                min_value=0.0,
-                max_value=500_000_000.0,
-                value=float(st.session_state.get("consulta_masiva_cot_valor_inv_bajo_cop", _COT_VALOR_INV_COP_BAJO_DEFAULT)),
-                step=50_000.0,
-                key="consulta_masiva_cot_valor_inv_bajo_cop",
-                help="Valor inventario por debajo → banda **baja**.",
-            )
-        with i4:
-            st.number_input(
-                "Corte COP: banda media ↔ alta",
-                min_value=0.0,
-                max_value=500_000_000.0,
-                value=float(st.session_state.get("consulta_masiva_cot_valor_inv_alto_cop", _COT_VALOR_INV_COP_ALTO_DEFAULT)),
-                step=500_000.0,
-                key="consulta_masiva_cot_valor_inv_alto_cop",
-                help="Entre corte bajo y este → **media**; por encima → **alta**.",
-            )
-
-    with tab_alert:
-        st.caption(
-            "Alertas de **estructura de datos** (dispersión USD, min/max inventario) y **coherencia** compra/venta vs reposición. "
-            "El umbral de disponibilidad regional está en el bloque superior de consulta masiva."
-        )
-        a1, a2 = st.columns(2)
-        with a1:
-            st.slider(
-                "Dispersión orígenes USD — moderado (%)",
-                min_value=5,
-                max_value=85,
-                value=35,
-                step=1,
-                key="consulta_masiva_cot_dispersion_origen",
-                help=_h_disp_mod,
-                on_change=_cot_dispersion_origen_slider_to_txt,
-            )
-        with a2:
-            st.slider(
-                "Dispersión orígenes USD — crítico (%)",
-                min_value=10,
-                max_value=90,
-                value=55,
-                step=1,
-                key="consulta_masiva_cot_dispersion_origen_crit",
-                help=_h_disp_crit,
-                on_change=_cot_dispersion_origen_crit_slider_to_txt,
-            )
-        a3, a4 = st.columns(2)
-        with a3:
-            st.slider(
-                "Costo mín. vs máx. inventario — score (%)",
-                min_value=5,
-                max_value=90,
-                value=35,
-                step=1,
-                key="consulta_masiva_cot_costo_min_max",
-                help=_h_cm,
-                on_change=_cot_costo_min_max_slider_to_txt,
-            )
-        with a4:
-            st.slider(
-                "Vigía: reposición vs piso (%)",
-                min_value=5,
-                max_value=90,
-                value=30,
-                step=1,
-                key="consulta_masiva_cot_umbral_repo_vs_piso",
-                help=_h_rp,
-                on_change=_cot_umbral_repo_vs_piso_slider_to_txt,
-            )
-        st.slider(
-            "Coherencia: compra / importación / mercado (%)",
-            min_value=5,
-            max_value=90,
-            value=40,
-            step=1,
-            key="consulta_masiva_cot_umbral_mercado",
-            help=_h_coh,
-            on_change=_cot_umbral_mercado_slider_to_txt,
-        )
-
-    with st.expander("Ajuste manual (cajas de texto — % y TRM)", expanded=False):
-        st.caption("Misma sesión que los sliders; útil para pegar valores exactos.")
         m1, m2, m3 = st.columns(3)
         with m1:
             st.text_input(
                 "Margen venta %",
                 key="consulta_masiva_cot_margen_txt",
                 on_change=_cot_margen_txt_to_slider,
+                help=_h_margen_venta,
             )
         with m2:
             st.text_input(
                 "TRM",
                 key="consulta_masiva_cot_trm_txt",
                 on_change=_cot_trm_txt_to_slider,
+                help=_h_trm_cot,
             )
         with m3:
             st.text_input(
                 "Margen piso X %",
                 key="consulta_masiva_cot_piso_margen_txt",
                 on_change=_cot_piso_txt_to_slider,
+                help=_h_piso_margen,
             )
         m4, m5 = st.columns(2)
         with m4:
@@ -4828,12 +4714,35 @@ El total (**Score cotización**) define el **estado** y si se **anula** el **P. 
                 "Homogeneidad mín/máx %",
                 key="consulta_masiva_cot_homogeneo_minmax_txt",
                 on_change=_cot_homogeneo_minmax_txt_to_slider,
+                help=_h_hom,
             )
         with m5:
             st.text_input(
                 "Tolerancia piso banda baja %",
                 key="consulta_masiva_cot_tol_piso_baja_txt",
                 on_change=_cot_tol_piso_baja_txt_to_slider,
+                help=_h_tol_baja,
+            )
+        iv1, iv2 = st.columns(2)
+        with iv1:
+            st.number_input(
+                "Corte COP: banda baja ↔ media",
+                min_value=0.0,
+                max_value=500_000_000.0,
+                value=float(st.session_state.get("consulta_masiva_cot_valor_inv_bajo_cop", _COT_VALOR_INV_COP_BAJO_DEFAULT)),
+                step=50_000.0,
+                key="consulta_masiva_cot_valor_inv_bajo_cop",
+                help=_h_valor_inv_bajo,
+            )
+        with iv2:
+            st.number_input(
+                "Corte COP: banda media ↔ alta",
+                min_value=0.0,
+                max_value=500_000_000.0,
+                value=float(st.session_state.get("consulta_masiva_cot_valor_inv_alto_cop", _COT_VALOR_INV_COP_ALTO_DEFAULT)),
+                step=500_000.0,
+                key="consulta_masiva_cot_valor_inv_alto_cop",
+                help=_h_valor_inv_alto,
             )
         m6, m7 = st.columns(2)
         with m6:
@@ -4841,12 +4750,14 @@ El total (**Score cotización**) define el **estado** y si se **anula** el **P. 
                 "Dispersión USD moderado %",
                 key="consulta_masiva_cot_dispersion_origen_txt",
                 on_change=_cot_dispersion_origen_txt_to_slider,
+                help=_h_disp_mod,
             )
         with m7:
             st.text_input(
                 "Dispersión USD crítico %",
                 key="consulta_masiva_cot_dispersion_origen_crit_txt",
                 on_change=_cot_dispersion_origen_crit_txt_to_slider,
+                help=_h_disp_crit,
             )
         m8, m9 = st.columns(2)
         with m8:
@@ -4854,17 +4765,20 @@ El total (**Score cotización**) define el **estado** y si se **anula** el **P. 
                 "Costo mín vs máx (score) %",
                 key="consulta_masiva_cot_costo_min_max_txt",
                 on_change=_cot_costo_min_max_txt_to_slider,
+                help=_h_cm,
             )
         with m9:
             st.text_input(
                 "Vigía repo vs piso %",
                 key="consulta_masiva_cot_umbral_repo_vs_piso_txt",
                 on_change=_cot_umbral_repo_vs_piso_txt_to_slider,
+                help=_h_rp,
             )
         st.text_input(
             "Coherencia compra/mercado %",
             key="consulta_masiva_cot_umbral_mercado_txt",
             on_change=_cot_umbral_mercado_txt_to_slider,
+            help=_h_coh,
         )
 
     margen_cot = float(st.session_state["consulta_masiva_cot_margen"])
@@ -5078,8 +4992,19 @@ El total (**Score cotización**) define el **estado** y si se **anula** el **P. 
 
         df_cot_show = _renombrar_negocio(df_cot_view)
         fmt_cot = _consulta_masiva_cotizador_format_map(df_cot_show)
+        n_cot = len(df_cot_show)
+        df_cot_vista = (
+            df_cot_show.head(_CONSULTA_MASIVA_TABLA_VISTA_MAX)
+            if n_cot > _CONSULTA_MASIVA_TABLA_VISTA_MAX
+            else df_cot_show
+        )
+        if n_cot > _CONSULTA_MASIVA_TABLA_VISTA_MAX:
+            st.caption(
+                f"Vista previa del cotizador: **{_CONSULTA_MASIVA_TABLA_VISTA_MAX:,}** de **{n_cot:,}** filas. "
+                "**Descargar cotización (CSV)** debajo incluye todas."
+            )
         st.dataframe(
-            df_cot_show.style.format(fmt_cot, na_rep="—"),
+            df_cot_vista.style.format(fmt_cot, na_rep="—"),
             width="stretch",
             hide_index=True,
         )
@@ -5102,7 +5027,8 @@ El total (**Score cotización**) define el **estado** y si se **anula** el **P. 
                 file_name="consulta_masiva_resultado.csv",
                 mime="text/csv",
                 key="consulta_masiva_download",
-                help="Exporta la salida base de consulta masiva: cruce de referencias, orígenes/precios, disponibilidad y estado de coincidencia.",
+                help="Todas las filas del resultado (la tabla de arriba muestra como máximo 500 en pantalla). "
+                "Cruce de referencias, orígenes/precios, disponibilidad y estado de coincidencia.",
             )
         with dl2:
             st.download_button(
@@ -5111,7 +5037,8 @@ El total (**Score cotización**) define el **estado** y si se **anula** el **P. 
                 file_name="consulta_masiva_cotizacion.csv",
                 mime="text/csv",
                 key="consulta_masiva_download_cot",
-                help="Exporta la salida del cotizador: precio recomendado, precio experto, piso por inventario, estado de cotización y alertas.",
+                help="Todas las filas del cotizador (la tabla muestra como máximo 500 en pantalla). "
+                "Precio recomendado, experto, piso, estado, alertas y columnas analíticas según tu vista.",
             )
 
     _consulta_masiva_cotizador_vista_y_descargas()
