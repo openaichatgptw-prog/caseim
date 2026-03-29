@@ -917,23 +917,24 @@ def obtener_existencia_por_bodega_consulta(ref_normalizada: str) -> pd.DataFrame
             return pd.DataFrame()
 
         # Columnas alineadas al reporte Siesa «existencia por bodega» / query inventario (solo Existencias).
-        layout: list[tuple[str, str]] = [
-            ("Instalacion", "Instalación"),
-            ("Nom_Instalacion", "Desc. instalación"),
-            ("Bodega", "Bodega"),
-            ("Nom_Bodega", "Desc. bodega"),
-            ("Existencia", "Existencia"),
-            ("Disponible", "Cant. disponible"),
-            ("Costo_Prom_Inst", "Costo prom. unit. (inst.)"),
-            ("Precio_Lista_09", "Precio lista 09"),
-            ("Margen09", "Margen"),
-            ("Unidad", "U.M."),
-            ("EstadoItem", "Estado del item"),
-            ("Rotacion", "Rotación"),
+        # Cada fila: tupla de nombres físicos candidatos (misma semántica) + alias en el DataFrame.
+        layout: list[tuple[tuple[str, ...], str]] = [
+            (("Instalacion",), "Instalación"),
+            (("Nom_Instalacion",), "Desc. instalación"),
+            (("Bodega",), "Bodega"),
+            (("Nom_Bodega",), "Desc. bodega"),
+            (("Existencia",), "Existencia"),
+            (("Disponible",), "Cant. disponible"),
+            (("Costo_Prom_Inst",), "Costo prom. unit. (inst.)"),
+            (("Precio_Lista_09", "Precio Lista 09", "Precio lista 09"), "Precio lista 09"),
+            (("Margen09", "Margen_09", "Margen 09"), "Margen"),
+            (("Unidad",), "U.M."),
+            (("EstadoItem",), "Estado del item"),
+            (("Rotacion",), "Rotación"),
         ]
         parts: list[str] = []
-        for src, alias in layout:
-            c = pick(src)
+        for src_names, alias in layout:
+            c = pick(*src_names)
             if c:
                 parts.append(f"m.{_duck_quote_ident(c)} AS {_duck_quote_ident(alias)}")
 

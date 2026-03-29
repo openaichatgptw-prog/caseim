@@ -1105,6 +1105,16 @@ def _consulta_help_ultimas_ventas(fecha_min: str | None, fecha_max: str | None) 
     )
 
 
+def _consulta_resumen_precio_lista_09_cop(resumen: dict) -> float | None:
+    """Precio lista 09 en COP: claves habituales en `resultado_precios_lista` y cruces masivos."""
+    for k in ("Precio_Lista_09", "Precio lista 09"):
+        v = resumen.get(k)
+        f = _to_float(v)
+        if f is not None and math.isfinite(f):
+            return float(f)
+    return None
+
+
 def _consulta_html_topline_kpis(resumen: dict) -> str:
     """Referencia + KPIs en una sola franja horizontal (menos altura que bloques separados)."""
     ref = html.escape(str(resumen.get("Referencia_Original", "-")))
@@ -1118,6 +1128,12 @@ def _consulta_html_topline_kpis(resumen: dict) -> str:
         pp_s = "—"
     disp_t = html.escape(f"{resumen.get('_disp_total', 0):,.2f}")
     help_pr = html.escape(_consulta_help_prorrateo(), quote=True)
+    pl09_f = _consulta_resumen_precio_lista_09_cop(resumen)
+    pl09_s = html.escape(_fmt_money_cop_local(pl09_f, decimals=0)) if pl09_f is not None else "—"
+    help_pl09 = html.escape(
+        "Precio de lista 09 en COP (catálogo / márgenes Siesa), alineado al cruce de consulta en lote.",
+        quote=True,
+    )
     items = (
         f'<span class="consulta-kpi-inline-item">'
         f'<span class="consulta-kpi-lbl-row">'
@@ -1128,6 +1144,13 @@ def _consulta_html_topline_kpis(resumen: dict) -> str:
         f'<span class="consulta-kpi-val">{pp_s}</span></span>'
         f'<span class="consulta-kpi-inline-item"><span class="consulta-kpi-lbl">Disp. total</span>'
         f'<span class="consulta-kpi-val">{disp_t}</span></span>'
+        f'<span class="consulta-kpi-inline-item">'
+        f'<span class="consulta-kpi-lbl-row">'
+        f'<span class="consulta-kpi-lbl">Lista 09 (COP)</span>'
+        f'<span class="consulta-kpi-help-icon" title="{help_pl09}" '
+        f'aria-label="{help_pl09}" role="img">i</span>'
+        f"</span>"
+        f'<span class="consulta-kpi-val">{pl09_s}</span></span>'
         ""
     )
     return (
@@ -2763,6 +2786,8 @@ def _render_tab_consulta_individual() -> None:
                                     "Costo_Min",
                                     "Costo_Max",
                                     "Existencia_Total",
+                                    "Precio_Lista_09",
+                                    "Precio_Lista_04",
                                     "_disponible",
                                     "_disp_total",
                                     "Pais_Ultima",
