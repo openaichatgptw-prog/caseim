@@ -163,32 +163,54 @@ El cotizador trabaja **fila a fila** sobre el mismo resultado que la tabla de co
 | `USD_base_fuente` | **Fuente USD** | Texto: de dónde salió el USD base (`Mejor_Precio_Ajustado` o respaldo lista ajustada). |
 | `USD_base_unidades_disp` | **Und. disp. origen USD base** | Disponibilidad asociada al origen ganador (`Mejor_Disponibilidad`) cuando el USD base viene del mejor origen. |
 | `Factor_ultima_compra_aplicado` | (si visible) | Solo cuando el USD base viene del respaldo por **última compra USD**: qué factor se aplicó. |
-| `P_venta_experto_COP` | **P. venta experto (COP)** | \(P_{\text{experto}} = \text{USD\_base} \times \text{TRM} / (1 - m)\) con \(m\) = margen objetivo **como fracción del precio de venta** (ej. 25 % → divisor \(0{,}75\)). TRM y margen vienen de los sliders/cajas de la pantalla. |
-| `P_piso_inventario_COP` | **P. piso inventario (COP)** | \(P_{\text{piso}} = \text{Costo\_Min} / (1 - X)\) con \(X\) = margen piso inventario en fracción (slider 5–80 %). **Costo_Min** viene del cruce consulta/inventario (misma columna que en consulta masiva). |
+| `P_venta_experto_COP` | **P. venta experto (COP)** | COP derivado del USD base y la TRM; fórmula explícita en el recuadro [①](#recuadro-fórmulas-cotizador-cop) debajo de esta tabla. |
+| `P_piso_inventario_COP` | **P. piso inventario (COP)** | Piso desde **Costo_Min** y el margen piso; fórmula [②](#recuadro-fórmulas-cotizador-cop). |
 | `P_recomendado_COP` | **P. recomendado (COP)** | Si hay experto **y** piso: **máximo** de ambos (no vender por debajo del piso ni por debajo del experto cuando el piso domina). Si solo hay uno, ese valor. Puede quedar **vacío** si el motor **anula** el recomendado por riesgo (ver alertas). |
 | `Regla_precio` | **Regla precio** | Texto que indica cuál tramo mandó: experto, piso, empate, solo experto, solo piso. |
 
 **Margen % (cot.)** (`Margen_pct_cot`) y **TRM (cot.)** (`TRM_cot`) son los **parámetros** usados en esa fila (no son margen contable de SIESA): sirven para auditoría de “con qué supuestos se calculó”.
 
+<a id="recuadro-fórmulas-cotizador-cop"></a>
+###### Recuadro — fórmulas cotizador (COP)
+
+*(Notación en texto plano: se lee bien en GitHub, VS Code y PDF; símbolos × ÷ en lugar de LaTeX.)*
+
+```text
+①  P_experto  =  USD_base × TRM ÷ (1 − m)
+
+    m  = margen objetivo como fracción del precio de VENTA
+         Ejemplo: 25 %  →  m = 0,25  →  divisor (1 − m) = 0,75
+    TRM y m salen de los sliders / cajas de la pantalla.
+
+②  P_piso  =  Costo_Min ÷ (1 − X)
+
+    X  = margen «piso inventario» en fracción (slider 5 % … 80 %)
+    Costo_Min = misma columna que en consulta masiva (cruce inventario).
+```
+
 ##### «Guía Δ lista vs repo (%)» y «Guía Δ venta vs repo (%)»
 
 En la app, **“repo”** (reposición) significa el **precio recomendado en COP** (`P_recomendado_COP`) **antes** de anularlo por alertas — es la referencia contra la que se mide qué tan lejos están la lista y la última venta.
 
-- **Guía Δ lista vs repo (%)** (`Guia_lista09_vs_repo_pct`):  
-  \[
-  \text{Guía lista} = \frac{\lvert \text{Precio\_Lista\_09} - P_{\text{rec}} \rvert}{\max(\text{Precio\_Lista\_09},\, P_{\text{rec}})} \times 100
-  \]  
-  Solo se calcula si **ambos** valores existen y son &gt; 0. Indica **qué tan distinto** está el **precio lista 09** del precio de reposición **propuesto por el cotizador** (simétrico: da el mismo orden de magnitud suba o baje la lista). **No** es margen de utilidad; es una **métrica de alineación / brecha**.
+**Guía Δ lista vs repo (%)** (`Guia_lista09_vs_repo_pct`):
 
-- **Guía Δ venta vs repo (%)** (`Guia_venta_vs_repo_pct`):  
-  \[
-  \text{Guía venta} = \frac{\lvert \text{Últ.\ venta} - P_{\text{rec}} \rvert}{\max(\text{Últ.\ venta},\, P_{\text{rec}})} \times 100
-  \]  
-  Misma lógica usando **Últ. Precio Venta** (columna de guía de venta en el cruce masivo). Compara la **última venta histórica** con el **precio recomendado**.
+```text
+Guía_lista (%)  =  | Precio_Lista_09 − P_rec |  ÷  max(Precio_Lista_09 , P_rec)  ×  100
+```
 
-**Valores vacíos (—):** si no hay \(P_{\text{rec}}\) usable, o falta lista 09 / última venta, la guía correspondiente no se calcula (`None`).
+**Guía Δ venta vs repo (%)** (`Guia_venta_vs_repo_pct`):
 
-**Si el estado anula el recomendado** («Precio no calculable…»), en pantalla puede seguir apareciendo **P. recomendado** vacío pero **guía %** con número: las guías se evalúan con el \(P_{\text{rec}}\) **intermedio** antes de anularlo, para que veas qué tan lejos iban lista y venta de ese precio propuesto (solo diagnóstico).
+```text
+Guía_venta (%)  =  | Ult_venta − P_rec |  ÷  max(Ult_venta , P_rec)  ×  100
+```
+
+(`Ult_venta` = **Últ. Precio Venta** del cruce masivo; `P_rec` = precio recomendado en COP.)
+
+Solo se calculan si **ambos** operandos existen y son &gt; 0. Son **métricas de brecha / alineación** respecto al precio de reposición **propuesto por el cotizador**, no márgenes contables.
+
+**Valores vacíos (—):** si no hay `P_rec` usable, o falta lista 09 / última venta, la guía correspondiente no se calcula (`None`).
+
+**Si el estado anula el recomendado** («Precio no calculable…»), en pantalla puede seguir apareciendo **P. recomendado** vacío pero **guía %** con número: las guías se evalúan con el **P_rec intermedio** antes de anularlo, para que veas qué tan lejos iban lista y venta de ese precio propuesto (solo diagnóstico).
 
 **Uso en alertas:** si la guía lista supera **35 %** o la guía venta supera **40 %** (umbrales fijos en código), suman **score** y texto en **Alertas** (“muy distinto del precio reposición”). Eso **no** cambia la fórmula de la guía; solo dispara revisión.
 
@@ -199,8 +221,8 @@ En la app, **“repo”** (reposición) significa el **precio recomendado en COP
 | Señal (resumen) | Efecto en score (típico) |
 |-----------------|---------------------------|
 | Existencia total ∈ (0, 3] unidades | +1 |
-| Costo máx. vs costo mín.: \((\max-\min)/\min\) &gt; 35 % | +2 |
-| ≥ 2 orígenes USD válidos y dispersión \((\max-\min)/\min\) &gt; 35 % (o &gt; 55 % → más peso) | +2 o +4 |
+| Costo máx. vs costo mín.: **(máx − mín) ÷ mín** &gt; 35 % | +2 |
+| ≥ 2 orígenes USD válidos y dispersión **(máx − mín) ÷ mín** &gt; 35 % (o &gt; 55 % → más peso) | +2 o +4 |
 | Guía lista vs repo &gt; 35 % | +2 |
 | Guía venta vs repo &gt; 40 % | +1 |
 | Piso domina y experto &lt; 50 % del piso | +1 |
@@ -273,9 +295,20 @@ Incluye (según columnas disponibles): búsqueda de texto, rangos de margen, bod
 | **Refs** | `nunique` de código de referencia interno (`_ref_codigo`) en el conjunto filtrado. |
 | **Inv** | Suma de **valor inventario** = existencia × costo prom. instalación (por fila), formateado resumido COP. |
 | **Exist** | Suma de existencias (columna Existencia o Disponible). |
-| **Margen %** | Margen global ponderado: \(1 - \frac{\sum Q \cdot \text{Costo prom}}{\sum Q \cdot \text{Precio lista}}\) en %, si hay datos. |
-| **Margen $** | \(\sum Q \cdot \text{Precio lista} - \sum Q \cdot \text{Costo prom}\) (lógica análoga a DAX descrita en comentarios del código). |
+| **Margen %** | Margen global ponderado; fórmula en [recuadro margen KPI](#recuadro-margen-kpi). |
+| **Margen $** | Ver [recuadro margen KPI](#recuadro-margen-kpi) (lógica análoga a DAX en comentarios del código). |
 | **Costo Bodega** | Costo promedio ponderado por existencia. |
+
+<a id="recuadro-margen-kpi"></a>
+**Recuadro — KPIs de margen (franja):**
+
+```text
+Margen %  =  100 × ( 1 −  ( Σ (Q × Costo_prom) ) ÷ ( Σ (Q × Precio_lista) ) )
+
+Margen $  =  Σ (Q × Precio_lista)  −  Σ (Q × Costo_prom)
+```
+
+(`Q` = existencia por fila; agregación sobre el conjunto filtrado.)
 
 ### 5.5 Sub-pestaña «Detalle filtrado»
 
@@ -418,8 +451,8 @@ Referencias cruzadas: **SQL** = definido en `00_Reportes_SQL.py` / motor SQL Ser
 | Medida | Qué es |
 |--------|--------|
 | **P. recomendado (COP)** | `max(experto, piso)` con experto = USD×TRM/(1−m) y piso = Costo_Min/(1−X). |
-| **Guía Δ lista vs repo (%)** | \(\lvert PL09 - P_{rec}\rvert / \max(PL09, P_{rec}) \times 100\). |
-| **Guía Δ venta vs repo (%)** | \(\lvert UltVenta - P_{rec}\rvert / \max(UltVenta, P_{rec}) \times 100\). |
+| **Guía Δ lista vs repo (%)** | `|PL09 − P_rec| ÷ max(PL09, P_rec) × 100` (detalle en §3.2). |
+| **Guía Δ venta vs repo (%)** | `|UltVenta − P_rec| ÷ max(UltVenta, P_rec) × 100` (detalle en §3.2). |
 | **Estado cotización** | Resultado del score de alertas (OK → bloqueado). |
 | **Alertas** | Texto concatenado de las reglas de `_consulta_masiva_cotizador_alertas`. |
 
@@ -433,9 +466,9 @@ Referencias cruzadas: **SQL** = definido en `00_Reportes_SQL.py` / motor SQL Ser
 | Medida | Cálculo en UI |
 |--------|----------------|
 | **Valor inventario (fila)** | Existencia (o Disponible) × **Costo prom. inv. (COP)** por línea. |
-| **Margen % (franja)** | \(100 \times (1 - \sum Q \cdot C_{\text{prom}} / \sum Q \cdot P_{\text{lista}})\) con \(Q\) = existencia. |
-| **Margen $ (franja)** | \(\sum Q \cdot P_{\text{lista}} - \sum Q \cdot C_{\text{prom}}\). |
-| **Costo Bodega** | \(\sum Q \cdot C_{\text{prom}} / \sum Q\) (promedio ponderado por unidades). |
+| **Margen % (franja)** | Igual que §5.4: `100 × (1 − Σ(Q×C_prom) ÷ Σ(Q×P_lista))` con `Q` = existencia. |
+| **Margen $ (franja)** | `Σ(Q×P_lista) − Σ(Q×C_prom)`. |
+| **Costo Bodega** | `Σ(Q×C_prom) ÷ Σ(Q)` (promedio ponderado por unidades). |
 | **Margen09_Max** | Por cada ref., el **máximo Margen09** en todo el dataset base con existencia &gt; 0 (no solo el filtro actual). |
 
 Los **Margen09 / Margen04** y **Precio lista** en la tabla son los del **reporte SIESA** cargado en SQL 001; la app no recalcula esos porcentajes desde cero, solo agrega y filtra.
@@ -451,14 +484,14 @@ Los **Margen09 / Margen04** y **Precio lista** en la tabla son los del **reporte
 | **Var_CostoMin_PrecioCOP** / **Var_CostoMax_PrecioCOP** | SQL | Variación última compra COP vs costos extremos (problema 2, distinto del semáforo si la definición SQL difiere en detalle). |
 | **Dias_Entre_Compras** | SQL | Días entre fechas de última y penúltima compra. |
 | **NumCostosValidos, EsCostoUnico** | SQL | Diagnóstico de cuántos costos de bodega son válidos y si hay un solo costo. |
-| **_abs_var_compra** | Python | \(\lvert Var\_PrecioCOP\rvert\) (o la columna de variación de compra detectada). |
-| **_abs_var_costo** | Python | Preferentemente variación % **última compra ajustada logísticamente vs costo prom. inventario** si existe columna; si no, \(\lvert ABSVar\_Costo\_Pct\rvert\). |
-| **_score_alerta** | Python | \(0{,}55 \cdot\) \|Δ compra\| + \(0{,}45 \cdot\) \|Δ vs costo\| (en las columnas derivadas anteriores). |
+| **_abs_var_compra** | Python | `|Var_PrecioCOP|` (o la columna de variación de compra detectada). |
+| **_abs_var_costo** | Python | Preferentemente variación % **última compra ajustada logísticamente vs costo prom. inventario** si existe columna; si no, `|ABSVar_Costo_Pct|`. |
+| **_score_alerta** | Python | `0,55 × |Δ compra| + 0,45 × |Δ vs costo|` (sobre las columnas derivadas anteriores). |
 | **_Existencia_suma_niveles** | Python | Si no hay `Existencia_Total` en SQL: suma Existencia_Min + Intermedio + Max. |
-| **Valor inv. expuesto (KPI auditoría)** | Python | \(\sum Valor\_Inventario\) si existe; si no, \(\sum Existencia\_Intermedio \times Costo\_Intermedio\) en el dataframe filtrado. |
+| **Valor inv. expuesto (KPI auditoría)** | Python | `Σ Valor_Inventario` si existe; si no, `Σ (Existencia_Intermedio × Costo_Intermedio)` en el dataframe filtrado. |
 | **% ≥ umbral \|Δ compra\|** | Python | % de **filas** (no refs únicas) con `_abs_var_compra` ≥ umbral del slider. |
 | **% ≥ umbral \|Δ vs costo\|** | Python | Igual para `_abs_var_costo`. |
-| **Índice plan de acción (gráfico)** | Python | \(0{,}60 \cdot g_{\text{compra}} + 0{,}25 \cdot g_{\text{costo}} + 0{,}15 \cdot score\), con multiplicadores ×1,5 si crítico y ×1,2 si moderado alto (ver código cerca de `Plan de acción`). |
+| **Índice plan de acción (gráfico)** | Python | `0,60 × g_compra + 0,25 × g_costo + 0,15 × score`, con multiplicadores ×1,5 si crítico y ×1,2 si moderado alto (ver código cerca de `Plan de acción`). |
 
 **Etiquetas UI del semáforo:** «Alineado» = valor SQL `NO CRÍTICO` (no confundir con “sin problema comercial”).
 
