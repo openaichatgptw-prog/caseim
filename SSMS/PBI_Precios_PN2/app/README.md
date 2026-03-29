@@ -14,6 +14,10 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+## Documentación
+
+- **[Guía detallada (pestaña a pestaña, reglas y campos calculados)](GUIA_DETALLADA_APP_PRECIOS_CNH.md)**
+
 ## Funcionalidades
 
 - Búsqueda por referencia principal/normalizada.

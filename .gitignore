@@ -43,3 +43,6 @@ SSMS/PBI_Precios_PN2/.update_in_progress.lock
 SSMS/PBI_Precios_PN2/app/user_filter_prefs.json
 # Plantilla sin secretos (sí se versiona)
 !SSMS/PBI_Precios_PN2/Config.example.ini
+
+# Documentación técnica local (SQL/diagramas); no subir a GitHub
+SSMS/PBI_Precios_PN2/readmetecnico.md
