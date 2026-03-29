@@ -188,17 +188,19 @@ El cotizador trabaja **fila a fila** sobre el mismo resultado que la tabla de co
     Costo_Min = misma columna que en consulta masiva (cruce inventario).
 ```
 
-##### «Guía Δ lista vs repo (%)» y «Guía Δ venta vs repo (%)»
+##### Guías internas lista / venta vs «repo» (no visibles en la app)
+
+En la app Streamlit **no** se muestran columnas de % de guía (evita ruido frente a **Alertas** y al precio recomendado). El motor **sí** calcula las mismas brechas en `_consulta_masiva_cotizador_alertas` para el **score** y el texto de alertas.
 
 En la app, **“repo”** (reposición) significa el **precio recomendado en COP** (`P_recomendado_COP`) **antes** de anularlo por alertas — es la referencia contra la que se mide qué tan lejos están la lista y la última venta.
 
-**Guía Δ lista vs repo (%)** (`Guia_lista09_vs_repo_pct`):
+**Guía lista vs repo** (lógica interna; antes `Guia_lista09_vs_repo_pct`):
 
 ```text
 Guía_lista (%)  =  | Precio_Lista_09 − P_rec |  ÷  max(Precio_Lista_09 , P_rec)  ×  100
 ```
 
-**Guía Δ venta vs repo (%)** (`Guia_venta_vs_repo_pct`):
+**Guía venta vs repo** (lógica interna; antes `Guia_venta_vs_repo_pct`):
 
 ```text
 Guía_venta (%)  =  | Ult_venta − P_rec |  ÷  max(Ult_venta , P_rec)  ×  100
@@ -210,7 +212,7 @@ Solo se calculan si **ambos** operandos existen y son &gt; 0. Son **métricas de
 
 **Valores vacíos (—):** si no hay `P_rec` usable, o falta lista 09 / última venta, la guía correspondiente no se calcula (`None`).
 
-**Si el estado anula el recomendado** («Precio no calculable…»), en pantalla puede seguir apareciendo **P. recomendado** vacío pero **guía %** con número: las guías se evalúan con el **P_rec intermedio** antes de anularlo, para que veas qué tan lejos iban lista y venta de ese precio propuesto (solo diagnóstico).
+**Si el estado anula el recomendado** («Precio no calculable…»), las guías se evalúan igual con el **P_rec intermedio** antes de anularlo (solo dentro del motor de alertas); el usuario ve el efecto en **Alertas** / estado, no en columnas de %.
 
 **Uso en alertas:** si la guía lista supera **35 %** o la guía venta supera **40 %** (umbrales fijos en código), suman **score** y texto en **Alertas** (“muy distinto del precio reposición”). Eso **no** cambia la fórmula de la guía; solo dispara revisión.
 
@@ -451,8 +453,8 @@ Referencias cruzadas: **SQL** = definido en `00_Reportes_SQL.py` / motor SQL Ser
 | Medida | Qué es |
 |--------|--------|
 | **P. recomendado (COP)** | `max(experto, piso)` con experto = USD×TRM/(1−m) y piso = Costo_Min/(1−X). |
-| **Guía Δ lista vs repo (%)** | `|PL09 − P_rec| ÷ max(PL09, P_rec) × 100` (detalle en §3.2). |
-| **Guía Δ venta vs repo (%)** | `|UltVenta − P_rec| ÷ max(UltVenta, P_rec) × 100` (detalle en §3.2). |
+| **Guía lista vs repo (interno)** | `|PL09 − P_rec| ÷ max(PL09, P_rec) × 100`; alimenta score/alertas; **no** hay columna en la app (§3.2). |
+| **Guía venta vs repo (interno)** | `|UltVenta − P_rec| ÷ max(UltVenta, P_rec) × 100`; igual; **no** hay columna en la app (§3.2). |
 | **Estado cotización** | Resultado del score de alertas (OK → bloqueado). |
 | **Alertas** | Texto concatenado de las reglas de `_consulta_masiva_cotizador_alertas`. |
 

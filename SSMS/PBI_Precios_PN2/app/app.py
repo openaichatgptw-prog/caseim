@@ -1944,8 +1944,6 @@ BUSINESS_LABELS: Final[dict[str, str]] = {
     "Regla_precio": "Regla precio",
     "Estado_cotizacion": "Estado cotización",
     "Alertas_detalle": "Alertas",
-    "Guia_lista09_vs_repo_pct": "Guía Δ lista vs repo (%)",
-    "Guia_venta_vs_repo_pct": "Guía Δ venta vs repo (%)",
     "Ult_venta_guia": "Últ. venta (guía)",
     "Referencia_Original": "Ref original",
     "Referencia_Alternas": "Refs alternas",
@@ -2811,7 +2809,8 @@ def _consulta_masiva_cotizador_alertas(
 ) -> tuple[str, str, bool, float | None, float | None]:
     """
     Devuelve: estado_cotización, texto alertas, si se anula P recomendado,
-    % guía lista09 vs repo, % guía últ. venta vs repo.
+    y dos guías internas (lista09/repo, últ. venta/repo) solo para umbrales de score;
+    no se exponen como columnas en la app.
     """
     # Umbrales (negocio: guía + alertas, no ley absoluta)
     pct_spread_origen = 0.35
@@ -2990,7 +2989,7 @@ def _consulta_masiva_cotizador_df(
             regla = "Solo piso inventario (sin USD base)"
 
         p_adj_for_alert = p_adj if p_adj is not None and pd.notna(p_adj) else None
-        estado_cot, alertas_txt, anular_rec, guia_pl, guia_vt = _consulta_masiva_cotizador_alertas(
+        estado_cot, alertas_txt, anular_rec, _, _ = _consulta_masiva_cotizador_alertas(
             row,
             p_rec=p_rec,
             p_expert=p_expert,
@@ -3035,8 +3034,6 @@ def _consulta_masiva_cotizador_df(
                 "Regla_precio": regla or None,
                 "Estado_cotizacion": estado_cot,
                 "Alertas_detalle": alertas_txt or None,
-                "Guia_lista09_vs_repo_pct": (guia_pl * 100.0) if guia_pl is not None else None,
-                "Guia_venta_vs_repo_pct": (guia_vt * 100.0) if guia_vt is not None else None,
             }
         )
     return pd.DataFrame(rows)
@@ -3567,7 +3564,7 @@ Si no hay origen válido, respaldo: **Último valor USD** de la lista de precios
             )
             st.markdown(
                 """
-Cuando existen ambos términos. **Precio lista 09** y **última venta** son **guías**: se muestra el % de diferencia frente al precio de reposición propuesto.
+Cuando existen ambos términos. **Precio lista 09** y **última venta** sirven de contexto; si se alejan mucho del precio de reposición propuesto, verás el aviso en **Alertas** (no se muestran columnas de % para no saturar la tabla).
                 """.strip()
             )
             st.divider()
@@ -3739,7 +3736,7 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
             "➕ Vista analítica del cotizador (más campos)",
             value=False,
             key="consulta_masiva_cot_extra_toggle",
-            help="OFF: solo columnas núcleo del cotizador. ON: añade el bloque de diagnóstico (lista 09, alertas, guías…) y permite traer columnas extra de la tabla de consulta masiva.",
+            help="OFF: solo columnas núcleo del cotizador. ON: añade el bloque de diagnóstico (lista 09, últ. venta, alertas, TRM/margen usados…) y permite traer columnas extra de la tabla de consulta masiva.",
         )
         cols_extra_sel: list[str] = []
         if traer_datos_extra and cols_base_disponibles:
@@ -3813,8 +3810,6 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
             "Costo_Max",
             "Precio_Lista_09",
             "Ult_venta_guia",
-            "Guia_lista09_vs_repo_pct",
-            "Guia_venta_vs_repo_pct",
             "Margen_pct_cot",
             "TRM_cot",
             "USD_base_fuente",
@@ -3845,12 +3840,6 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
             "`Mejor_Precio_Ajustado` (origen BR/USA/EUR con factor) o, si no hubo origen válido, "
             "respaldo `Ult. Fecha Compra / lista (USD, ajustado)` según `País últ. compra`."
         )
-        st.caption(
-            "**Guía Δ lista vs repo (%):** diferencia porcentual entre `Precio lista 09` y `P_recomendado_COP` "
-            "(|lista - recomendado| / max(lista, recomendado) × 100). "
-            "**Guía Δ venta vs repo (%):** misma lógica usando `Últ. Precio Venta` vs `P_recomendado_COP`."
-        )
-
         csv_out = df_out.to_csv(index=False).encode("utf-8-sig")
         csv_cot_bytes = df_cot.to_csv(index=False).encode("utf-8-sig")
         dl1, dl2 = st.columns(2)
