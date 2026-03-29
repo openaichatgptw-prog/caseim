@@ -442,9 +442,9 @@ st.markdown(
     .origin-grid-unified {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 0.38rem;
+        gap: 0.42rem;
         margin-top: 0.22rem;
-        align-items: start;
+        align-items: stretch;
     }
     .origin-grid-unified > .ui-card--origin {
         min-width: 0;
@@ -460,39 +460,47 @@ st.markdown(
             font-size: 1rem;
         }
     }
-    /* Una fila densa: origen | precio | disponibilidad (sin hueco a la derecha) */
-    .ui-card--origin-row {
-        display: grid;
-        grid-template-columns: minmax(0, 1.1fr) minmax(3.5rem, 1fr) minmax(4.2rem, 0.9fr);
-        align-items: center;
-        column-gap: 0.45rem;
-        padding: 0.26rem 0.42rem !important;
+    /* Tarjeta por región: apilado vertical (evita solapes precio / “Disponibilidad” en rejillas estrechas) */
+    .ui-card--origin-stack {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.4rem;
+        padding: 0.48rem 0.52rem !important;
+        min-width: 0;
+    }
+    .ui-card--origin-stack .ui-origin-head {
         min-width: 0;
     }
     .ui-origin-name-line {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
-        gap: 0.35rem;
+        gap: 0.3rem 0.45rem;
+        row-gap: 0.28rem;
     }
     .ui-origin-name {
         font-size: 0.8rem;
         font-weight: 650;
         color: var(--ui-muted);
+        line-height: 1.25;
     }
-    .ui-origin-col--px {
-        font-size: 0.95rem;
+    .ui-card--origin-stack .ui-origin-col--px {
+        font-size: 0.98rem;
         font-weight: 700;
         color: #f8fafc;
-        text-align: center;
-        line-height: 1.15;
+        text-align: left;
+        line-height: 1.25;
+        padding: 0.12rem 0;
+        word-break: break-word;
     }
-    .ui-origin-col--dp {
-        text-align: right;
+    .ui-card--origin-stack .ui-origin-col--dp {
+        text-align: left;
         display: flex;
         flex-direction: column;
-        align-items: flex-end;
-        gap: 0.08rem;
+        align-items: flex-start;
+        gap: 0.12rem;
+        margin-top: auto;
     }
     .ui-origin-disp-lbl {
         font-size: 0.62rem;
@@ -525,28 +533,17 @@ st.markdown(
     }
     .ui-best-pill {
         display: inline-block;
-        font-size: 0.6rem;
+        font-size: 0.58rem;
         font-weight: 700;
         letter-spacing: 0.05em;
         text-transform: uppercase;
         color: #0d9488;
         background: rgba(20, 184, 166, 0.14);
         border-radius: 999px;
-        padding: 0.1rem 0.4rem;
+        padding: 0.14rem 0.45rem;
         white-space: nowrap;
-    }
-    @media (max-width: 640px) {
-        .ui-card--origin-row {
-            grid-template-columns: 1fr;
-            row-gap: 0.45rem;
-        }
-        .ui-origin-col--px {
-            text-align: left;
-        }
-        .ui-origin-col--dp {
-            align-items: flex-start;
-            text-align: left;
-        }
+        flex-shrink: 0;
+        line-height: 1.2;
     }
     /* Auditoría referencias: texto introductorio del cuadro de mando en un solo bloque */
     .auditoria-dash-blurb {
@@ -716,6 +713,11 @@ st.markdown(
         color: #94a3b8;
         line-height: 1.35;
     }
+    .consulta-note--repo-formulas {
+        margin-top: 0.55rem !important;
+        line-height: 1.55 !important;
+        max-width: 100%;
+    }
     .consulta-kpi-cell .consulta-kpi-lbl {
         display: block;
         font-size: 0.62rem;
@@ -755,6 +757,10 @@ st.markdown(
         grid-template-columns: repeat(4, minmax(150px, 1fr));
         gap: 0.38rem 0.45rem;
         margin: 0;
+    }
+    .consulta-compra-grid--two {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        max-width: 100%;
     }
     @media (max-width: 980px) {
         .consulta-compra-grid {
@@ -798,6 +804,74 @@ st.markdown(
         border: 1px solid rgba(37, 49, 77, 0.65);
         border-radius: 8px;
         background: rgba(12, 20, 38, 0.5);
+    }
+    /* ── Consulta individual: jerarquía visual y ritmo ─────────────────── */
+    .consulta-individual-hero {
+        margin: 0 0 1rem 0;
+        padding: 1rem 1.15rem 1.05rem 1.15rem;
+        border-radius: 14px;
+        border: 1px solid rgba(45, 58, 88, 0.95);
+        background: linear-gradient(
+            125deg,
+            rgba(29, 78, 216, 0.14) 0%,
+            rgba(14, 22, 41, 0.92) 42%,
+            rgba(10, 16, 32, 0.98) 100%
+        );
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+    }
+    .consulta-individual-title {
+        margin: 0 0 0.4rem 0;
+        font-size: 1.38rem;
+        font-weight: 780;
+        letter-spacing: -0.025em;
+        color: #f8fafc;
+        line-height: 1.2;
+    }
+    .consulta-individual-section-title {
+        margin: 0 0 0.65rem 0;
+        font-size: 0.7rem;
+        font-weight: 750;
+        text-transform: uppercase;
+        letter-spacing: 0.11em;
+        color: #7dd3fc;
+    }
+    .consulta-individual-section-title--muted {
+        color: #94a3b8;
+        letter-spacing: 0.09em;
+    }
+    .consulta-individual-disp-hint {
+        margin: 0;
+        padding: 0.35rem 0 0 0;
+        font-size: 0.8rem;
+        color: #94a3b8;
+        line-height: 1.45;
+        max-width: 22rem;
+    }
+    .consulta-sheet--individual {
+        padding: 0.72rem 0.9rem 0.85rem 0.9rem;
+        border-radius: 14px;
+        border-color: rgba(56, 189, 248, 0.22);
+        box-shadow: 0 6px 28px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(56, 189, 248, 0.06);
+    }
+    .consulta-sheet--individual .consulta-topline {
+        padding-bottom: 0.55rem;
+        margin-bottom: 0.5rem;
+    }
+    .consulta-sheet--individual .consulta-split {
+        gap: 0.55rem;
+    }
+    .consulta-sheet--individual .consulta-panel {
+        padding: 0.42rem 0.48rem;
+    }
+    .consulta-sheet--individual .origin-grid-unified {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.4rem;
+        margin-top: 0.22rem;
+    }
+    @media (max-width: 768px) {
+        .consulta-sheet--individual .origin-grid-unified {
+            grid-template-columns: 1fr;
+        }
     }
     /* Reporte margen: KPIs en franja densa (1 fila en desktop; reflow en tablet/móvil) */
     .margen-kpi-strip {
@@ -1149,8 +1223,8 @@ def _consulta_html_origins_panel(resumen: dict, disp_umbral: float) -> tuple[str
         cls = "ui-card ui-card--tight ui-card--origin" + (" is-best" if is_best_origin else "")
         pill_html = '<span class="ui-best-pill">Mejor precio</span>' if is_best_origin else ""
         origin_cells.append(
-            f'<div class="{cls} ui-card--origin-row">'
-            f'<div><div class="ui-origin-name-line">'
+            f'<div class="{cls} ui-card--origin-stack">'
+            f'<div class="ui-origin-head"><div class="ui-origin-name-line">'
             f'<span class="ui-origin-name">{html.escape(flag)} {html.escape(origen)}</span>'
             f"{pill_html}"
             f"</div></div>"
@@ -1164,6 +1238,74 @@ def _consulta_html_origins_panel(resumen: dict, disp_umbral: float) -> tuple[str
     grid = f'<div class="origin-grid-unified">{"".join(origin_cells)}</div>'
     body = f'<div class="consulta-panel-title">Comparación por región</div>{grid}'
     return f'<div class="consulta-panel">{body}</div>', bool(mejores_origenes)
+
+
+def _consulta_html_reposicion_panel(
+    df_masivo_one: pd.DataFrame | None,
+    *,
+    resumen_fallback: dict | None,
+    disp_umbral: float,
+    factor_usabr: float,
+    factor_euro: float,
+    trm: float,
+    margin_pct: float,
+    piso_margin_pct: float,
+) -> str:
+    """
+    Costo reposición = USD base (mejor precio × factor) × TRM.
+    Precio reposición = mismo × TRM ÷ (1 − margen % sobre venta).
+    Misma definición que el cotizador en lote.
+    """
+    title = "Reposición importación (COP)"
+    df_src = df_masivo_one
+    if (df_src is None or df_src.empty) and resumen_fallback:
+        df_src = pd.DataFrame([dict(resumen_fallback)])
+    if df_src is None or df_src.empty:
+        inner = (
+            f'<p class="consulta-note">Sin datos para calcular reposición '
+            f"(revisa coincidencia o columnas de precio/disponibilidad por región).</p>"
+        )
+        return f'<div class="consulta-panel"><div class="consulta-panel-title">{title}</div>{inner}</div>'
+
+    d0 = _consulta_masiva_calcular_mejor_origen(
+        df_src.copy(),
+        disp_umbral=float(disp_umbral),
+        factor_usabr=float(factor_usabr),
+        factor_euro=float(factor_euro),
+    )
+    d0 = _consulta_masiva_ajustar_decimales(d0)
+    dcot = _consulta_masiva_cotizador_df(
+        d0,
+        float(margin_pct),
+        float(trm),
+        piso_margin_pct=float(piso_margin_pct),
+        factor_usabr=float(factor_usabr),
+        factor_euro=float(factor_euro),
+        factor_otros=float(factor_euro),
+        disp_umbral=float(disp_umbral),
+    )
+    r = dcot.iloc[0]
+    cr = r.get("Costo_reposicion_COP")
+    pr = r.get("Precio_reposicion_COP")
+    cr_s = html.escape(_fmt_money_cop_local(cr, decimals=0))
+    pr_s = html.escape(_fmt_money_cop_local(pr, decimals=0))
+    trm_s = html.escape(_fmt_num_local(float(trm), decimals=0))
+    mg_s = html.escape(_fmt_num_local(float(margin_pct), decimals=0))
+    cap = (
+        f'<p class="consulta-note consulta-note--repo-formulas">Fórmulas (alineadas al cotizador en lote): '
+        f"<strong>Costo reposición</strong> = USD base × TRM ({trm_s}); "
+        f"<strong>Precio reposición</strong> = USD base × TRM ÷ (1 − {mg_s}% margen sobre venta). "
+        f"USD base = mejor precio lista por región × factor BR/USA o EUR según el origen ganador.</p>"
+    )
+    grid = (
+        f'<div class="consulta-compra-grid consulta-compra-grid--two">'
+        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Costo reposición (COP)</span>'
+        f'<span class="consulta-kpi-val">{cr_s}</span></div>'
+        f'<div class="consulta-kpi-cell"><span class="consulta-kpi-lbl">Precio reposición (COP)</span>'
+        f'<span class="consulta-kpi-val">{pr_s}</span></div>'
+        f"</div>"
+    )
+    return f'<div class="consulta-panel"><div class="consulta-panel-title">{title}</div>{grid}{cap}</div>'
 
 
 def _fmt_consulta_display(val: object) -> str:
@@ -1350,9 +1492,20 @@ def _consulta_html_ultima_compra(resumen: dict) -> str:
 
 
 def _consulta_build_sheet_html(
-    resumen: dict, refs_alternas: str, ref_original: str, disp_umbral: float
+    resumen: dict,
+    refs_alternas: str,
+    ref_original: str,
+    disp_umbral: float,
+    *,
+    df_masivo_one: pd.DataFrame | None = None,
+    trm_repo: float = 4100.0,
+    margin_repo_pct: float = 40.0,
+    piso_margin_repo_pct: float = 40.0,
+    factor_usabr_repo: float = 1.35,
+    factor_euro_repo: float = 1.55,
+    sheet_variant: str = "",
 ) -> str:
-    """Un solo bloque HTML: resumen + alternas/orígenes + última compra (un único st.markdown)."""
+    """Un solo bloque HTML: resumen + alternas/orígenes + reposición COP + última compra (un único st.markdown)."""
     top = _consulta_html_topline_kpis(resumen)
     alt = _consulta_html_alternas_panel(refs_alternas, ref_original)
     orig, hay_mejor = _consulta_html_origins_panel(resumen, disp_umbral)
@@ -1366,11 +1519,24 @@ def _consulta_build_sheet_html(
             "; sube el umbral o revisa stock por región.</p>"
         )
     )
+    repo = _consulta_html_reposicion_panel(
+        df_masivo_one,
+        resumen_fallback=resumen,
+        disp_umbral=float(disp_umbral),
+        factor_usabr=float(factor_usabr_repo),
+        factor_euro=float(factor_euro_repo),
+        trm=float(trm_repo),
+        margin_pct=float(margin_repo_pct),
+        piso_margin_pct=float(piso_margin_repo_pct),
+    )
     hr = '<div class="consulta-hr"></div>'
     head = '<div class="consulta-blockhead">Última compra / Inventario</div>'
     comp = _consulta_html_ultima_compra(resumen)
-    inner = top + split + note + hr + head + comp
-    return f'<div class="consulta-sheet-wrap"><div class="consulta-sheet">{inner}</div></div>'
+    inner = top + split + note + repo + hr + head + comp
+    sheet_cls = "consulta-sheet"
+    if sheet_variant == "individual":
+        sheet_cls = "consulta-sheet consulta-sheet--individual"
+    return f'<div class="consulta-sheet-wrap"><div class="{sheet_cls}">{inner}</div></div>'
 
 
 def _to_percent_text(value: float | None) -> str:
@@ -1986,6 +2152,8 @@ BUSINESS_LABELS: Final[dict[str, str]] = {
     "Margen_pct_cot": "Margen % (cot.)",
     "TRM_cot": "TRM (cot.)",
     "P_venta_experto_COP": "P. venta experto (COP)",
+    "Costo_reposicion_COP": "Costo reposición (COP)",
+    "Precio_reposicion_COP": "Precio reposición (COP)",
     "P_piso_inventario_COP": "P. piso inventario (COP)",
     "P_recomendado_COP": "P. recomendado (COP)",
     "Regla_precio": "Regla precio",
@@ -2462,116 +2630,147 @@ def _render_tab_consulta() -> None:
 
 
 def _render_tab_consulta_individual() -> None:
-
-    st.markdown('<p class="consulta-page-lead">Buscar referencia</p>', unsafe_allow_html=True)
-    col_q, col_r, col_u = st.columns([0.65, 2.0, 0.85], gap="small")
-    with col_q:
-        texto_busqueda = st.text_input(
-            "Referencia o descripción",
-            placeholder="Código, alterna o palabra en nombre",
-            key="consulta_txt_busqueda",
-            label_visibility="visible",
-            help="Referencia original, normalizada o texto en descripción.",
-        )
-
-    try:
-        df_refs = buscar_referencias(texto_busqueda) if texto_busqueda else None
-    except Exception as exc:
-        st.error(f"No fue posible leer datos de DuckDB: {exc}")
-        return
-
-    # Clave de widget distinta por texto de búsqueda: al cambiar la consulta (Enter / pegar)
-    # Streamlit no reutiliza el estado del selectbox anterior (evita etiqueta «pegada»).
-    _q = (texto_busqueda or "").strip()
-    _sel_key = (
-        "consulta_coincidencias_"
-        + hashlib.sha256(_q.encode("utf-8")).hexdigest()[:20]
-        if _q
-        else "consulta_coincidencias__vacío"
+    st.markdown(
+        '<div class="consulta-individual-hero" role="region" aria-label="Consulta individual">'
+        '<h2 class="consulta-individual-title">Consulta individual</h2>'
+        "</div>",
+        unsafe_allow_html=True,
     )
 
-    ref_norm: str | None = None
-    with col_r:
-        if df_refs is not None and not df_refs.empty:
-            opciones = {}
-            for _, row in df_refs.iterrows():
-                desc = str(row.get("Descripción", "") or "").strip()
-                if len(desc) > 70:
-                    desc = desc[:67] + "..."
-                etiqueta = f"{row['Referencia_Original']} | {row['Referencia_Normalizada']}"
-                if desc:
-                    etiqueta = f"{etiqueta} | {desc}"
-                opciones[etiqueta] = row["Referencia_Normalizada"]
+    disp_umbral: float = float(st.session_state.get("consulta_origen_disp_umbral", 0.0))
 
-            opts_keys = list(opciones.keys())
-            if _sel_key in st.session_state:
-                _cur = st.session_state[_sel_key]
-                if _cur not in opciones:
-                    del st.session_state[_sel_key]
-            seleccionado = st.selectbox(
-                "Coincidencia",
-                opts_keys,
-                key=_sel_key,
-                help="Elige la fila a analizar.",
-            )
-            ref_norm = opciones[seleccionado]
-        elif texto_busqueda:
-            st.caption("Sin coincidencias")
-        else:
-            st.empty()
-
-    resumen: dict | None = None
-    if ref_norm:
+    with st.container(border=True):
+        st.markdown(
+            '<p class="consulta-individual-section-title">Búsqueda y selección</p>',
+            unsafe_allow_html=True,
+        )
         try:
-            resumen = obtener_resumen_referencia(ref_norm)
-            # Enriquecer consulta individual con la misma lógica de consulta masiva (COALESCE aud/inv).
-            resolver_masivo = getattr(data_access_service, "obtener_resumen_referencias_masivo", None)
-            if resolver_masivo is not None:
-                try:
-                    df_single = resolver_masivo([ref_norm])
-                    if df_single is not None and not df_single.empty:
-                        row_m = df_single.iloc[0].to_dict()
-                        if resumen is None:
-                            resumen = row_m
-                        else:
-                            for k in (
-                                "Costo_Min",
-                                "Costo_Max",
-                                "Existencia_Total",
-                                "_disponible",
-                                "_disp_total",
-                                "Pais_Ultima",
-                                "Tipo_Origen",
-                            ):
-                                v = row_m.get(k)
-                                if v is not None and not (isinstance(v, float) and pd.isna(v)):
-                                    resumen[k] = v
-                            v_tipo_sp = row_m.get("Tipo Origen")
-                            if v_tipo_sp is not None and not (
-                                isinstance(v_tipo_sp, float) and pd.isna(v_tipo_sp)
-                            ):
-                                if not str(resumen.get("Tipo_Origen") or "").strip():
-                                    resumen["Tipo_Origen"] = v_tipo_sp
-                except Exception:
-                    pass
+            col_busq, col_sel = st.columns([1.05, 2.95], vertical_alignment="bottom", gap="medium")
+        except TypeError:
+            col_busq, col_sel = st.columns([1.05, 2.95], gap="medium")
+        with col_busq:
+            texto_busqueda = st.text_input(
+                "Referencia o descripción",
+                placeholder="Código, alterna o palabra en nombre",
+                key="consulta_txt_busqueda",
+                label_visibility="visible",
+                help="Referencia original, normalizada o texto en descripción.",
+            )
+
+        try:
+            df_refs = buscar_referencias(texto_busqueda) if texto_busqueda else None
         except Exception as exc:
-            st.error(f"No fue posible consultar la referencia: {exc}")
+            st.error(f"No fue posible leer datos de DuckDB: {exc}")
             return
 
-    with col_u:
+        _q = (texto_busqueda or "").strip()
+        _sel_key = (
+            "consulta_coincidencias_"
+            + hashlib.sha256(_q.encode("utf-8")).hexdigest()[:20]
+            if _q
+            else "consulta_coincidencias__vacío"
+        )
+
+        ref_norm: str | None = None
+        with col_sel:
+            if df_refs is not None and not df_refs.empty:
+                opciones = {}
+                for _, row in df_refs.iterrows():
+                    desc = str(row.get("Descripción", "") or "").strip()
+                    if len(desc) > 70:
+                        desc = desc[:67] + "..."
+                    etiqueta = f"{row['Referencia_Original']} | {row['Referencia_Normalizada']}"
+                    if desc:
+                        etiqueta = f"{etiqueta} | {desc}"
+                    opciones[etiqueta] = row["Referencia_Normalizada"]
+
+                opts_keys = list(opciones.keys())
+                if _sel_key in st.session_state:
+                    _cur = st.session_state[_sel_key]
+                    if _cur not in opciones:
+                        del st.session_state[_sel_key]
+                seleccionado = st.selectbox(
+                    "Coincidencia",
+                    opts_keys,
+                    key=_sel_key,
+                    help="Elige la fila a analizar.",
+                )
+                ref_norm = opciones[seleccionado]
+            elif texto_busqueda:
+                st.caption("Sin coincidencias")
+            else:
+                st.caption("Escribe para ver coincidencias.")
+
+        resumen: dict | None = None
+        df_masivo_one: pd.DataFrame | None = None
+        if ref_norm:
+            try:
+                resumen = obtener_resumen_referencia(ref_norm)
+                resolver_masivo = getattr(data_access_service, "obtener_resumen_referencias_masivo", None)
+                if resolver_masivo is not None:
+                    try:
+                        df_single = resolver_masivo([ref_norm])
+                        if df_single is not None and not df_single.empty:
+                            df_masivo_one = df_single
+                            row_m = df_single.iloc[0].to_dict()
+                            if resumen is None:
+                                resumen = row_m
+                            else:
+                                for k in (
+                                    "Costo_Min",
+                                    "Costo_Max",
+                                    "Existencia_Total",
+                                    "_disponible",
+                                    "_disp_total",
+                                    "Pais_Ultima",
+                                    "Tipo_Origen",
+                                ):
+                                    v = row_m.get(k)
+                                    if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                                        resumen[k] = v
+                                v_tipo_sp = row_m.get("Tipo Origen")
+                                if v_tipo_sp is not None and not (
+                                    isinstance(v_tipo_sp, float) and pd.isna(v_tipo_sp)
+                                ):
+                                    if not str(resumen.get("Tipo_Origen") or "").strip():
+                                        resumen["Tipo_Origen"] = v_tipo_sp
+                    except Exception:
+                        pass
+            except Exception as exc:
+                st.error(f"No fue posible consultar la referencia: {exc}")
+                return
+
         if ref_norm and resumen:
-            max_disp = _consulta_max_disp_para_slider(resumen)
-            disp_umbral = st.slider(
-                "Umbral de disponibilidad (mejor precio)",
-                min_value=0.0,
-                max_value=float(max_disp),
-                step=0.5,
-                key="consulta_origen_disp_umbral",
-                help=(
-                    "Solo se comparan regiones con stock estrictamente mayor a este valor; entre ellas, "
-                    "se resalta la de menor precio. Si ninguna supera el umbral, no hay «Mejor precio»."
-                ),
+            st.markdown(
+                '<p class="consulta-individual-section-title consulta-individual-section-title--muted">'
+                "Umbral de disponibilidad (mejor precio por región)</p>",
+                unsafe_allow_html=True,
             )
+            try:
+                c_hint, c_um = st.columns([1.15, 1.85], vertical_alignment="center", gap="large")
+            except TypeError:
+                c_hint, c_um = st.columns([1.15, 1.85], gap="large")
+            with c_hint:
+                st.markdown(
+                    '<p class="consulta-individual-disp-hint">Solo compiten orígenes con stock '
+                    "<strong>estrictamente mayor</strong> al umbral. Si ninguno cumple, no hay «mejor precio» "
+                    "válido hasta que subas el umbral o revises disponibilidad.</p>",
+                    unsafe_allow_html=True,
+                )
+            with c_um:
+                max_disp = _consulta_max_disp_para_slider(resumen)
+                disp_umbral = st.slider(
+                    "Umbral (unidades)",
+                    min_value=0.0,
+                    max_value=float(max_disp),
+                    step=0.5,
+                    key="consulta_origen_disp_umbral",
+                    help=(
+                        "Solo se comparan regiones con stock estrictamente mayor a este valor; entre ellas, "
+                        "se resalta la de menor precio. Si ninguna supera el umbral, no hay «Mejor precio»."
+                    ),
+                    label_visibility="visible",
+                )
 
     if texto_busqueda and (df_refs is None or df_refs.empty):
         st.warning("No se encontraron coincidencias por referencia ni por descripción.")
@@ -2588,14 +2787,48 @@ def _render_tab_consulta_individual() -> None:
     refs_alternas = str(resumen.get("RefsAlternas", "") or "").strip()
     ref_original = str(resumen.get("Referencia_Original", "") or "").strip().upper()
 
+    with st.container(border=True):
+        st.markdown(
+            '<p class="consulta-individual-section-title">Parámetros de reposición (COP)</p>',
+            unsafe_allow_html=True,
+        )
+        _render_consulta_individual_reposicion_sliders()
+
+    trm_repo = float(st.session_state.get("consulta_individual_cot_trm", 4200))
+    margin_repo = float(st.session_state.get("consulta_individual_cot_margen", 25))
+    piso_margin_repo = float(st.session_state.get("consulta_individual_cot_piso_margen", 40))
+    factor_usabr_repo = float(st.session_state.get("consulta_individual_factor_usabr", 1.35))
+    factor_euro_repo = float(st.session_state.get("consulta_individual_factor_euro", 1.55))
+
     st.markdown(
-        _consulta_build_sheet_html(resumen, refs_alternas, ref_original, float(disp_umbral)),
+        '<p class="consulta-individual-section-title">Ficha de referencia</p>',
         unsafe_allow_html=True,
+    )
+    st.markdown(
+        _consulta_build_sheet_html(
+            resumen,
+            refs_alternas,
+            ref_original,
+            float(disp_umbral),
+            df_masivo_one=df_masivo_one,
+            trm_repo=trm_repo,
+            margin_repo_pct=margin_repo,
+            piso_margin_repo_pct=piso_margin_repo,
+            factor_usabr_repo=factor_usabr_repo,
+            factor_euro_repo=factor_euro_repo,
+            sheet_variant="individual",
+        ),
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "**Umbral de disponibilidad** (primer bloque) define qué orígenes compiten por el USD base. "
+        "**TRM, márgenes y factores** están en el bloque de parámetros de reposición."
     )
 
     st.markdown(
-        '<div class="consulta-ventas-wrap"><div class="consulta-ventas-head">'
-        "Existencia por bodega (Siesa)</div></div>",
+        '<div class="consulta-ventas-wrap">'
+        '<p class="consulta-individual-section-title consulta-individual-section-title--muted">'
+        "Inventario por bodega (Siesa)</p></div>",
         unsafe_allow_html=True,
     )
     st.caption(
@@ -2632,13 +2865,23 @@ def _render_tab_consulta_individual() -> None:
             df_bod_disp["Precio lista 09"] = pd.to_numeric(
                 df_bod_disp["Precio lista 09"], errors="coerce"
             ).map(_fmt_money_cop_local)
+        _cfg_bod: dict[str, st.column_config.Column] = {}
         if "Margen" in df_bod_disp.columns:
             _mb = pd.to_numeric(df_bod_disp["Margen"], errors="coerce")
-            if _mb.notna().any() and float(_mb.abs().max()) <= 2.0:
-                df_bod_disp["Margen"] = _mb.map(lambda x: f"{float(x):.2%}" if pd.notna(x) else "—")
-            else:
-                df_bod_disp["Margen"] = _mb.map(lambda x: f"{float(x):.2f}%" if pd.notna(x) else "—")
-        st.dataframe(df_bod_disp, width="stretch", hide_index=True)
+            if _mb.notna().any():
+                mx = float(_mb.abs().max())
+                if mx <= 2.0:
+                    _mb = _mb * 100.0
+            df_bod_disp["Margen"] = _mb
+            _cfg_bod["Margen"] = st.column_config.NumberColumn(
+                "Margen",
+                format="%.2f%%",
+                help="Porcentaje numérico (reporte Siesa); permite ordenar por valor.",
+            )
+        _bod_kw: dict = {"width": "stretch", "hide_index": True}
+        if _cfg_bod:
+            _bod_kw["column_config"] = _cfg_bod
+        st.dataframe(df_bod_disp, **_bod_kw)
 
     try:
         ventas = obtener_ultimas_ventas(ref_norm, limite=20)
@@ -2652,8 +2895,10 @@ def _render_tab_consulta_individual() -> None:
         _v_min, _v_max = None, None
     _help_uv = html.escape(_consulta_help_ultimas_ventas(_v_min, _v_max), quote=True)
     st.markdown(
-        '<div class="consulta-ventas-wrap"><div class="consulta-ventas-head-row">'
-        '<span class="consulta-ventas-head">Últimas ventas</span>'
+        '<div class="consulta-ventas-wrap">'
+        '<p class="consulta-individual-section-title consulta-individual-section-title--muted">'
+        "Últimas ventas</p>"
+        '<div class="consulta-ventas-head-row">'
         f'<span class="consulta-kpi-help-icon" title="{_help_uv}" '
         f'aria-label="{_help_uv}" role="img">i</span>'
         "</div></div>",
@@ -2687,10 +2932,16 @@ def _render_tab_consulta_individual() -> None:
                 v_disp[_col] = pd.to_numeric(v_disp[_col], errors="coerce").map(_fmt_money_cop_local)
         if "Margen" in v_disp.columns:
             marg_s = pd.to_numeric(v_disp["Margen"], errors="coerce")
-            if marg_s.notna().any() and float(marg_s.abs().max()) <= 2.0:
-                v_disp["Margen"] = marg_s.map(lambda x: f"{float(x):.2%}" if pd.notna(x) else "—")
-            else:
-                v_disp["Margen"] = marg_s.map(lambda x: f"{float(x):.2f}%" if pd.notna(x) else "—")
+            if marg_s.notna().any():
+                mx_m = float(marg_s.abs().max())
+                if mx_m <= 2.0:
+                    marg_s = marg_s * 100.0
+            v_disp["Margen"] = marg_s
+            _cfg_ult_ventas["Margen"] = st.column_config.NumberColumn(
+                "Margen",
+                format="%.2f%%",
+                help="Porcentaje numérico; ordenación por valor.",
+            )
         _uv_kw: dict = {"width": "stretch", "hide_index": True}
         if _cfg_ult_ventas:
             _uv_kw["column_config"] = _cfg_ult_ventas
@@ -3028,6 +3279,8 @@ def _consulta_masiva_cotizador_df(
 ) -> pd.DataFrame:
     """
     Cotización COP a partir del mejor USD (ya lleva factor BR/USA/EUR de la consulta masiva).
+    - Costo_reposicion_COP = USD_base × TRM (sin margen de venta).
+    - Precio_reposicion_COP = USD_base × TRM / (1 − margen) (= P_venta_experto_COP cuando hay USD base).
     - P_experto = USD_base × TRM / (1 − margen), margen en % sobre precio de venta.
     - P_piso inventario = Costo_Min / (1 - X%), con X configurable.
     - P_recomendado = max(P_experto, P_piso) cuando ambos existen (salvo bloqueo por alertas).
@@ -3145,6 +3398,15 @@ def _consulta_masiva_cotizador_df(
 
         p_rec_final = None if anular_rec else p_rec
 
+        costo_repo_cop: float | None = None
+        precio_repo_cop: float | None = None
+        if p_adj is not None and pd.notna(p_adj) and float(p_adj) > 0:
+            costo_repo_cop = float(p_adj) * trm_f
+            if p_expert is not None:
+                precio_repo_cop = float(p_expert)
+            else:
+                precio_repo_cop = float(p_adj) * trm_f / denom
+
         rows.append(
             {
                 "Referencia_Entrada": row.get("Referencia_Entrada"),
@@ -3166,6 +3428,8 @@ def _consulta_masiva_cotizador_df(
                 "Ult_venta_guia": float(ult_venta) if ult_venta is not None and pd.notna(ult_venta) else None,
                 "Margen_pct_cot": margin_pct,
                 "TRM_cot": trm_f,
+                "Costo_reposicion_COP": costo_repo_cop,
+                "Precio_reposicion_COP": precio_repo_cop,
                 "P_venta_experto_COP": p_expert,
                 "P_piso_inventario_COP": p_piso,
                 "P_recomendado_COP": p_rec_final,
@@ -3294,6 +3558,192 @@ def _cot_inv_justo_txt_to_slider() -> None:
         st.session_state["consulta_masiva_cot_inv_justo_txt"] = str(
             int(st.session_state["consulta_masiva_cot_inv_justo"])
         )
+
+
+def _consulta_individual_seed_repo_session_state() -> None:
+    """Claves propias de la pestaña individual (evita colisión de widgets con consulta masiva en el mismo rerun)."""
+    _defaults: tuple[tuple[str, object], ...] = (
+        ("consulta_individual_cot_margen", 25),
+        ("consulta_individual_cot_margen_txt", "25"),
+        ("consulta_individual_cot_trm", 4200),
+        ("consulta_individual_cot_trm_txt", "4200"),
+        ("consulta_individual_cot_piso_margen", 40),
+        ("consulta_individual_cot_piso_margen_txt", "40"),
+        ("consulta_individual_factor_usabr", 1.35),
+        ("consulta_individual_factor_usabr_num", 1.35),
+        ("consulta_individual_factor_euro", 1.55),
+        ("consulta_individual_factor_euro_num", 1.55),
+    )
+    for k, v in _defaults:
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
+def _cot_ind_margen_slider_to_txt() -> None:
+    st.session_state["consulta_individual_cot_margen_txt"] = str(
+        int(st.session_state["consulta_individual_cot_margen"])
+    )
+
+
+def _cot_ind_margen_txt_to_slider() -> None:
+    try:
+        v = float(str(st.session_state["consulta_individual_cot_margen_txt"]).replace(",", ".").strip())
+        v = min(max(v, 10.0), 50.0)
+        st.session_state["consulta_individual_cot_margen"] = int(round(v))
+    except (ValueError, TypeError):
+        st.session_state["consulta_individual_cot_margen_txt"] = str(
+            int(st.session_state["consulta_individual_cot_margen"])
+        )
+
+
+def _cot_ind_trm_slider_to_txt() -> None:
+    st.session_state["consulta_individual_cot_trm_txt"] = str(int(st.session_state["consulta_individual_cot_trm"]))
+
+
+def _cot_ind_trm_txt_to_slider() -> None:
+    try:
+        v = float(str(st.session_state["consulta_individual_cot_trm_txt"]).replace(",", ".").strip())
+        v = min(max(v, 3500.0), 6000.0)
+        v = round(v / 10.0) * 10.0
+        st.session_state["consulta_individual_cot_trm"] = int(v)
+    except (ValueError, TypeError):
+        st.session_state["consulta_individual_cot_trm_txt"] = str(int(st.session_state["consulta_individual_cot_trm"]))
+
+
+def _cot_ind_piso_slider_to_txt() -> None:
+    st.session_state["consulta_individual_cot_piso_margen_txt"] = str(
+        int(st.session_state["consulta_individual_cot_piso_margen"])
+    )
+
+
+def _cot_ind_piso_txt_to_slider() -> None:
+    try:
+        v = float(str(st.session_state["consulta_individual_cot_piso_margen_txt"]).replace(",", ".").strip())
+        v = min(max(v, 5.0), 80.0)
+        st.session_state["consulta_individual_cot_piso_margen"] = int(round(v))
+    except (ValueError, TypeError):
+        st.session_state["consulta_individual_cot_piso_margen_txt"] = str(
+            int(st.session_state["consulta_individual_cot_piso_margen"])
+        )
+
+
+def _render_consulta_individual_reposicion_sliders() -> None:
+    """Sliders de reposición solo en consulta individual (claves distintas a la pestaña en lote)."""
+    _consulta_individual_seed_repo_session_state()
+
+    def _sync_usabr_slider_to_num_ci() -> None:
+        st.session_state["consulta_individual_factor_usabr_num"] = float(
+            st.session_state["consulta_individual_factor_usabr"]
+        )
+
+    def _sync_usabr_num_to_slider_ci() -> None:
+        st.session_state["consulta_individual_factor_usabr"] = float(
+            st.session_state["consulta_individual_factor_usabr_num"]
+        )
+
+    def _sync_euro_slider_to_num_ci() -> None:
+        st.session_state["consulta_individual_factor_euro_num"] = float(
+            st.session_state["consulta_individual_factor_euro"]
+        )
+
+    def _sync_euro_num_to_slider_ci() -> None:
+        st.session_state["consulta_individual_factor_euro"] = float(
+            st.session_state["consulta_individual_factor_euro_num"]
+        )
+
+    with st.expander("Sliders y entradas manuales (TRM, márgenes, factores)", expanded=True):
+        st.caption(
+            "Definen **costo reposición** (USD base × TRM) y **precio reposición** (USD base × TRM ÷ (1 − margen %)). "
+            "Son independientes del cotizador en **Consulta en lote** (allí tienes sus propios controles)."
+        )
+        c_mg, c_trm, c_piso = st.columns(3)
+        with c_mg:
+            st.caption("**Margen objetivo**")
+            st.slider(
+                "Margen objetivo sobre venta (%)",
+                min_value=10,
+                max_value=50,
+                step=1,
+                key="consulta_individual_cot_margen",
+                help="Sobre precio de venta; divisor = (1 − margen/100).",
+                on_change=_cot_ind_margen_slider_to_txt,
+            )
+            st.text_input(
+                "Margen objetivo (%) manual",
+                key="consulta_individual_cot_margen_txt",
+                on_change=_cot_ind_margen_txt_to_slider,
+            )
+        with c_trm:
+            st.caption("**TRM de cálculo**")
+            st.slider(
+                "TRM (COP por USD)",
+                min_value=3500,
+                max_value=6000,
+                step=10,
+                key="consulta_individual_cot_trm",
+                on_change=_cot_ind_trm_slider_to_txt,
+            )
+            st.text_input(
+                "TRM manual",
+                key="consulta_individual_cot_trm_txt",
+                on_change=_cot_ind_trm_txt_to_slider,
+            )
+        with c_piso:
+            st.caption("**Piso por inventario**")
+            st.slider(
+                "Margen piso inventario X (%)",
+                min_value=5,
+                max_value=80,
+                step=1,
+                key="consulta_individual_cot_piso_margen",
+                help="Usado en el cálculo interno de cotización (P_piso = Costo_Min / (1 − X/100)).",
+                on_change=_cot_ind_piso_slider_to_txt,
+            )
+            st.text_input(
+                "Margen piso inventario X (%) manual",
+                key="consulta_individual_cot_piso_margen_txt",
+                on_change=_cot_ind_piso_txt_to_slider,
+            )
+
+        c_f1, c_f2 = st.columns(2)
+        with c_f1:
+            st.caption("**Factor importación USA/BR**")
+            st.slider(
+                "Factor importación USA/BR",
+                min_value=1.2,
+                max_value=1.5,
+                step=0.01,
+                key="consulta_individual_factor_usabr",
+                on_change=_sync_usabr_slider_to_num_ci,
+                help="Multiplica Precio Brasil y Precio USA para elegir mejor origen y USD base.",
+            )
+            st.number_input(
+                "Valor (USA/BR)",
+                min_value=1.2,
+                max_value=1.5,
+                step=0.01,
+                key="consulta_individual_factor_usabr_num",
+                on_change=_sync_usabr_num_to_slider_ci,
+            )
+        with c_f2:
+            st.caption("**Factor importación EURO**")
+            st.slider(
+                "Factor importación EURO",
+                min_value=1.4,
+                max_value=1.7,
+                step=0.01,
+                key="consulta_individual_factor_euro",
+                on_change=_sync_euro_slider_to_num_ci,
+                help="Multiplica Precio Europa.",
+            )
+            st.number_input(
+                "Valor (EURO)",
+                min_value=1.4,
+                max_value=1.7,
+                step=0.01,
+                key="consulta_individual_factor_euro_num",
+                on_change=_sync_euro_num_to_slider_ci,
+            )
 
 
 def _render_tab_consulta_masiva() -> None:
@@ -4118,6 +4568,8 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
             "P_venta_experto_COP",
             "P_piso_inventario_COP",
             "USD_base",
+            "Costo_reposicion_COP",
+            "Precio_reposicion_COP",
             "USD_base_unidades_disp",
             "Costo_Min",
             "Existencia_Total",
@@ -4155,7 +4607,8 @@ Si el **score de riesgo** es alto o **no hay ni USD base ni costo mín.**, el es
         st.caption(
             "`Fuente USD` indica de dónde salió el `USD base (cotiz.)`: "
             "`Mejor_Precio_Ajustado` (origen BR/USA/EUR con factor) o, si no hubo origen válido, "
-            "respaldo `Ult. Fecha Compra / lista (USD, ajustado)` según `País últ. compra`."
+            "respaldo `Ult. Fecha Compra / lista (USD, ajustado)` según `País últ. compra`. "
+            "**Costo reposición (COP)** = USD base × TRM; **Precio reposición (COP)** = USD base × TRM ÷ (1 − margen %)."
         )
         csv_out = df_out.to_csv(index=False).encode("utf-8-sig")
         csv_cot_bytes = df_cot.to_csv(index=False).encode("utf-8-sig")
