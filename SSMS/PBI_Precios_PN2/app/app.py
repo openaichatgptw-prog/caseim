@@ -3258,7 +3258,7 @@ def _cot_banda_valor_inventario(valor_stock_cop: float, um_bajo_cop: float, um_a
 def _cot_merge_precio_repo_y_piso(
     p_expert: float,
     p_piso_rec: float | None,
-    banda: str,
+    banda: str | None,
     *,
     pct_tol_piso_sobre_repo_baja: float,
     prefijo_regla: str,
@@ -3491,12 +3491,10 @@ def _consulta_masiva_cotizador_df(
         valor_stock_cop: float | None = None
         if exist_f > 0 and costo_unit_inv is not None:
             valor_stock_cop = round(exist_f * float(costo_unit_inv), 2)
-        banda = "media"
-        if inv_incomparable:
-            banda = "media"
-        elif valor_stock_cop is not None:
+        banda: str | None = None
+        if valor_stock_cop is not None:
             banda = _cot_banda_valor_inventario(float(valor_stock_cop), v_baj, v_alt)
-        banda_lbl = str(banda)
+        banda_lbl = banda
 
         tiene_usd = p_adj is not None and pd.notna(p_adj)
         tiene_costo = costo_min is not None and pd.notna(costo_min) and float(costo_min) > 0
