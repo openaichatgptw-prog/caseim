@@ -2982,7 +2982,8 @@ def _render_tab_consulta_individual() -> None:
             df_bod_disp["Instalación"] = df_bod_disp["Instalación"].map(_fmt_consulta_entero)
         for _c in ("Existencia", "Cant. disponible"):
             if _c in df_bod_disp.columns:
-                df_bod_disp[_c] = pd.to_numeric(df_bod_disp[_c], errors="coerce").map(_fmt_consulta_entero)
+                # Numérico real (no formatear a str): el grid de Streamlit ordena por valor.
+                df_bod_disp[_c] = pd.to_numeric(df_bod_disp[_c], errors="coerce")
         if "Costo prom. unit. (inst.)" in df_bod_disp.columns:
             df_bod_disp["Costo prom. unit. (inst.)"] = pd.to_numeric(
                 df_bod_disp["Costo prom. unit. (inst.)"], errors="coerce"
@@ -2992,6 +2993,13 @@ def _render_tab_consulta_individual() -> None:
                 df_bod_disp["Precio lista 09"], errors="coerce"
             ).map(_fmt_money_cop_local)
         _cfg_bod: dict[str, st.column_config.Column] = {}
+        for _ec in ("Existencia", "Cant. disponible"):
+            if _ec in df_bod_disp.columns:
+                _cfg_bod[_ec] = st.column_config.NumberColumn(
+                    _ec,
+                    format="%,.0f",
+                    help="Cantidad entera; ordenación numérica.",
+                )
         if "Margen" in df_bod_disp.columns:
             _mb = pd.to_numeric(df_bod_disp["Margen"], errors="coerce")
             if _mb.notna().any():
@@ -4487,6 +4495,11 @@ def _margen_df_con_codigo_referencia(df: pd.DataFrame, margen_col: str, precio_c
         df_margen[margen_col] = pd.to_numeric(df_margen[margen_col], errors="coerce")
     if precio_col in df_margen.columns:
         df_margen[precio_col] = pd.to_numeric(df_margen[precio_col], errors="coerce")
+    # SQL_ATRIBUTOS / dim: f753_dato_numero/100 → fracción (p. ej. 0,40); la grilla «%.2f%%» espera puntos porcentuales.
+    if "Margen_Objetivo_Sistema" in df_margen.columns:
+        df_margen["Margen_Objetivo_Sistema"] = (
+            pd.to_numeric(df_margen["Margen_Objetivo_Sistema"], errors="coerce") * 100.0
+        )
     return df_margen
 
 
@@ -5294,6 +5307,9 @@ def _auditoria_inicializar_dataframe(df: pd.DataFrame) -> dict:
         _c = lower_map.get(_k)
         if _c and _c in df.columns:
             df[_c] = pd.to_numeric(df[_c], errors="coerce") * 100.0
+    _mo = lower_map.get("margen_objetivo_sistema")
+    if _mo and _mo in df.columns:
+        df[_mo] = pd.to_numeric(df[_mo], errors="coerce") * 100.0
     sem_col = lower_map.get("semaforo_variacion")
     ref_col = lower_map.get("referencia")
     desc_col = lower_map.get("descripcion") or lower_map.get("descripción")
