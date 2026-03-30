@@ -34,7 +34,7 @@ La app espera las bases y `Config.ini` en **`PBI_Precios_PN2`** (un nivel por en
 
 | Pestaña | Contenido resumido |
 |---------|-------------------|
-| **Consulta referencias** | Sub-pestañas **Consulta individual** (búsqueda, ficha HTML, existencia SIESA, últimas ventas, KPIs costo/precio reposición con TRM y margen de pantalla) y **Consulta en lote (CSV)** (catálogo / CSV / referencia rápida, mejor origen, **cotizador COP**, alertas, descargas). |
+| **Consulta referencias** | Sub-pestañas **Consulta individual** (búsqueda, ficha HTML, existencia SIESA, últimas ventas, KPIs costo/precio reposición con TRM y margen de pantalla) y **Consulta en lote (CSV)** (catálogo / CSV / referencia rápida, mejor origen, tabla **Columnas para cotizar**, descargas CSV). |
 | **Resumen de ventas** | Tablero y detalle desde `ventas_raw` (pipeline 02). |
 | **Reporte margen SIESA** | KPIs y tablas desde `margen_siesa_raw` (SQL 001). |
 | **Auditoría referencias** | Vista principal y reportes gráficos desde auditoría (SQL 003 + lógica en app). |
@@ -43,39 +43,22 @@ La app espera las bases y `Config.ini` en **`PBI_Precios_PN2`** (un nivel por en
 
 ---
 
-## Cotizador (consulta masiva): COP, columnas y alertas
+## Consulta en lote: «Columnas para cotizar»
 
-El **USD base** alimenta el cotizador: **Mejor precio ajustado** del cruce, o si falta **último USD lista × factor país** (BR/USA, Europa u otros). Ese valor ya viene **ajustado**; sobre él solo se aplican **TRM** y **margen** de los sliders de la pantalla.
+En **Consulta en lote (CSV)**, después de la tabla principal, la sección **Columnas para cotizar** exporta un subconjunto en **orden fijo** (alineado a la hoja de trabajo / Power BI): identificación de referencias (entrada, original, normalizada, cruce, alternas, descripción) → **estado y tipo de coincidencia** → precios BR/USA/EUR y prorrateo → disponibilidades → **USD lista** y **mejor precio ajustado** / mejor origen → tipo/disponible → costos mín/máx → **brecha** mín/máx inventario → valor líquido lista y existencias → **reposición y piso** (COP) y brechas → lista 09 y brecha vs reposición → última venta y fechas → lista OC → **última compra (auditoría)**.
 
-| Concepto (COP) | Fórmula |
-|----------------|---------|
-| Costo reposición (importación, sin margen de venta) | USD base × TRM |
-| Precio reposición / P experto (*m* = margen objetivo sobre venta) | USD base × TRM ÷ (1 − *m*) |
-| Piso inventario | Costo_Min ÷ (1 − *X*) |
-| Precio recomendado | max(P experto, P piso) cuando aplica: **prioriza reposición con margen**; el **piso inventario** solo eleva el precio cuando el costo de stock obliga a no vender por debajo de esa lógica de importación. Se **anula** si el **score** entra en revisión o bloqueo (ver abajo) |
+Las columnas **Costo reposición**, **Precio reposición**, **P. piso inventario**, **Valor inventario** y las **brechas %** se calculan al exportar usando parámetros **parametrizables**:
 
-**Score → estado** (suma de puntos por señales; columna **Score cotización** en la tabla):
+| Parámetro | Dónde se define |
+|-----------|-----------------|
+| TRM (COP/USD), margen venta %, margen piso % | Por defecto en **`Config.ini`** → sección **`[COLUMNAS_PARA_COTIZAR]`** (`trm`, `margen_venta_pct`, `margen_piso_pct`). En la app: expander **«Parámetros de exportación (TRM y márgenes %)»** (persisten en la sesión mientras uses la app). |
+| Factores importación USA/BR y EUR | Sliders **Factor importación USA/BR** y **Factor importación EURO** del mismo bloque de consulta masiva (mismo criterio que el **mejor origen**). |
 
-| Score | Estado | P. recomendado |
-|------:|--------|----------------|
-| 0 | OK | Visible |
-| 1 | OK (con observaciones) | Visible |
-| 2–4 | Revisar manual | **Anulado** (siguen experto, piso, alertas) |
-| ≥ 5 | Precio no calculable automáticamente | Anulado |
-| (sin USD base ni costo mín.) | Precio no calculable automáticamente | Anulado |
+Si falta `[COLUMNAS_PARA_COTIZAR]` en el INI, se usan los mismos valores numéricos que antes (4200 / 25 / 40) hasta que edites el archivo o la pantalla.
 
-**Lista 09 vs precio reposición** se exporta como **Lista 09 vs repo (ref. urg. %)**: referencia de **qué tan desactualizada** está la lista frente a reposición; **no suma al score** ni condiciona el precio recomendado.
+**Costo reposición (COP)** = USD base (mejor precio ajustado o, si no hay, último USD lista × factor país) × TRM. **Precio reposición (COP)** = mismo costo ÷ (1 − margen venta). **P. piso inventario** = Costo_Min ÷ (1 − margen piso) cuando hay existencias y costo mínimo. **Valor inventario** = Existencia_Total × Costo_Min (aproximación operativa). Las brechas % usan |A − B| ÷ max(A, B).
 
-**Mercado vs reposición** (señal de score): solo **últ. venta** y **últ. compra (COP)** (`Precio_COP_Ultima`), con brecha relativa (|A − B| ÷ max(A, B)):
-
-- **Últ. venta** → **precio reposición** (= P experto). Requiere USD base.
-- **Últ. compra (COP)** → **USD base × TRM** (sin margen de venta).
-
-Si la **mayor** de las dos brechas disponibles supera el umbral del slider, suma **+2**. Si **venta y compra** existen y **ambas** superan el umbral, suma **+1** adicional.
-
-La exportación incluye **lista ref. urg.**, **brecha mercado máx. (%)** (solo venta/compra), **mercado: guías > umbral** y **margen implícito vs costo mín. (%)** sobre el precio calculado.
-
-**Otras señales del score** (resumen): **costo mín. vs máx.** (slider %); **dispersión entre orígenes USD** (sliders moderado/crítico); **experto vs piso** cuando el recomendado es el piso (slider: % del piso por debajo del cual el experto dispara alerta); **piso vs precio reposición** cuando el recomendado es **P experto** (slider %; brecha relativa entre piso inventario y precio reposición; defecto 20 %; **+2** si supera el umbral); falta total de USD base y costo mín. **La existencia baja no suma score**. Ver `_consulta_masiva_cotizador_alertas` en `app.py`.
+Puedes descargar **todo el resultado de la consulta** o solo **Columnas para cotizar** (CSV con ese orden y columnas).
 
 ---
 
@@ -90,5 +73,5 @@ La exportación incluye **lista ref. urg.**, **brecha mercado máx. (%)** (solo 
 | Artefacto | Ubicación típica |
 |-----------|------------------|
 | DuckDB maestro / lectura | `PBI_Precios_PN2/pipeline.duckdb`, `pipeline_read.duckdb` |
-| Factores BR/USA/EUR y rutas | `PBI_Precios_PN2/Config.ini` |
+| Factores BR/USA/EUR, rutas y `[COLUMNAS_PARA_COTIZAR]` | `PBI_Precios_PN2/Config.ini` |
 | Pipelines Python | `01_Mejora_pipeline_precios_chnV21.py`, `02_ventas_precios_cnhV2.py`, `03_Maestro_historico.py` (raíz `PBI_Precios_PN2`) |

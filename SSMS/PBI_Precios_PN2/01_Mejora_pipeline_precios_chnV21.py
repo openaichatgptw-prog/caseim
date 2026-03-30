@@ -38,6 +38,12 @@ FECHA       = datetime.now().strftime("%Y%m%d")
 EXCEL_PREC  = Path(config["ARCHIVOS"]["excel_precios"])
 EXCEL_DISP  = Path(config["ARCHIVOS"]["excel_disponibilidad"])
 DUCKDB_PATH = Path(os.getenv("PIPELINE_DUCKDB_PATH", str(BASE_DIR / config["SALIDA"]["duckdb"])))
+# Nombres de hoja esperados (sobrescribibles en [ARCHIVOS] si el libro cambió de títulos).
+HOJA_USA = (config.get("ARCHIVOS", "hoja_usa", fallback="USA") or "USA").strip()
+HOJA_BR = (config.get("ARCHIVOS", "hoja_br", fallback="BRASIL") or "BRASIL").strip()
+HOJA_EUR = (config.get("ARCHIVOS", "hoja_eur", fallback="EUR") or "EUR").strip()
+HOJA_LISTA_AGCS = (config.get("ARCHIVOS", "hoja_lista_agcs", fallback="LISTA AGCS") or "LISTA AGCS").strip()
+SQL_LOGIN_TIMEOUT = int((config.get("SQLSERVER", "login_timeout", fallback="60") or "60").strip())
 CSV_OUT     = BASE_DIR / config["SALIDA"]["csv"]
 EXCEL_OUT   = BASE_DIR / config["SALIDA"]["excel_salida"].replace("{fecha}", FECHA)
 SERVER      = config["SQLSERVER"]["server"]
@@ -364,9 +370,65 @@ WHERE  r.f124_id_cia = 1
   AND  i.f120_id_cia = 1
 """
 
+# Sinónimos comunes si el libro renombró hojas (solo igualdad insensible a mayúsculas).
+_HOJA_SINONIMOS: dict[str, tuple[str, ...]] = {
+    "USA": ("US",),
+    "BRASIL": ("BRAZIL",),
+    "EUR": ("EURO", "EUROPA"),
+    "LISTA AGCS": ("AGCS",),
+}
+
+
+def _resolver_hoja_excel(path: Path, sheet_solicitada: str) -> str:
+    """
+    Devuelve el nombre exacto de la hoja en el libro.
+    Orden: nombre literal → igualdad ignorando mayúsculas/espacios → sinónimos conocidos.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"No existe el archivo Excel: {path}")
+    try:
+        nombres = list(pd.ExcelFile(path).sheet_names)
+    except Exception as e:
+        raise RuntimeError(f"No se pudieron listar las hojas de {path}: {e}") from e
+
+    if not nombres:
+        raise ValueError(f"El archivo no tiene hojas: {path}")
+
+    s0 = sheet_solicitada.strip()
+    if s0 in nombres:
+        return s0
+
+    low = s0.lower()
+    iguales = [n for n in nombres if n.strip().lower() == low]
+    if len(iguales) == 1:
+        return iguales[0]
+    if len(iguales) > 1:
+        raise ValueError(
+            f"Varias hojas coinciden con '{sheet_solicitada}' en {path.name}: {iguales}"
+        )
+
+    clave = s0.upper()
+    for syn in _HOJA_SINONIMOS.get(clave, ()):
+        sl = syn.strip().lower()
+        for n in nombres:
+            if n.strip().lower() == sl:
+                return n
+
+    raise ValueError(
+        f"No hay hoja que coincida con '{sheet_solicitada}' en {path.name}.\n"
+        f"  Hojas disponibles: {nombres}\n"
+        f"  Ajusta el nombre en Excel o en config.ini [ARCHIVOS] "
+        f"(p. ej. hoja_usa = <nombre exacto de la hoja>)."
+    )
+
 
 def leer_hoja(path, sheet, cols):
-    df = pl.read_excel(path, sheet_name=sheet, has_header=True)
+    path = Path(path)
+    sheet_real = _resolver_hoja_excel(path, sheet)
+    if sheet_real != sheet.strip():
+        print(f"    [INFO] Hoja configurada '{sheet}' → usando '{sheet_real}'")
+    df = pl.read_excel(path, sheet_name=sheet_real, has_header=True)
     n  = df.columns
     a0 = next(iter(cols))
     return (
@@ -425,10 +487,10 @@ def paso1_precios_excel():
     """
     print("Paso 1 — Leyendo precios y disponibilidades desde Excel...")
 
-    df_usa  = leer_hoja(EXCEL_PREC, "USA",    {"r": 0, "precio_usa": 8})
-    df_br   = leer_hoja(EXCEL_PREC, "BRASIL", {"r": 0, "precio_br":  8})
-    df_eur  = leer_hoja(EXCEL_PREC, "EUR",    {"r": 0, "precio_eur": 8})
-    df_disp = leer_hoja(EXCEL_DISP, "LISTA AGCS",
+    df_usa  = leer_hoja(EXCEL_PREC, HOJA_USA, {"r": 0, "precio_usa": 8})
+    df_br   = leer_hoja(EXCEL_PREC, HOJA_BR, {"r": 0, "precio_br":  8})
+    df_eur  = leer_hoja(EXCEL_PREC, HOJA_EUR, {"r": 0, "precio_eur": 8})
+    df_disp = leer_hoja(EXCEL_DISP, HOJA_LISTA_AGCS,
                         {
                             "r": 0,
                             # Disponibilidad por origen (conteos)
@@ -525,6 +587,7 @@ def paso2_sqlserver():
         f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={SERVER};"
         f"DATABASE={DATABASE};UID={DB_USER};PWD={DB_PASS};"
         f"Encrypt=yes;TrustServerCertificate=yes;"
+        f"Login Timeout={SQL_LOGIN_TIMEOUT};"
     )
 
     with duckdb.connect(str(DUCKDB_PATH)) as con:
