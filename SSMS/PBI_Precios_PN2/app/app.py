@@ -5281,6 +5281,19 @@ def _auditoria_df_map_semaforo_ui(df: pd.DataFrame, sem_col: str | None, alias_c
 def _auditoria_inicializar_dataframe(df: pd.DataFrame) -> dict:
     """Prepara `auditoria_raw`: mapas de columnas, numéricos, existencia sumada y límites para sliders."""
     lower_map = {str(c).lower(): c for c in df.columns}
+    # En 00_Reportes_SQL, Var_PrecioUSD/COP/TRM y Var* vs costo son (a−b)/b sin ×100 (razón).
+    # La grilla usa formato «%.2f%%», los umbrales y _score_alerta mezclan con |Δ costo| en %.
+    for _k in (
+        "var_preciocop",
+        "var_preciousd",
+        "var_trm",
+        "var_costomin_preciocop",
+        "var_costomax_preciocop",
+        "absvar_costo_pct",
+    ):
+        _c = lower_map.get(_k)
+        if _c and _c in df.columns:
+            df[_c] = pd.to_numeric(df[_c], errors="coerce") * 100.0
     sem_col = lower_map.get("semaforo_variacion")
     ref_col = lower_map.get("referencia")
     desc_col = lower_map.get("descripcion") or lower_map.get("descripción")
