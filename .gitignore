@@ -16,6 +16,7 @@ TEMP/
 
 # Ignorar archivo de credenciales
 SSMS/config.json
+05_IA/ConfigClasificadorMewp.json
 
 # Ignorar configuración de Git
 .git/
