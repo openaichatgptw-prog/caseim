@@ -9,6 +9,12 @@ recuperar batches desde OpenAI (batch_ids.txt), clasificación por Batch API o
 uno a uno, checkpoint cada N filas, y genera un .xlsx nuevo con las columnas
 clasificacion, marca, Estado.
 
+Clave de fila: **idx** (entero 0-based) = posición de la fila en el DataFrame
+leído del Excel (misma fila que en la hoja, en orden, bajo HEADER_ROW). Los
+batches usan custom_id row-{idx}. No usar columnas del libro tipo "Id fila" /
+"id" para unir resultados: en MARKETSHARE pueden repetirse; solo **idx** es
+estable para join con el Excel de salida.
+
 Config: ConfigClasificadorMewp.json en esta carpeta (mantener las claves existentes;
 opcional: BATCH_IDS_FILE, por defecto "batch_ids.txt"). Si la entrada no es una consola
 interactiva, las preguntas usan el valor por defecto indicado y USE_BATCH_API para el modo.
@@ -168,14 +174,6 @@ def _checkpoint_cell_str(val) -> str:
     return s
 
 
-def _id_fila_por_fila(df: pd.DataFrame) -> list:
-    mapping = {str(c).strip().lower(): c for c in df.columns}
-    for key in ("fila", "id fila", "id_fila", "nro fila", "nro_fila", "id"):
-        if key in mapping:
-            return df[mapping[key]].tolist()
-    return list(range(1, len(df) + 1))
-
-
 def _load_checkpoint(path: Path) -> dict[int, tuple[str, str, str]]:
     if not path.exists():
         return {}
@@ -201,30 +199,30 @@ def _load_checkpoint(path: Path) -> dict[int, tuple[str, str, str]]:
 
 def _save_checkpoint(
     path: Path,
-    ids_fila: list,
     completed: dict[int, tuple[str, str, str]],
 ) -> None:
+    """Solo columnas idx + resultados. idx = índice 0-based estable (no Id fila del Excel)."""
     rows = []
     for idx in sorted(completed.keys()):
         c, m, e = completed[idx]
         c, m, e = _checkpoint_cell_str(c), _checkpoint_cell_str(m), _checkpoint_cell_str(e)
-        idf = ids_fila[idx] if idx < len(ids_fila) else idx + 1
-        rows.append({"idx": idx, "Id fila": idf, "clasificacion": c, "marca": m, "Estado": e})
+        rows.append({"idx": idx, "clasificacion": c, "marca": m, "Estado": e})
     pd.DataFrame(rows).to_csv(path, index=False, encoding="utf-8-sig")
 
 
 def _guardar_csv_resultados(
     base: Path,
     nombre_csv: str,
-    ids_fila: list,
+    n: int,
     clasificaciones: list[str],
     marcas: list[str],
     estados: list[str],
 ) -> Path:
+    """Una fila por posición 0..n-1; columna idx alinea con el DataFrame del Excel."""
     out = base / nombre_csv
     pd.DataFrame(
         {
-            "Id fila": ids_fila,
+            "idx": list(range(n)),
             "clasificacion": clasificaciones,
             "marca": marcas,
             "Estado": estados,
@@ -445,7 +443,6 @@ def _run_batch(
     poll_s: float,
     chunk_rows: int,
     n: int,
-    ids_fila: list,
     checkpoint_path: Path,
     completed: dict[int, tuple[str, str, str]],
 ) -> dict[int, tuple[str, str, str]]:
@@ -473,7 +470,7 @@ def _run_batch(
             label,
         )
         completed.update(part)
-        _save_checkpoint(checkpoint_path, ids_fila, completed)
+        _save_checkpoint(checkpoint_path, completed)
         print(
             f"  Checkpoint guardado: {checkpoint_path} "
             f"({len(completed)}/{n} filas)"
@@ -491,7 +488,6 @@ def _run_sync(
     temperature: float,
     sleep_s: float,
     n: int,
-    ids_fila: list,
     checkpoint_path: Path,
     completed: dict[int, tuple[str, str, str]],
     save_every: int,
@@ -510,7 +506,7 @@ def _run_sync(
             time.sleep(sleep_s)
         se = save_every if save_every > 0 else n
         if se > 0 and (len(completed) % se == 0 or i == n - 1):
-            _save_checkpoint(checkpoint_path, ids_fila, completed)
+            _save_checkpoint(checkpoint_path, completed)
             print(f"  Checkpoint: {checkpoint_path} ({len(completed)}/{n})")
 
     return completed
@@ -518,7 +514,6 @@ def _run_sync(
 
 def _completed_to_lists(
     n: int,
-    ids_fila: list,
     completed: dict[int, tuple[str, str, str]],
 ) -> tuple[list[str], list[str], list[str]]:
     clasificaciones = []
@@ -595,12 +590,11 @@ def _fusionar_recuperar(
 
     df = pd.read_excel(path_xlsx, sheet_name=sheet, header=header_row, engine="openpyxl")
     n = len(df)
-    ids_fila = _id_fila_por_fila(df)
 
-    _save_checkpoint(checkpoint_path, ids_fila, combined)
-    clasificaciones, marcas, estados = _completed_to_lists(n, ids_fila, combined)
+    _save_checkpoint(checkpoint_path, combined)
+    clasificaciones, marcas, estados = _completed_to_lists(n, combined)
     _guardar_csv_resultados(
-        base, out_csv, ids_fila, clasificaciones, marcas, estados
+        base, out_csv, n, clasificaciones, marcas, estados
     )
 
     print(f"Checkpoint actualizado: {checkpoint_path} ({len(combined)} filas con resultado)")
@@ -608,6 +602,10 @@ def _fusionar_recuperar(
 
 
 def _aplicar_por_idx(df: pd.DataFrame, chk: pd.DataFrame) -> pd.DataFrame:
+    """
+    Join: resultado[idx] -> fila Excel en posición idx (índice 0-based del DataFrame).
+    No usa columnas del libro tipo Id fila (pueden repetirse).
+    """
     if "idx" not in chk.columns:
         raise ValueError("checkpoint sin columna idx")
     m = chk.drop_duplicates(subset=["idx"], keep="last").set_index("idx")
@@ -675,11 +673,21 @@ def escribir_xlsx_clasificado(base: Path, cfg: dict) -> Path:
             fuente = f"checkpoint por idx ({cp.name})"
         else:
             out = _aplicar_por_orden(df, chk)
-            fuente = f"archivo sin idx, por orden ({cp.name})"
+            fuente = (
+                f"checkpoint sin idx, por orden de filas (legado; preferir regenerar con idx) "
+                f"({cp.name})"
+            )
     elif csv_alt.exists():
         res = pd.read_csv(csv_alt, **read_kw)
-        out = _aplicar_por_orden(df, res)
-        fuente = f"CSV por orden ({csv_alt.name})"
+        if "idx" in res.columns:
+            out = _aplicar_por_idx(df, res)
+            fuente = f"CSV por idx ({csv_alt.name})"
+        else:
+            out = _aplicar_por_orden(df, res)
+            fuente = (
+                f"CSV sin columna idx, por orden (legado; riesgo si Id fila repetía) "
+                f"({csv_alt.name})"
+            )
     else:
         raise SystemExit(
             f"No hay checkpoint ({cp.name}) ni CSV ({csv_alt.name}). "
@@ -837,7 +845,6 @@ def main() -> None:
     prov_series = (
         df[prov_col].fillna("").astype(str) if prov_col else pd.Series([""] * n)
     )
-    ids_fila = _id_fila_por_fila(df)
 
     pendientes = sum(1 for i in range(n) if i not in completed)
     print()
@@ -865,7 +872,6 @@ def main() -> None:
                     batch_poll,
                     batch_chunk_rows,
                     n,
-                    ids_fila,
                     checkpoint_path,
                     completed,
                 )
@@ -880,17 +886,16 @@ def main() -> None:
                     temperature,
                     sleep_s,
                     n,
-                    ids_fila,
                     checkpoint_path,
                     completed,
                     sync_save_every,
                 )
 
-            clasificaciones, marcas, estados = _completed_to_lists(n, ids_fila, completed)
+            clasificaciones, marcas, estados = _completed_to_lists(n, completed)
             csv_path = _guardar_csv_resultados(
-                base, out_csv, ids_fila, clasificaciones, marcas, estados
+                base, out_csv, n, clasificaciones, marcas, estados
             )
-            _save_checkpoint(checkpoint_path, ids_fila, completed)
+            _save_checkpoint(checkpoint_path, completed)
             print()
             print(f"Resultados CSV: {csv_path}")
             print(f"Checkpoint: {checkpoint_path}")
