@@ -38,21 +38,28 @@ _CONFIG_NAME = "ConfigClasificadorMewp.json"
 _COLS_CRUZ = ["clasificacion", "marca", "Estado"]
 _DEFAULT_BATCH_IDS = "batch_ids.txt"
 
-# Prompt compacto: menos tokens por request (costo/latencia); reglas de decision intactas.
 _SYSTEM = (
-    "Clasificador importaciones elevacion/manejo (MEWP/forklift). "
-    "Entrada: descripcion mercancia + Proveedor (estilo MARKETSHARE: MERCANCIA NUEVA/USADA, MARCA/MODELO a veces NO TIENE). "
-    "Sin precios/FOB en el contexto; no inventar datos economicos.\n"
-    'Salida: solo JSON {"clasificacion":"MEWPS|FORKLIFT|NA","marca":"MAYUSCULAS|NA","Estado":"NUEVO|USADO|NA"} sin markdown.\n'
-    "clasificacion — MEWPS: tijera/scissor, boom/articulada/telescopica, spider, AWP/man lift, mastil vertical, brazo articulado de trabajo en altura. "
-    "FORKLIFT: montacargas, forklift, reach truck, order picker con mastil, transpaleta motorizada, apilador mastil, stacker, telehandler como carretilla. "
-    "NA: repuesto/parte/kit sin equipo completo; ascensor/elevador pasajeros edificio; escalera mecanica; otro bien; o imposible distinguir MEWPS vs FORKLIFT con razon.\n"
-    "marca — Fabricante del equipo principal MAYUSCULAS; ignorar motor/bateria/neumatico salvo que sea el unico bien. "
-    "Orden: (1) MARCA en texto (2) modelo/serie/referencia inequivoca sector (GENIE/JLG/HAULOTTE/TOYOTA/CROWN/LINDE/etc.; si ambiguo→NA) "
-    "(3) proveedor es fabricante o nombre=marca conocida (4) si no, NA. Trader generico + marca NO TIENE + sin modelo claro→NA. "
-    "Duda en inferencia→NA (precision>cobertura).\n"
-    "Estado — NUEVO: nuevo/MERCANCIA NUEVA. USADO: usado/seminuevo/refurbished/reman. NA: resto o contradictorio.\n"
-    "Repuesto/parte suelta: clasificacion=NA, marca=NA."
+    "Clasificador MEWP/forklift sobre texto aduanero MARKETSHARE: Descripcion de la mercancia + Proveedor. "
+    "Suele haber MERCANCIA NUEVA/USADA, MARCA/MODELO/REFERENCIA; a veces NO TIENE. No hay datos de precio; no inventarlos.\n"
+    "Responde solo JSON valido, sin markdown. Tres claves exactas: clasificacion, marca, Estado.\n\n"
+
+    "clasificacion ∈ {MEWPS,FORKLIFT,NA}:\n"
+    "MEWPS — plataforma elevadora: tijera, boom/articulada, telescopica, man lift, AWP, spider, mastil vertical; "
+    "brazo articulado electrico si es plataforma de trabajo.\n"
+    "FORKLIFT — montacargas, reach truck, order picker con mastil, transpaleta/apilador motorizado, telehandler como carretilla.\n"
+    "NA — repuesto/parte/accesorio sin equipo completo; ascensor/elevador pasajeros edificio, escalera mecanica; "
+    "otro bien; o duda razonable entre MEWPS y FORKLIFT.\n\n"
+
+    "Marca: SOLO el nombre del fabricante del equipo principal en MAYUSCULAS; si no es identificable con confianza, NA. "
+    "Ignorar marca de motor, bateria, neumatico salvo que sea el unico bien declarado.\n"
+    "Evidencia en orden: (1) MARCA en texto (2) modelo/serie inequivoca sector — ej. GS-1930,Z-45→GENIE; 1930ES,450AJ→JLG; "
+    "Compact10,HA16→HAULOTTE; 8FGCU→TOYOTA; EFG216→JUNGHEINRICH; FC5200→CROWN; DP25→CAT (lista orientativa) "
+    "(3) proveedor coincide con fabricante conocido sin contradiccion (4) NO TIENE + proveedor generico + modelo ambiguo → NA.\n"
+    "Precision mayor que cobertura: ante duda, marca NA.\n\n"
+
+    "Estado ∈ {NUEVO,USADO,NA}: NUEVO si nuevo/MERCANCIA NUEVA; USADO si usado/refurbished/reman; NA si no claro.\n\n"
+
+    "Repuesto o parte suelta sin equipo completo: clasificacion NA y marca NA."
 )
 
 
