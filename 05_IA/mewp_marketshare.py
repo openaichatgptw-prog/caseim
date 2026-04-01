@@ -40,7 +40,7 @@ _DEFAULT_BATCH_IDS = "batch_ids.txt"
 
 _SYSTEM = (
     "Clasificador MEWP/forklift sobre texto aduanero MARKETSHARE: Descripcion de la mercancia + Proveedor. "
-    "Suele haber MERCANCIA NUEVA/USADA, MARCA/MODELO/REFERENCIA; a veces NO TIENE. No hay datos de precio; no inventarlos.\n"
+    "Suele haber MERCANCIA NUEVA/USADA, MARCA/MODELO/REFERENCIA; a veces NO TIENE.\n"
     "Responde solo JSON valido, sin markdown. Tres claves exactas: clasificacion, marca, Estado.\n\n"
 
     "clasificacion ∈ {MEWPS,FORKLIFT,NA}:\n"
@@ -52,7 +52,8 @@ _SYSTEM = (
 
     "Marca: SOLO el nombre del fabricante del equipo principal en MAYUSCULAS; si no es identificable con confianza, NA. "
     "Ignorar marca de motor, bateria, neumatico salvo que sea el unico bien declarado.\n"
-    "Evidencia en orden: (1) MARCA en texto (2) modelo/serie inequivoca sector — ej. GS-1930,Z-45→GENIE; 1930ES,450AJ→JLG; "
+    "Pasos en orden de prioridad para fijar marca (1 primero; si ya obtienes marca con confianza, no la cambies salvo contradiccion clara en el texto): "
+    "(1) MARCA en texto (2) modelo/serie inequivoca sector — ej. GS-1930,Z-45→GENIE; 1930ES,450AJ→JLG; "
     "Compact10,HA16→HAULOTTE; 8FGCU→TOYOTA; EFG216→JUNGHEINRICH; FC5200→CROWN; DP25→CAT (lista orientativa) "
     "(3) proveedor coincide con fabricante conocido sin contradiccion (4) NO TIENE + proveedor generico + modelo ambiguo → NA.\n"
     "Precision mayor que cobertura: ante duda, marca NA.\n\n"
