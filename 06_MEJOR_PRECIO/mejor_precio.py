@@ -1,25 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-Estimación del Mejor Precio de Reposición – MEWP MarketShare.
+Script: CSV con columnas acordadas -> CSV con resultado y observaciones.
+Carpeta: 06_MEJOR_PRECIO
 
-Algoritmo:
-  1. Estabilidad de costos USA vs BR (porcentual <20 % + nominal por cuartil).
-  2. Disponibilidad (umbral fijo ≥10 ó adaptativo por cuartiles de precio).
-  3. Comparación contra costo de inventario.
-  4. Alerta de alta volatilidad (precio + disponibilidad USA/BR + inventario).
-  5. DISPINVmin / DISPINVmax: unidades de stock en inventario (min/max).
+Columnas de entrada (obligatorias):
+  CostoINVmin, costoINVmax, CostoREPOU, COSTOREPOBR, DISPUSA, DISPBR, PRECIO
+Opcionales: DISPINVmin, DISPINVmax (si faltan se asume 0).
 
-Uso directo (CSV por defecto en esta carpeta):
-    python mewp_mejor_precio.py
-    python mewp_mejor_precio.py -i entrada.csv -o salida_precio.csv
-Modo Excel:
-    python mewp_mejor_precio.py --excel datos.xlsx [--sheet HOJA] [-o salida.xlsx]
+Uso:
+    python mejor_precio.py mi_datos.csv mi_resultado.csv
+    python mejor_precio.py
+        (usa entrada.csv y salida_precio.csv en la misma carpeta que este script)
 
-Parametros por defecto: ver BASE_DIR, INPUT_CSV, OUTPUT_CSV al inicio del codigo.
-
-Uso como módulo:
-    from mewp_mejor_precio import estimar_mejor_precio
-    df_resultado = estimar_mejor_precio(df)
+Opciones: --sep, --encoding, --excel para leer .xlsx en lugar de CSV.
+Ajuste de rutas por defecto: INPUT_CSV, OUTPUT_CSV al inicio del codigo.
 """
 from __future__ import annotations
 
@@ -63,6 +57,7 @@ OUT_RAZON             = "RAZON_SELECCION"
 OUT_ESTABILIDAD       = "ESTABILIDAD_REPO"
 OUT_PCT_DIFF          = "PCT_DIFF_REPO"
 OUT_ALERTA            = "ALERTA_VOLATILIDAD"
+OUT_OBSERVACIONES     = "OBSERVACIONES"
 
 _EPS = 1e-12
 
@@ -395,31 +390,33 @@ def _evaluar_volatilidad(
     return ""
 
 
+def _texto_observaciones(row: pd.Series) -> str:
+    """Texto legible por fila: origen, estabilidad, motivo, alertas."""
+    partes = [
+        f"Origen: {row[OUT_ORIGEN]}",
+        f"Estabilidad repos: {row[OUT_ESTABILIDAD]}",
+    ]
+    if pd.notna(row[OUT_PCT_DIFF]):
+        partes.append(f"Diff % USA-BR: {row[OUT_PCT_DIFF]}")
+    razon = str(row[OUT_RAZON]).strip()
+    if razon:
+        partes.append(f"Motivo: {razon}")
+    al = str(row[OUT_ALERTA]).strip()
+    if al:
+        partes.append(f"Alerta: {al}")
+    return " | ".join(partes)
+
+
 # ─────────────────────────────────────────────────────────────────────
-# API pública
+# Nucleo (solo uso interno del script)
 # ─────────────────────────────────────────────────────────────────────
 
-def estimar_mejor_precio(df: pd.DataFrame,
-                         col_map: dict | None = None) -> pd.DataFrame:
+def _calcular_resultados(
+    df: pd.DataFrame,
+    col_map: dict | None = None,
+) -> pd.DataFrame:
     """
-    Recibe un DataFrame con las columnas de la imagen (o mapeadas) y
-    devuelve un DataFrame con las 6 columnas de resultado alineadas al
-    indice original.
-
-    Parámetros
-    ----------
-    df : DataFrame con al menos: CostoINVmin, costoINVmax, CostoREPOU,
-         COSTOREPOBR, DISPUSA, DISPBR, PRECIO.
-         Opcionales: DISPINVmin, DISPINVmax (unidades de stock inventario);
-         si faltan, se asume 0.
-    col_map : dict opcional para sobrescribir los nombres de columna
-              (mismas claves que el dict COL global).
-
-    Retorna
-    -------
-    DataFrame con columnas:
-      MEJOR_PRECIO, ORIGEN_PRECIO, RAZON_SELECCION,
-      ESTABILIDAD_REPO, PCT_DIFF_REPO, ALERTA_VOLATILIDAD
+    Devuelve columnas de resultado + OBSERVACIONES (texto por fila).
     """
     c = {**COL, **(col_map or {})}
 
@@ -464,7 +461,9 @@ def estimar_mejor_precio(df: pd.DataFrame,
         )
         resultados.append(r)
 
-    return pd.DataFrame(resultados, index=df.index)
+    out = pd.DataFrame(resultados, index=df.index)
+    out[OUT_OBSERVACIONES] = out.apply(_texto_observaciones, axis=1)
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -515,65 +514,27 @@ def imprimir_resumen(df_in: pd.DataFrame, df_out: pd.DataFrame) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# CSV / CLI
+# Linea de comandos
 # ─────────────────────────────────────────────────────────────────────
-
-
-def procesar_csv(
-    path_in: Path | str | None = None,
-    path_out: Path | str | None = None,
-    *,
-    sep: str | None = None,
-    encoding: str | None = None,
-    header: int | None = None,
-) -> pd.DataFrame:
-    """
-    Lee *path_in* (default INPUT_CSV), calcula columnas de salida y escribe *path_out*
-    (default OUTPUT_CSV). Devuelve el DataFrame concatenado (entrada + resultado).
-    """
-    pin = Path(path_in or INPUT_CSV)
-    pout = Path(path_out or OUTPUT_CSV)
-    sep = CSV_SEP if sep is None else sep
-    encoding = CSV_ENCODING if encoding is None else encoding
-    header = CSV_HEADER_ROW if header is None else header
-
-    if not pin.exists():
-        raise FileNotFoundError(
-            f"No existe el CSV de entrada: {pin}\n"
-            f"Coloque '{INPUT_CSV.name}' en {BASE_DIR} o use -i / --input."
-        )
-
-    print(f"\nLeyendo CSV: {pin} (sep={repr(sep)}, encoding={encoding}) ...")
-    df = pd.read_csv(pin, sep=sep, encoding=encoding, header=header)
-    print(f"  {len(df)} filas x {len(df.columns)} columnas\n")
-
-    df_precio = estimar_mejor_precio(df)
-    imprimir_resumen(df, df_precio)
-    df_final = pd.concat([df, df_precio], axis=1)
-
-    pout.parent.mkdir(parents=True, exist_ok=True)
-    df_final.to_csv(pout, sep=sep, encoding=encoding, index=False)
-    print(f"\nGuardado: {pout}")
-    return df_final
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Mejor precio MEWP: CSV por defecto (entrada.csv -> salida_precio.csv)."
+        description="CSV entrada (columnas definidas) -> CSV salida con resultado y observaciones."
     )
     parser.add_argument(
-        "-i",
-        "--input",
+        "entrada",
+        nargs="?",
         type=Path,
         default=None,
-        help=f"CSV de entrada (default: {INPUT_CSV})",
+        help=f"Archivo CSV de entrada (default: {INPUT_CSV.name})",
     )
     parser.add_argument(
-        "-o",
-        "--output",
+        "salida",
+        nargs="?",
         type=Path,
         default=None,
-        help=f"CSV de salida (default: {OUTPUT_CSV})",
+        help=f"Archivo CSV de salida (default: {OUTPUT_CSV.name})",
     )
     parser.add_argument(
         "--sep",
@@ -593,6 +554,13 @@ def main() -> None:
         help="Fila de encabezados del CSV, 0-based (default: 0).",
     )
     parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
+        help="Archivo de salida (alternativa al segundo argumento posicional).",
+    )
+    parser.add_argument(
         "--excel",
         type=Path,
         default=None,
@@ -608,6 +576,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    sep = CSV_SEP if args.sep is None else args.sep
+    encoding = CSV_ENCODING if args.encoding is None else args.encoding
+    csv_header = CSV_HEADER_ROW if args.csv_header is None else args.csv_header
+
     if args.excel is not None:
         path_in = args.excel
         if not path_in.exists():
@@ -621,27 +593,38 @@ def main() -> None:
             path_in, sheet_name=sheet, header=args.excel_header, engine="openpyxl"
         )
         print(f"  {len(df)} filas x {len(df.columns)} columnas\n")
-        df_precio = estimar_mejor_precio(df)
-        imprimir_resumen(df, df_precio)
-        df_final = pd.concat([df, df_precio], axis=1)
-        if args.output is not None:
-            path_out = Path(args.output)
-        else:
+        df_res = _calcular_resultados(df)
+        imprimir_resumen(df, df_res)
+        df_final = pd.concat([df, df_res], axis=1)
+        path_out = args.salida or args.output
+        if path_out is None:
             path_out = path_in.with_name(path_in.stem + "_precio" + path_in.suffix)
+        else:
+            path_out = Path(path_out)
         df_final.to_excel(path_out, index=False, engine="openpyxl")
         print(f"\nGuardado: {path_out}")
         return
 
-    try:
-        procesar_csv(
-            args.input,
-            args.output,
-            sep=args.sep,
-            encoding=args.encoding,
-            header=args.csv_header,
+    pin = Path(args.entrada or INPUT_CSV)
+    pout = Path(args.salida or args.output or OUTPUT_CSV)
+
+    if not pin.exists():
+        sys.exit(
+            f"No existe el CSV de entrada: {pin}\n"
+            f"Indique la ruta o coloque '{INPUT_CSV.name}' en {BASE_DIR}"
         )
-    except FileNotFoundError as e:
-        sys.exit(str(e))
+
+    print(f"\nLeyendo CSV: {pin} (sep={repr(sep)}, encoding={encoding}) ...")
+    df = pd.read_csv(pin, sep=sep, encoding=encoding, header=csv_header)
+    print(f"  {len(df)} filas x {len(df.columns)} columnas\n")
+
+    df_res = _calcular_resultados(df)
+    imprimir_resumen(df, df_res)
+    df_final = pd.concat([df, df_res], axis=1)
+
+    pout.parent.mkdir(parents=True, exist_ok=True)
+    df_final.to_csv(pout, sep=sep, encoding=encoding, index=False)
+    print(f"\nGuardado: {pout}")
 
 
 if __name__ == "__main__":
