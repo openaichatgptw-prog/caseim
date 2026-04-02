@@ -3,6 +3,13 @@
 Script: CSV con columnas acordadas -> CSV con resultado y observaciones.
 Carpeta: 06_MEJOR_PRECIO
 
+Motor (mayoria de casos):
+  - Elige mejor costo de reposicion (USA/BR): estable -> menor precio; si no, por disponibilidad.
+  - Compara con costo inventario capa alta max(CostoINVmin, costoINVmax): si inventario es mayor,
+    sugiere ese costo como piso.
+
+Particularidades: no cambian el precio automaticamente; marcan REVISAR_MANUAL=SI y MOTIVO_REVISION.
+
 Columnas de entrada (obligatorias):
   CostoINVmin, costoINVmax, CostoREPOU, COSTOREPOBR, DISPUSA, DISPBR, PRECIO
 Opcionales: DISPINVmin, DISPINVmax (si faltan se asume 0).
@@ -58,6 +65,8 @@ OUT_ESTABILIDAD       = "ESTABILIDAD_REPO"
 OUT_PCT_DIFF          = "PCT_DIFF_REPO"
 OUT_ALERTA            = "ALERTA_VOLATILIDAD"
 OUT_OBSERVACIONES     = "OBSERVACIONES"
+OUT_REVISAR           = "REVISAR_MANUAL"
+OUT_MOTIVO_REVISION   = "MOTIVO_REVISION"
 
 _EPS = 1e-12
 
@@ -68,6 +77,11 @@ OUTPUT_CSV = BASE_DIR / "salida_precio.csv"
 CSV_SEP = ";"
 CSV_ENCODING = "utf-8-sig"
 CSV_HEADER_ROW = 0
+
+# Senales para "revisar manualmente" (no alteran MEJOR_PRECIO)
+UMBRAL_DISPINV_MIN_TIER = 50.0
+UMBRAL_INV_ALTO_REVISION = 30.0
+PCT_DIFF_REVISAR = 0.35
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -199,6 +213,70 @@ def _umbral_disp_por_precio(precio: float,
     return max(15.0, dq2)
 
 
+def _revision_manual(
+    *,
+    datos_inv_invertidos: bool,
+    tiene_usa: bool,
+    tiene_br: bool,
+    etiqueta_estab: str,
+    pct_diff_ratio: float,
+    alerta: str,
+    disp_inv_min: float,
+    inv_lo: float,
+    inv_cost: float,
+    m_ext_disp: float,
+    m_inv_disp: float,
+    umbral_disp: float,
+) -> tuple[str, str]:
+    """
+    Marca filas que conviene revisar a mano. No modifica el precio sugerido.
+    """
+    motivos: list[str] = []
+    if datos_inv_invertidos:
+        motivos.append("CostoINV min/max inconsistente en datos")
+    if not tiene_usa and not tiene_br:
+        motivos.append("Sin costo de reposicion")
+    if tiene_usa or tiene_br:
+        if (
+            disp_inv_min >= UMBRAL_DISPINV_MIN_TIER
+            and inv_lo > 0
+            and inv_lo < inv_cost
+        ):
+            motivos.append(
+                "Mucho stock en tramo costo minimo; validar politica de precio"
+            )
+        if (
+            m_ext_disp < umbral_disp
+            and m_inv_disp >= UMBRAL_INV_ALTO_REVISION
+        ):
+            motivos.append(
+                "Repos con baja disp. externa e inventario alto; validar abastecimiento"
+            )
+    if (
+        etiqueta_estab == "INESTABLE"
+        and pd.notna(pct_diff_ratio)
+        and pct_diff_ratio > PCT_DIFF_REVISAR
+    ):
+        motivos.append("Repos USA/BR muy divergentes")
+    if etiqueta_estab in ("PCT_OK_NOM_ALTO", "NOM_OK_PCT_ALTO"):
+        motivos.append("Repos en frontera de estabilidad (% vs nominal)")
+    if alerta:
+        if "ALTA VOLATILIDAD" in alerta:
+            motivos.append("Alta volatilidad precio y disponibilidad")
+        elif "PRECIO VARIABLE" in alerta:
+            motivos.append("Precio repos muy variable entre origenes")
+
+    seen: set[str] = set()
+    unicos: list[str] = []
+    for m in motivos:
+        if m not in seen:
+            seen.add(m)
+            unicos.append(m)
+    if not unicos:
+        return "NO", ""
+    return "SI", "; ".join(unicos)
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Lógica principal de pricing por fila
 # ─────────────────────────────────────────────────────────────────────
@@ -225,17 +303,44 @@ def _evaluar_fila(
 
     tiene_usa = not np.isnan(repo_usa)
     tiene_br  = not np.isnan(repo_br)
-    inv_cost  = max(inv_min, inv_max)
+    inv_lo = min(inv_min, inv_max)
+    inv_hi = max(inv_min, inv_max)
+    inv_cost = inv_hi
+    datos_inv_invertidos = inv_min > inv_max
 
     # --- Sin datos de reposición ---
     if not tiene_usa and not tiene_br:
+        umbral_early = _umbral_disp_por_precio(
+            precio, pq1, pq2, pq3, dq1, dq2, dq3
+        )
+        alerta0 = "SIN_REPO" if inv_cost == 0 else ""
+        if datos_inv_invertidos and alerta0 == "":
+            alerta0 = "INV_MIN_MAX_INVERTIDO"
+        elif datos_inv_invertidos:
+            alerta0 = alerta0 + " | INV_MIN_MAX_INVERTIDO"
+        rev, mot = _revision_manual(
+            datos_inv_invertidos=datos_inv_invertidos,
+            tiene_usa=False,
+            tiene_br=False,
+            etiqueta_estab="N/A",
+            pct_diff_ratio=np.nan,
+            alerta=alerta0,
+            disp_inv_min=disp_inv_min,
+            inv_lo=inv_lo,
+            inv_cost=inv_cost,
+            m_ext_disp=max(disp_usa, disp_br),
+            m_inv_disp=max(disp_inv_min, disp_inv_max),
+            umbral_disp=umbral_early,
+        )
         return {
             OUT_MEJOR_PRECIO: inv_cost if inv_cost > 0 else np.nan,
             OUT_ORIGEN:       "INVENTARIO" if inv_cost > 0 else "SIN_DATOS",
             OUT_RAZON:        "Sin costo de reposición disponible",
             OUT_ESTABILIDAD:  "N/A",
             OUT_PCT_DIFF:     np.nan,
-            OUT_ALERTA:       "SIN_REPO" if inv_cost == 0 else "",
+            OUT_ALERTA:       alerta0,
+            OUT_REVISAR:      rev,
+            OUT_MOTIVO_REVISION: mot,
         }
 
     # Si solo uno de los dos orígenes tiene dato, usar ese
@@ -307,25 +412,54 @@ def _evaluar_fila(
     if mejor_repo == np.inf:
         mejor_repo = np.nan
 
-    # ── 3. Comparación con inventario ────────────────────────────────
+    umbral_disp = _umbral_disp_por_precio(precio, pq1, pq2, pq3, dq1, dq2, dq3)
+    m_ext_disp = max(disp_usa, disp_br)
+    m_inv_disp = max(disp_inv_min, disp_inv_max)
+
+    # --- Motor unico: comparar mejor repo con costo inventario (capa alta) ---
     if inv_cost > 0 and not np.isnan(mejor_repo) and inv_cost > mejor_repo:
         mejor_precio = inv_cost
         origen_final = "INVENTARIO"
-        razon = f"CostoINV ({inv_cost:.2f}) > Repo {origen} ({mejor_repo:.2f})"
+        razon = (
+            f"CostoINV capa alta ({inv_cost:.2f}) > mejor repo {origen} ({mejor_repo:.2f})"
+        )
     elif np.isnan(mejor_repo):
         mejor_precio = inv_cost if inv_cost > 0 else np.nan
         origen_final = "INVENTARIO" if inv_cost > 0 else "SIN_DATOS"
+        if inv_cost > 0:
+            razon = "Sin seleccion de repo valida -> costo inventario capa alta"
+        else:
+            razon = "Sin datos de inventario ni repo"
     else:
         mejor_precio = mejor_repo
         origen_final = origen
 
-    # ── 4. Alerta de volatilidad ─────────────────────────────────────
+    # --- Alerta de volatilidad + datos ---
     alerta = _evaluar_volatilidad(
         disp_usa,
         disp_br,
         disp_inv_min,
         disp_inv_max,
         pct_diff,
+    )
+    if datos_inv_invertidos:
+        extra = "INV_MIN_MAX_INVERTIDO"
+        alerta = f"{extra} | {alerta}" if alerta else extra
+
+    pct_ratio = pct_diff if pd.notna(pct_diff) else np.nan
+    rev, mot = _revision_manual(
+        datos_inv_invertidos=datos_inv_invertidos,
+        tiene_usa=tiene_usa,
+        tiene_br=tiene_br,
+        etiqueta_estab=etiqueta_estab,
+        pct_diff_ratio=pct_ratio,
+        alerta=alerta,
+        disp_inv_min=disp_inv_min,
+        inv_lo=inv_lo,
+        inv_cost=inv_cost,
+        m_ext_disp=m_ext_disp,
+        m_inv_disp=m_inv_disp,
+        umbral_disp=umbral_disp,
     )
 
     return {
@@ -335,6 +469,8 @@ def _evaluar_fila(
         OUT_ESTABILIDAD:  etiqueta_estab,
         OUT_PCT_DIFF:     round(pct_diff * 100, 1) if pd.notna(pct_diff) else np.nan,
         OUT_ALERTA:       alerta,
+        OUT_REVISAR:      rev,
+        OUT_MOTIVO_REVISION: mot,
     }
 
 
@@ -404,6 +540,11 @@ def _texto_observaciones(row: pd.Series) -> str:
     al = str(row[OUT_ALERTA]).strip()
     if al:
         partes.append(f"Alerta: {al}")
+    if str(row.get(OUT_REVISAR, "")).strip().upper() == "SI":
+        mot = str(row.get(OUT_MOTIVO_REVISION, "")).strip()
+        partes.append("Revisar manualmente")
+        if mot:
+            partes.append(f"Motivo revision: {mot}")
     return " | ".join(partes)
 
 
@@ -496,6 +637,12 @@ def imprimir_resumen(df_in: pd.DataFrame, df_out: pd.DataFrame) -> None:
         for val, cnt in alertas[OUT_ALERTA].value_counts().items():
             print(f"      {val:40s}  {cnt:>6d}")
     print()
+
+    if OUT_REVISAR in df_out.columns:
+        n_rev = (df_out[OUT_REVISAR].astype(str).str.strip().str.upper() == "SI").sum()
+        print("  -- Revision manual --")
+        print(f"      REVISAR_MANUAL=SI: {n_rev:>6d}  ({n_rev/n*100:5.1f} %)")
+        print()
 
     col_precio_orig = COL["precio"]
     if col_precio_orig in df_in.columns:
