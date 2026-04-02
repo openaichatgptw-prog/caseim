@@ -3,12 +3,13 @@
 Monitor estrategico de costo vs inventario y reposicion (CSV -> CSV).
 Carpeta: 06_MEJOR_PRECIO
 
-Salida: columnas de decision + PRECIO_CALCULADO (lista implicita al margen objetivo: MEJOR_COSTO/(1-MARGEN_OBJETIVO))
+Salida: columnas de decision + PRECIO_CALCULADO (lista implicita al margen objetivo por categoria: MEJOR_COSTO/(1-m))
   + LISTA_EN_RANGO (SI|NO|REVISAR|N/A): precio de lista frente al piso
   de margen vs costo max. de inventario y vs repo mas barato, en una sola señal. CONFIANZA. --auditoria: AUDITORIA.
 
-OK_MARGEN_OBJETIVO usa MARGEN_OBJETIVO_PCT y MARGEN_TOLERANCIA_PCT: SI si el margen alcanza al menos
-  objetivo - tolerancia (puntos porcentuales); NO si queda por debajo de esa banda inferior.
+OK_MARGEN_OBJETIVO usa margen objetivo y tolerancia por fila: por defecto MARGEN_OBJETIVO_PCT y
+  MARGEN_TOLERANCIA_PCT; si Categoria coincide con MARGEN_*_POR_CATEGORIA, se usan esos valores.
+  SI si el margen alcanza al menos objetivo - tolerancia (pp); NO si queda por debajo del piso.
 
 Notas: [REVISAR MANUAL] en NO_CALCULABLE (el CODIGO indica la causa). [ATENCION] en calculados con
   riesgo operativo (repos inestables, avisos de revision rapida, o solo inventario sin repos).
@@ -33,14 +34,15 @@ Uso:
   python mejor_precio.py --auditoria
   python mejor_precio.py --excel libro.xlsx
 
-Columna opcional de entrada: Categoria (nombre alineado con SPREAD_MAX_POR_CATEGORIA) para el umbral
-  de dispersion de inventario; si falta o el nombre no coincide, se usa PCT_SPREAD_MAX_COSTO_INV.
+Columna requerida de entrada: Categoria (alineada con SPREAD_MAX_POR_CATEGORIA y con MARGEN_POLITICA_POR_CATEGORIA_TEXTO).
+  Politica de margen por categoria: editar el bloque de texto MARGEN_POLITICA_POR_CATEGORIA_TEXTO.
 
 Hiperparametros: solo en HIPERPARAMETROS (arriba).
 """
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -54,11 +56,70 @@ import pandas as pd
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # -- Margen sobre lista (decisión comercial simple) --
-# MARGEN_OBJETIVO_PCT: Margen bruto de referencia sobre lista (PRECIO - costo) / PRECIO * 100.
+# MARGEN_OBJETIVO_PCT: Margen bruto por defecto (PRECIO - costo) / PRECIO * 100.
 # MARGEN_TOLERANCIA_PCT: Puntos porcentuales por debajo del objetivo que aún cuentan como “en margen”
 #   (ej. objetivo 40 y tolerancia 15 → cumple desde 25% hacia arriba). Por encima del objetivo sigue SI.
 MARGEN_OBJETIVO_PCT = 40.0
 MARGEN_TOLERANCIA_PCT = 15.0
+
+# -- Tabla de margen por categoria (editar solo este texto) --
+# Formato libre en una o varias lineas; se ignoran lineas vacias y comentarios (# ...).
+# Por cada categoria:  Nombre: objetivo%  [, tolerancia_pp]
+#   Si omites la tolerancia, para esa categoria se usa MARGEN_TOLERANCIA_PCT (global).
+# Separar entradas con salto de linea o con punto y coma. Corchetes opcionales.
+# Ejemplos:
+#   [ GENERAL:40%,15 ; FILTROS:35%,12 ; ACIET:30% ; MANGUERA:35%,10 ]
+#   General: 40%, 15
+#   Filtros: 35%, 12
+MARGEN_POLITICA_POR_CATEGORIA_TEXTO = """
+General: 40%, 15
+Filtros: 35%, 12
+Lubricantes: 45%, 10
+# ACIET: 30%
+# MANGUERA: 35%, 10
+"""
+
+
+def _parse_margen_politica_categorias(
+    text: str,
+    tolerancia_default: float,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """
+    Construye MARGEN_OBJETIVO_POR_CATEGORIA y MARGEN_TOLERANCIA_POR_CATEGORIA desde texto.
+    Nombres de categoria sin distinguir mayusculas al resolver (ver _margen_objetivo_y_tolerancia_para_categoria).
+    """
+    mo: dict[str, float] = {}
+    mt: dict[str, float] = {}
+    lineas: list[str] = []
+    for raw in text.splitlines():
+        s = raw.split("#", 1)[0].strip()
+        if s:
+            lineas.append(s)
+    blob = " ".join(lineas)
+    blob = blob.replace("[", " ").replace("]", " ")
+    blob = blob.replace(";", " ")
+    # Nombre: XX% [, YY]  — YY = tolerancia en puntos porcentuales (opcional)
+    pat = re.compile(
+        r"([A-Za-zÁÉÍÓÚÜáéíóúüÑñ][A-Za-z0-9ÁÉÍÓÚÜáéíóúüÑñ\s\-]*?)\s*:\s*"
+        r"(\d+(?:\.\d+)?)\s*%"
+        r"(?:\s*[,/]\s*(\d+(?:\.\d+)?))?",
+        re.UNICODE,
+    )
+    for m in pat.finditer(blob):
+        nombre = (m.group(1) or "").strip()
+        if not nombre:
+            continue
+        obj = float(m.group(2))
+        tol_s = m.group(3)
+        mo[nombre] = obj
+        mt[nombre] = float(tol_s) if tol_s is not None else float(tolerancia_default)
+    return mo, mt
+
+
+MARGEN_OBJETIVO_POR_CATEGORIA, MARGEN_TOLERANCIA_POR_CATEGORIA = _parse_margen_politica_categorias(
+    MARGEN_POLITICA_POR_CATEGORIA_TEXTO,
+    tolerancia_default=float(MARGEN_TOLERANCIA_PCT),
+)
 
 # -- Cuándo dos repos (USA/BR) se consideran “parecidos” (se elige el más barato sin drama) --
 # PCT_ESTABILIDAD_REPOS: Si la diferencia entre costo USA y BR, dividida por el mayor,
@@ -148,7 +209,7 @@ COL = {
 
 _COL_REQUERIDAS = (
     "inv_min", "inv_max", "repo_usa", "repo_br",
-    "disp_usa", "disp_br", "precio",
+    "disp_usa", "disp_br", "precio", "categoria",
 )
 
 # Salida ejecutiva: columnas base + LISTA_EN_RANGO + CONFIANZA; + AUDITORIA con --auditoria
@@ -218,6 +279,24 @@ def _valor_categoria(row, cols_present, c) -> str | None:
         return None
     s = str(v).strip()
     return s if s else None
+
+
+def _margen_objetivo_y_tolerancia_para_categoria(val: str | None) -> tuple[float, float]:
+    """(objetivo %, tolerancia pp) para la fila; desconocido o vacio -> valores globales."""
+    mo = float(MARGEN_OBJETIVO_PCT)
+    mt = float(MARGEN_TOLERANCIA_PCT)
+    if not val:
+        return mo, mt
+    cf = val.strip().casefold()
+    for nombre, raw in MARGEN_OBJETIVO_POR_CATEGORIA.items():
+        if nombre.strip().casefold() == cf:
+            mo = float(raw)
+            break
+    for nombre, raw in MARGEN_TOLERANCIA_POR_CATEGORIA.items():
+        if nombre.strip().casefold() == cf:
+            mt = float(raw)
+            break
+    return mo, mt
 
 
 def _spread_max_para_categoria(val: str | None) -> float:
@@ -421,27 +500,32 @@ def _nota_manual_nc(codigo: str, mensaje: str) -> str:
     return f"[REVISAR MANUAL] {mensaje} [Codigo: {codigo}]"
 
 
-def _precio_lista_margen_objetivo(costo: float) -> float:
-    """Precio de lista que implica margen bruto = MARGEN_OBJETIVO_PCT sobre este costo: C / (1 - m)."""
+def _precio_lista_margen_objetivo(costo: float, margen_objetivo_pct: float) -> float:
+    """Precio de lista que implica margen bruto = margen_objetivo_pct sobre este costo: C / (1 - m)."""
     if costo is None or (isinstance(costo, float) and np.isnan(costo)):
         return np.nan
     c = float(costo)
     if c <= 0:
         return np.nan
-    m = MARGEN_OBJETIVO_PCT / 100.0
+    m = float(margen_objetivo_pct) / 100.0
     den = 1.0 - m
     if den <= EPS:
         return np.nan
     return round(c / den, 4)
 
 
-def _margen_lista(precio_lista: float, costo: float) -> tuple[float, str]:
+def _margen_lista(
+    precio_lista: float,
+    costo: float,
+    margen_objetivo_pct: float,
+    margen_tolerancia_pct: float,
+) -> tuple[float, str]:
     pl = _safe(precio_lista, 0.0)
     if pl <= 0 or costo is None or (isinstance(costo, float) and np.isnan(costo)):
         return np.nan, "N/A"
     m = (pl - float(costo)) / pl * 100.0
     m = round(m, 2)
-    piso = MARGEN_OBJETIVO_PCT - MARGEN_TOLERANCIA_PCT
+    piso = float(margen_objetivo_pct) - float(margen_tolerancia_pct)
     ok = "SI" if m >= piso else "NO"
     return m, ok
 
@@ -467,6 +551,7 @@ def _lista_en_rango_precio(
     repo_br_raw: float,
     tiene_usa: bool,
     tiene_br: bool,
+    piso_margen: float,
 ) -> dict[str, str]:
     """
     Una columna: lista en buen rango de margen (mismo piso que OK_MARGEN_OBJETIVO).
@@ -484,7 +569,7 @@ def _lista_en_rango_precio(
 
     tiene_inv = inv_cost > 0 or inv_lo > 0
     tiene_repo = tiene_usa or tiene_br
-    piso = MARGEN_OBJETIVO_PCT - MARGEN_TOLERANCIA_PCT
+    piso = float(piso_margen)
 
     if not tiene_inv and not tiene_repo:
         val = "N/A"
@@ -544,6 +629,7 @@ def _nota_revision_rapida(
 
 
 def _evaluar_fila(
+    categoria: str | None,
     repo_usa: float,
     repo_br: float,
     disp_usa: float,
@@ -566,6 +652,9 @@ def _evaluar_fila(
     pct_spread_max: float,
     modo_auditoria: bool,
 ) -> dict:
+    mo, mt = _margen_objetivo_y_tolerancia_para_categoria(categoria)
+    piso_m = mo - mt
+
     repo_usa = _safe(repo_usa, np.nan)
     repo_br = _safe(repo_br, np.nan)
     disp_usa = _safe(disp_usa, 0)
@@ -618,25 +707,31 @@ def _evaluar_fila(
             out[OUT_AUDITORIA] = aud_nc
         out.update(
             _lista_en_rango_precio(
-                precio, inv_lo, inv_cost, repo_usa_raw, repo_br_raw, tiene_usa, tiene_br
+                precio,
+                inv_lo,
+                inv_cost,
+                repo_usa_raw,
+                repo_br_raw,
+                tiene_usa,
+                tiene_br,
+                piso_m,
             )
         )
         return out
 
     if not tiene_usa and not tiene_br:
         mc = round(inv_cost, 4) if inv_cost > 0 else np.nan
-        m_pct, ok_m = _margen_lista(precio, mc)
-        piso_m = MARGEN_OBJETIVO_PCT - MARGEN_TOLERANCIA_PCT
+        m_pct, ok_m = _margen_lista(precio, mc, mo, mt)
         nota = (
             f"[ATENCION] Costo desde INVENTARIO {mc}. Margen lista {m_pct}% "
-            f"(objetivo {MARGEN_OBJETIVO_PCT}% ±{MARGEN_TOLERANCIA_PCT} pp, piso {piso_m}%: {ok_m}). "
+            f"(objetivo {mo}% ±{mt} pp, piso {piso_m}%: {ok_m}). "
             "Sin reposicion en datos; validar abastecimiento."
         )
         out_si = {
             OUT_ESTADO: "CALCULADO",
             OUT_CODIGO: "OK_SOLO_INV",
             OUT_MEJOR_COSTO: mc,
-            OUT_PRECIO_CALCULADO: _precio_lista_margen_objetivo(mc),
+            OUT_PRECIO_CALCULADO: _precio_lista_margen_objetivo(mc, mo),
             OUT_ORIGEN: "INVENTARIO" if inv_cost > 0 else "N/A",
             OUT_MARGEN: m_pct,
             OUT_OK_MARGEN: ok_m,
@@ -647,7 +742,14 @@ def _evaluar_fila(
             out_si[OUT_AUDITORIA] = "OK:SOLO_INV"
         out_si.update(
             _lista_en_rango_precio(
-                precio, inv_lo, inv_cost, repo_usa_raw, repo_br_raw, tiene_usa, tiene_br
+                precio,
+                inv_lo,
+                inv_cost,
+                repo_usa_raw,
+                repo_br_raw,
+                tiene_usa,
+                tiene_br,
+                piso_m,
             )
         )
         return out_si
@@ -727,8 +829,7 @@ def _evaluar_fila(
         origen_final = origen
 
     mc_round = round(mejor_costo, 4) if pd.notna(mejor_costo) else np.nan
-    m_pct, ok_m = _margen_lista(precio, mc_round)
-    piso_m = MARGEN_OBJETIVO_PCT - MARGEN_TOLERANCIA_PCT
+    m_pct, ok_m = _margen_lista(precio, mc_round, mo, mt)
 
     extra = _nota_revision_rapida(
         disp_inv_min=disp_inv_min,
@@ -742,7 +843,7 @@ def _evaluar_fila(
     )
     base = (
         f"Costo sugerido {mc_round} desde {origen_final}. Margen sobre lista {m_pct}% "
-        f"(objetivo {MARGEN_OBJETIVO_PCT}% ±{MARGEN_TOLERANCIA_PCT} pp, piso {piso_m}%: {ok_m})."
+        f"(objetivo {mo}% ±{mt} pp, piso {piso_m}%: {ok_m})."
     )
     if forzar_costo_repo:
         base = (
@@ -764,7 +865,7 @@ def _evaluar_fila(
         OUT_ESTADO: "CALCULADO",
         OUT_CODIGO: "OK",
         OUT_MEJOR_COSTO: mc_round,
-        OUT_PRECIO_CALCULADO: _precio_lista_margen_objetivo(mc_round),
+        OUT_PRECIO_CALCULADO: _precio_lista_margen_objetivo(mc_round, mo),
         OUT_ORIGEN: origen_final,
         OUT_MARGEN: m_pct,
         OUT_OK_MARGEN: ok_m,
@@ -775,7 +876,14 @@ def _evaluar_fila(
         out_ok[OUT_AUDITORIA] = aud
     out_ok.update(
         _lista_en_rango_precio(
-            precio, inv_lo, inv_cost, repo_usa_raw, repo_br_raw, tiene_usa, tiene_br
+            precio,
+            inv_lo,
+            inv_cost,
+            repo_usa_raw,
+            repo_br_raw,
+            tiene_usa,
+            tiene_br,
+            piso_m,
         )
     )
     return out_ok
@@ -808,7 +916,10 @@ def _calcular_resultados(
     if any(c[k] not in cols_present for k in ("disp_inv_min", "disp_inv_max")):
         print("  Aviso: DISPINV opcional ausente; se usa 0.")
     if c.get("categoria") and c["categoria"] in cols_present:
-        print(f"  Categoria: columna '{c['categoria']}' detectada (SPREAD_MAX_POR_CATEGORIA).")
+        print(
+            f"  Categoria: columna '{c['categoria']}' "
+            "(SPREAD_MAX / MARGEN_* por categoria)."
+        )
 
     rq1, rq2, rq3 = _calcular_cuartiles(
         pd.concat([pd.to_numeric(df[c["repo_usa"]], errors="coerce"),
@@ -835,6 +946,7 @@ def _calcular_resultados(
         pct_sm = _spread_max_para_categoria(_valor_categoria(row, cols_present, c))
         filas.append(
             _evaluar_fila(
+                categoria=_valor_categoria(row, cols_present, c),
                 repo_usa=row[c["repo_usa"]],
                 repo_br=row[c["repo_br"]],
                 disp_usa=row[c["disp_usa"]],
@@ -876,10 +988,8 @@ def imprimir_resumen(df_in: pd.DataFrame, df_out: pd.DataFrame) -> None:
     calc = df_out[df_out[OUT_ESTADO] == "CALCULADO"]
     if len(calc) and OUT_OK_MARGEN in calc.columns:
         okn = (calc[OUT_OK_MARGEN] == "SI").sum()
-        piso = MARGEN_OBJETIVO_PCT - MARGEN_TOLERANCIA_PCT
         print(
-            f"  En margen (>= piso {piso}% = objetivo {MARGEN_OBJETIVO_PCT}% "
-            f"- {MARGEN_TOLERANCIA_PCT} pp): {okn} / {len(calc)}"
+            f"  En margen (OK_MARGEN_OBJETIVO=SI segun piso por Categoria): {okn} / {len(calc)}"
         )
     nc_blk = df_out[df_out[OUT_ESTADO] == "NO_CALCULABLE"]
     if len(nc_blk) and OUT_CODIGO in nc_blk.columns:
