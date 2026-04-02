@@ -7,9 +7,9 @@ Salida: columnas de decision + PRECIO_CALCULADO (lista implicita al margen objet
   + LISTA_EN_RANGO (SI|NO|REVISAR|N/A): precio de lista frente al piso
   de margen vs costo max. de inventario y vs repo mas barato, en una sola señal. CONFIANZA. --auditoria: AUDITORIA.
 
-OK_MARGEN_OBJETIVO usa margen objetivo y tolerancia por fila: por defecto MARGEN_OBJETIVO_PCT y
-  MARGEN_TOLERANCIA_PCT; si Categoria coincide con MARGEN_*_POR_CATEGORIA, se usan esos valores.
-  SI si el margen alcanza al menos objetivo - tolerancia (pp); NO si queda por debajo del piso.
+El margen es siempre bruto sobre lista (PRECIO-costo)/PRECIO; la categoria solo ajusta objetivo/tolerancia.
+  OK_MARGEN_OBJETIVO: politica desde MARGEN_POLITICA_POR_CATEGORIA_TEXTO (linea Default + categorias).
+  SI si margen >= objetivo - tolerancia; NO si no.
 
 Notas: [REVISAR MANUAL] en NO_CALCULABLE (el CODIGO indica la causa). [ATENCION] en calculados con
   riesgo operativo (repos inestables, avisos de revision rapida, o solo inventario sin repos).
@@ -34,8 +34,7 @@ Uso:
   python mejor_precio.py --auditoria
   python mejor_precio.py --excel libro.xlsx
 
-Columna requerida de entrada: Categoria (alineada con SPREAD_MAX_POR_CATEGORIA y con MARGEN_POLITICA_POR_CATEGORIA_TEXTO).
-  Politica de margen por categoria: editar el bloque de texto MARGEN_POLITICA_POR_CATEGORIA_TEXTO.
+Columna requerida de entrada: Categoria (alineada con MARGEN_POLITICA y SPREAD_MAX_POR_CATEGORIA en texto).
 
 Hiperparametros: solo en HIPERPARAMETROS (arriba).
 """
@@ -52,26 +51,45 @@ import pandas as pd
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # HIPERPARAMETROS — Ajuste únicamente aquí. El resto del script los lee por nombre.
-# (Explicación en lenguaje directo; valores son números que puedes subir o bajar.)
+#
+# Mapa (cada grupo es independiente; no hay constante “maestra” duplicada):
+#   [A] Texto MARGEN_POLITICA_* y SPREAD_MAX_* — mismos nombres de Categoria en ambos bloques;
+#       margen = politica comercial; spread = dispersion (max-min)/max en inventario.
+#   [B] Repos USA vs BR “estables” y tope nominal $: PCT_ESTABILIDAD_REPOS, FACTOR_NOMINAL_CUARTILES.
+#   [C] Disp. minima exigida segun tramo de PRECIO (cuartiles del lote): DISP_MIN_POR_TRAMO_PRECIO.
+#   [D] Bypass NC por inventario muy disperso: PCT_INV_MAX_ALINEADO_REPO (inv. cerca de repos).
+#       No es lo mismo que [B]: [B] compara USA-BR; [D] compara inventario vs repos.
+#   [E] Conflicto abastecimiento (caro vs barato): RATIO_REPOS_CONFLICTO + DISP_MIN_ORIGEN_BARATO.
+#   [F] Divergencia USA-BR: PCT_DIF_REPOS_EXTREMA_NC (bloquea calculo) vs PCT_DIF_REPOS_REVISION (solo nota).
+#       Ordinariamente EXTREMA_NC > REVISION para que la nota aparezca antes que el NC.
+#   [G] Frases en NOTA_DECISION: UMBRAL_DISPINV_TRAMO_MIN, UMBRAL_INV_UNIDAD_EXT_DISP.
+#   [H] I/O CSV, EPS.
+#
+# Coincidencias numericas por defecto que NO unificamos (reglas distintas):
+#   - 0.20 en PCT_ESTABILIDAD_REPOS y en PCT_INV_MAX_ALINEADO_REPO (ajustar por separado).
+#   - 5.0 puede aparecer en [C] y en DISP_MIN_ORIGEN_BARATO [E] (unidades vs politica distinta).
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# -- Margen sobre lista (decisión comercial simple) --
-# MARGEN_OBJETIVO_PCT: Margen bruto por defecto (PRECIO - costo) / PRECIO * 100.
-# MARGEN_TOLERANCIA_PCT: Puntos porcentuales por debajo del objetivo que aún cuentan como “en margen”
-#   (ej. objetivo 40 y tolerancia 15 → cumple desde 25% hacia arriba). Por encima del objetivo sigue SI.
-MARGEN_OBJETIVO_PCT = 40.0
-MARGEN_TOLERANCIA_PCT = 15.0
 
-# -- Tabla de margen por categoria (editar solo este texto) --
-# Formato libre en una o varias lineas; se ignoran lineas vacias y comentarios (# ...).
-# Por cada categoria:  Nombre: objetivo%  [, tolerancia_pp]
-#   Si omites la tolerancia, para esa categoria se usa MARGEN_TOLERANCIA_PCT (global).
-# Separar entradas con salto de linea o con punto y coma. Corchetes opcionales.
-# Ejemplos:
-#   [ GENERAL:40%,15 ; FILTROS:35%,12 ; ACIET:30% ; MANGUERA:35%,10 ]
-#   General: 40%, 15
-#   Filtros: 35%, 12
+def _blob_parametros_desde_texto(text: str) -> str:
+    """Preprocesa bloques MARGEN_/SPREAD_: quita comentarios #, une lineas, normaliza corchetes y ;."""
+    lineas: list[str] = []
+    for raw in text.splitlines():
+        s = raw.split("#", 1)[0].strip()
+        if s:
+            lineas.append(s)
+    blob = " ".join(lineas)
+    return blob.replace("[", " ").replace("]", " ").replace(";", " ")
+
+
+# -- [A] Politica de margen sobre lista (una sola formula; objetivo/tolerancia por categoria) --
+# Todo en MARGEN_POLITICA_POR_CATEGORIA_TEXTO: linea obligatoria Default: objetivo%, tolerancia_pp
+#   (se aplica si la categoria de la fila no coincide con ninguna otra entrada).
+# Otras lineas: Categoria: objetivo% [, tolerancia_pp]. Si omites tolerancia en una categoria,
+#   se usa la tolerancia de la linea Default.
+# Margen siempre = (PRECIO - costo) / PRECIO * 100.
 MARGEN_POLITICA_POR_CATEGORIA_TEXTO = """
+Default: 40%, 15
 General: 40%, 15
 Filtros: 35%, 12
 Lubricantes: 45%, 10
@@ -82,104 +100,147 @@ Lubricantes: 45%, 10
 
 def _parse_margen_politica_categorias(
     text: str,
-    tolerancia_default: float,
-) -> tuple[dict[str, float], dict[str, float]]:
+) -> tuple[dict[str, float], dict[str, float], float, float]:
     """
-    Construye MARGEN_OBJETIVO_POR_CATEGORIA y MARGEN_TOLERANCIA_POR_CATEGORIA desde texto.
-    Nombres de categoria sin distinguir mayusculas al resolver (ver _margen_objetivo_y_tolerancia_para_categoria).
+    Construye diccionarios por categoria y los valores Default (desde linea Default: ...).
+    La entrada 'Default' no es una categoria de producto; define fallback y tolerancia omitida.
     """
-    mo: dict[str, float] = {}
-    mt: dict[str, float] = {}
-    lineas: list[str] = []
-    for raw in text.splitlines():
-        s = raw.split("#", 1)[0].strip()
-        if s:
-            lineas.append(s)
-    blob = " ".join(lineas)
-    blob = blob.replace("[", " ").replace("]", " ")
-    blob = blob.replace(";", " ")
-    # Nombre: XX% [, YY]  — YY = tolerancia en puntos porcentuales (opcional)
+    blob = _blob_parametros_desde_texto(text)
     pat = re.compile(
         r"([A-Za-zÁÉÍÓÚÜáéíóúüÑñ][A-Za-z0-9ÁÉÍÓÚÜáéíóúüÑñ\s\-]*?)\s*:\s*"
         r"(\d+(?:\.\d+)?)\s*%"
         r"(?:\s*[,/]\s*(\d+(?:\.\d+)?))?",
         re.UNICODE,
     )
+    raw_entries: list[tuple[str, float, str | None]] = []
     for m in pat.finditer(blob):
         nombre = (m.group(1) or "").strip()
         if not nombre:
             continue
         obj = float(m.group(2))
         tol_s = m.group(3)
+        raw_entries.append((nombre, obj, tol_s))
+
+    default_mo: float | None = None
+    default_mt: float | None = None
+    for nombre, obj, tol_s in raw_entries:
+        if nombre.strip().casefold() == "default":
+            default_mo = obj
+            if tol_s is None:
+                raise ValueError(
+                    "La linea Default debe incluir tolerancia: p. ej. Default: 40%, 15"
+                )
+            default_mt = float(tol_s)
+            break
+
+    if default_mo is None or default_mt is None:
+        raise ValueError(
+            "MARGEN_POLITICA_POR_CATEGORIA_TEXTO debe incluir una linea "
+            "'Default: objetivo%, tolerancia_pp' (politica cuando la categoria no esta listada)."
+        )
+
+    mo: dict[str, float] = {}
+    mt: dict[str, float] = {}
+    for nombre, obj, tol_s in raw_entries:
+        if nombre.strip().casefold() == "default":
+            continue
         mo[nombre] = obj
-        mt[nombre] = float(tol_s) if tol_s is not None else float(tolerancia_default)
-    return mo, mt
+        mt[nombre] = float(tol_s) if tol_s is not None else default_mt
+
+    return mo, mt, default_mo, default_mt
 
 
-MARGEN_OBJETIVO_POR_CATEGORIA, MARGEN_TOLERANCIA_POR_CATEGORIA = _parse_margen_politica_categorias(
-    MARGEN_POLITICA_POR_CATEGORIA_TEXTO,
-    tolerancia_default=float(MARGEN_TOLERANCIA_PCT),
+(
+    MARGEN_OBJETIVO_POR_CATEGORIA,
+    MARGEN_TOLERANCIA_POR_CATEGORIA,
+    MARGEN_DEFAULT_OBJETIVO_PCT,
+    MARGEN_DEFAULT_TOLERANCIA_PCT,
+) = _parse_margen_politica_categorias(MARGEN_POLITICA_POR_CATEGORIA_TEXTO)
+
+# -- [A] Dispersion max. inventario (max-min)/max por categoria (bloque aparte del margen) --
+# Linea obligatoria Default: umbral (45% o 0.45). Resto: Categoria: fraccion o porcentaje (>1 se divide entre 100).
+SPREAD_MAX_POR_CATEGORIA_TEXTO = """
+Default: 45%
+General: 40%
+Filtros: 30%
+Lubricantes: 15%
+"""
+
+
+def _normalize_spread_fraccion(val: float) -> float:
+    v = float(val)
+    if v > 1.0:
+        v = v / 100.0
+    return max(0.0, min(1.0, v))
+
+
+def _parse_spread_max_categorias(text: str) -> tuple[dict[str, float], float]:
+    """Umbral de dispersion por nombre de categoria + Default si no hay coincidencia."""
+    blob = _blob_parametros_desde_texto(text)
+    pat = re.compile(
+        r"([A-Za-zÁÉÍÓÚÜáéíóúüÑñ][A-Za-z0-9ÁÉÍÓÚÜáéíóúüÑñ\s\-]*?)\s*:\s*(\d+(?:\.\d+)?)\s*%?",
+        re.UNICODE,
+    )
+    raw_entries: list[tuple[str, float]] = []
+    for m in pat.finditer(blob):
+        nombre = (m.group(1) or "").strip()
+        if not nombre:
+            continue
+        raw_entries.append((nombre, float(m.group(2))))
+
+    default_frac: float | None = None
+    for nombre, raw in raw_entries:
+        if nombre.strip().casefold() == "default":
+            default_frac = _normalize_spread_fraccion(raw)
+            break
+
+    if default_frac is None:
+        raise ValueError(
+            "SPREAD_MAX_POR_CATEGORIA_TEXTO debe incluir una linea 'Default: 45%%' o 'Default: 0.45'."
+        )
+
+    out: dict[str, float] = {}
+    for nombre, raw in raw_entries:
+        if nombre.strip().casefold() == "default":
+            continue
+        out[nombre] = _normalize_spread_fraccion(raw)
+
+    return out, default_frac
+
+
+SPREAD_MAX_POR_CATEGORIA, SPREAD_DEFAULT_MAX_FRAC = _parse_spread_max_categorias(
+    SPREAD_MAX_POR_CATEGORIA_TEXTO
 )
 
-# -- Cuándo dos repos (USA/BR) se consideran “parecidos” (se elige el más barato sin drama) --
-# PCT_ESTABILIDAD_REPOS: Si la diferencia entre costo USA y BR, dividida por el mayor,
-#   es menor que este valor (ej. 0.20 = 20 %), los tratamos como estables.
+# -- [B] Repos USA vs BR: estabilidad relativa + tope en $ (cuartiles costo repo) --
+# PCT_ESTABILIDAD_REPOS: |USA-BR|/max(USA,BR) < esto Y bajo tope nominal => repos "estables".
 PCT_ESTABILIDAD_REPOS = 0.20
 
-# FACTOR_NOMINAL_CUARTILES: Cuatro factores (uno por tramo de cuartil del costo de repo).
-#   Sirve para el tope en dólares de la diferencia USA–BR cuando el % ya pasó pero en
-#   dinero la brecha sigue siendo pequeña. Artículos más caros permiten más diferencia en $.
+# FACTOR_NOMINAL_CUARTILES: tope en moneda para |USA-BR| cuando el % falla pero $ es pequeño (por cuartil).
+#   No es el mismo umbral que PCT_ESTABILIDAD_REPOS (distinta escala: % vs $).
 FACTOR_NOMINAL_CUARTILES = (0.30, 0.25, 0.20, 0.15)
 
-# -- Disponibilidad mínima exigida según cuánto cuesta el artículo (cuartiles de PRECIO en el lote) --
-# DISP_MIN_POR_TRANO_PRECIO: Cuatro pisos (artículo muy barato … muy caro). Si la disp.
-#   del origen no llega al piso de su tramo, no confías en ese origen hasta por disponibilidad.
-DISP_MIN_POR_TRANO_PRECIO = (5.0, 8.0, 10.0, 15.0)
+# -- [C] Piso de disponibilidad segun tramo de PRECIO de lista (cuartiles del archivo) --
+# Se combina con max(cuartiles DISP del lote) en _umbral_disp_por_precio.
+DISP_MIN_POR_TRAMO_PRECIO = (5.0, 8.0, 10.0, 15.0)
 
-# -- Cuándo NO calcular costo automático (evitar decisiones falsas) --
-# PCT_SPREAD_MAX_COSTO_INV: Umbral por defecto de dispersion (max-min)/max en inventario.
-#   Filas con columna opcional Categoria usan SPREAD_MAX_POR_CATEGORIA si el nombre coincide.
-PCT_SPREAD_MAX_COSTO_INV = 0.45
-
-# SPREAD_MAX_POR_CATEGORIA: nombre de categoria (cualquier mayusculas) -> fraccion 0..1
-#   (ej. 0.30 = 30%). Valores > 1 se interpretan como porcentaje / 100.
-SPREAD_MAX_POR_CATEGORIA: dict[str, float] = {
-    "General": 0.40,
-    "Filtros": 0.30,
-    "Lubricantes": 0.15,
-}
-
-# PCT_INV_MAX_ALINEADO_REPO: Si hay dispersion de inventario (posible NC_INV) pero repos USA/BR son
-#   estables, se evita NC cuando el costo max. de bodega dista a lo mas este % del repo mas cercano
-#   (relativo al repo mas caro). Entonces el mejor costo es el de reposicion.
+# -- [D] Inventario muy disperso pero max bodega alineado a cotas de repos (bypass NC_INV) --
+# Distinto de [B]: aqui se mide distancia inv_max a repos, no diferencia USA-BR.
 PCT_INV_MAX_ALINEADO_REPO = 0.20
 
-# RATIO_REPOS_CONFLICTO: Si el costo del origen caro dividido entre el del barato supera
-#   este número (ej. 150/40 = 3.75) y además el barato tiene pocas unidades, hay conflicto
-#   de abastecimiento: no forzamos un costo único automático.
+# -- [E] Conflicto de precios entre orígenes (caro vs barato + stock) --
 RATIO_REPOS_CONFLICTO = 2.0
-
-# DISP_MIN_ORIGEN_BARATO: Por debajo de estas unidades en el origen más barato, junto con
-#   RATIO_REPOS_CONFLICTO, declaramos conflicto (ej. USA 40 USD con 2 unidades vs BR caro con stock).
 DISP_MIN_ORIGEN_BARATO = 5.0
 
-# PCT_DIF_REPOS_EXTREMA_NC: Si USA y BR difieren más que este % (relativo al mayor costo)
-#   y además ninguno cumple el piso de disponibilidad, marcamos no calculable por divergencia extrema.
+# -- [F] Divergencia USA-BR: corte duro (NC) vs aviso en nota --
 PCT_DIF_REPOS_EXTREMA_NC = 0.55
-
-# -- Revisión manual (solo enciende un aviso en NOTA; no añade columnas de análisis) --
-# UMBRAL_DISPINV_TRAMO_MIN: Unidades en DISPINVmin a partir de las cuales consideras
-#   “mucho stock” en el tramo de costo mínimo (política interna).
-UMBRAL_DISPINV_TRAMO_MIN = 50.0
-
-# UMBRAL_INV_UNIDAD_EXT_DISP: Unidades máximas de inventario (DISPINV) para cruzar con
-#   disponibilidad externa baja (revisión de abastecimiento).
-UMBRAL_INV_UNIDAD_EXT_DISP = 30.0
-
-# PCT_DIF_REPOS_REVISION: Si la divergencia USA/BR supera este %, sugerimos revisar aunque haya costo.
 PCT_DIF_REPOS_REVISION = 0.35
 
-# -- Salida y lectura de archivos --
+# -- [G] Textos opcionales en NOTA_DECISION --
+UMBRAL_DISPINV_TRAMO_MIN = 50.0
+UMBRAL_INV_UNIDAD_EXT_DISP = 30.0
+
+# -- [H] Salida / lectura y epsilon numerico --
 IMPRIMIR_CUARTILES_EN_CONSOLA = True
 CSV_SEP = ";"
 CSV_ENCODING = "utf-8-sig"
@@ -187,7 +248,6 @@ CSV_HEADER_ROW = 0
 BASE_DIR = Path(__file__).resolve().parent
 INPUT_CSV = BASE_DIR / "entrada.csv"
 OUTPUT_CSV = BASE_DIR / "salida_precio.csv"
-
 EPS = 1e-12
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -282,9 +342,9 @@ def _valor_categoria(row, cols_present, c) -> str | None:
 
 
 def _margen_objetivo_y_tolerancia_para_categoria(val: str | None) -> tuple[float, float]:
-    """(objetivo %, tolerancia pp) para la fila; desconocido o vacio -> valores globales."""
-    mo = float(MARGEN_OBJETIVO_PCT)
-    mt = float(MARGEN_TOLERANCIA_PCT)
+    """(objetivo %, tolerancia pp) para la fila; desconocido o sin coincidencia -> linea Default del texto."""
+    mo = float(MARGEN_DEFAULT_OBJETIVO_PCT)
+    mt = float(MARGEN_DEFAULT_TOLERANCIA_PCT)
     if not val:
         return mo, mt
     cf = val.strip().casefold()
@@ -300,17 +360,14 @@ def _margen_objetivo_y_tolerancia_para_categoria(val: str | None) -> tuple[float
 
 
 def _spread_max_para_categoria(val: str | None) -> float:
-    """Fraccion maxima de dispersion de inventario para la fila; desconocido -> PCT_SPREAD_MAX_COSTO_INV."""
-    default = PCT_SPREAD_MAX_COSTO_INV
+    """Fraccion maxima de dispersion de inventario para la fila; sin coincidencia -> linea Default del texto."""
+    default = SPREAD_DEFAULT_MAX_FRAC
     if not val:
         return default
     cf = val.strip().casefold()
     for nombre, raw in SPREAD_MAX_POR_CATEGORIA.items():
         if nombre.strip().casefold() == cf:
-            v = float(raw)
-            if v > 1.0:
-                v = v / 100.0
-            return max(0.0, min(1.0, v))
+            return _normalize_spread_fraccion(float(raw))
     return default
 
 
@@ -407,7 +464,7 @@ def _umbral_disp_por_precio(
     precio: float, pq1: float, pq2: float, pq3: float,
     dq1: float, dq2: float, dq3: float,
 ) -> float:
-    a, b, c, d = DISP_MIN_POR_TRANO_PRECIO
+    a, b, c, d = DISP_MIN_POR_TRAMO_PRECIO
     if precio <= pq1:
         return max(a, dq1)
     if precio <= pq2:
@@ -918,7 +975,7 @@ def _calcular_resultados(
     if c.get("categoria") and c["categoria"] in cols_present:
         print(
             f"  Categoria: columna '{c['categoria']}' "
-            "(SPREAD_MAX / MARGEN_* por categoria)."
+            "(MARGEN_POLITICA + SPREAD_MAX_POR_CATEGORIA en texto)."
         )
 
     rq1, rq2, rq3 = _calcular_cuartiles(
