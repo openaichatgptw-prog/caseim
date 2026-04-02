@@ -7,7 +7,7 @@ Ejecución: python mewp_marketshare.py
 Flujo interactivo paso a paso (sin subcomandos): comprueba archivos, opción de
 recuperar batches desde OpenAI (batch_ids.txt), clasificación por Batch API o
 uno a uno, checkpoint cada N filas, y genera un .xlsx nuevo con las columnas
-clasificacion, marca, Estado.
+clasificacion (MEWPS|FORKLIFT|TELEHANDLER|NA), marca, Estado.
 
 Clave de fila: **idx** (entero 0-based) = posición de la fila en el DataFrame
 leído del Excel (misma fila que en la hoja, en orden, bajo HEADER_ROW). Los
@@ -39,30 +39,29 @@ _COLS_CRUZ = ["clasificacion", "marca", "Estado"]
 _DEFAULT_BATCH_IDS = "batch_ids.txt"
 
 _SYSTEM = (
-    "Clasificador MEWP/forklift sobre texto aduanero MARKETSHARE: Descripcion de la mercancia + Proveedor. "
-    "Suele haber MERCANCIA NUEVA/USADA, MARCA/MODELO/REFERENCIA; a veces NO TIENE.\n"
-    "Responde solo JSON valido, sin markdown. Tres claves exactas: clasificacion, marca, Estado.\n\n"
+    "Clasificador MEWP/forklift: Descripcion mercancia + Proveedor (MARKETSHARE). MERCANCIA NUEVA/USADA, MARCA/MODELO; a veces NO TIENE.\n"
+    "Salida: solo JSON valido sin markdown. Claves: clasificacion, marca, Estado.\n\n"
 
-    "clasificacion ∈ {MEWPS,FORKLIFT,NA}:\n"
-    "MEWPS — plataforma elevadora: tijera, boom/articulada, telescopica, man lift, AWP, spider, mastil vertical; "
-    "brazo articulado electrico si es plataforma de trabajo.\n"
-    "FORKLIFT — montacargas, reach truck, order picker con mastil, transpaleta/apilador motorizado, telehandler como carretilla.\n"
-    "NA — repuesto/parte/accesorio sin equipo completo; ascensor/elevador pasajeros edificio, escalera mecanica; "
-    "otro bien; o duda razonable entre MEWPS y FORKLIFT.\n\n"
+    "clasificacion ∈ {MEWPS,FORKLIFT,TELEHANDLER,NA}:\n"
+    "MEWPS — plataforma: tijera, boom/articulada, telescopica, man lift, AWP, spider, mastil vertical; brazo articulado electrico como plataforma de trabajo.\n"
+    "FORKLIFT — montacargas, reach truck, order picker con mastil, transpaleta/apilador motorizado; carretilla telescopica si no cumple el criterio estricto de TELEHANDLER abajo.\n"
+    "TELEHANDLER — SOLO si el texto nombra explicitamente telehandler, telescopic handler, manipulador telescopico tipo telehandler (o sinonimo inequivoco), "
+    "o describe el equipo sin ambiguedad como tal; ante la menor duda frente a montacargas o plataforma, NO uses TELEHANDLER (elige MEWPS, FORKLIFT o NA).\n"
+    "NA — repuesto/parte sin equipo; ascensor/escalera pasajeros; otro bien; duda entre clases.\n\n"
 
-    "Marca: SOLO el nombre del fabricante del equipo principal en MAYUSCULAS; si no es identificable con confianza, NA. "
-    "Ignorar marca de motor, bateria, neumatico salvo que sea el unico bien declarado.\n"
-    "Orden de comprobacion (prioridad decreciente; usa la primera regla que aplique con confianza): "
-    "(1) texto declara MARCA explicita → esa marca; "
-    "(2) modelo o serie inequivocos de fabricante conocido — ej. GS-1930,Z-45→GENIE; 1930ES,450AJ→JLG; "
-    "Compact10,HA16→HAULOTTE; 8FGCU→TOYOTA; EFG216→JUNGHEINRICH; FC5200→CROWN; DP25→CAT (orientativo); "
-    "(3) Proveedor coincide con fabricante sin contradiccion en el texto; "
-    "(4) si NO TIENE marca, proveedor generico y modelo ambiguo → NA.\n"
-    "Precision mayor que cobertura: ante duda, marca NA.\n\n"
+    "Marca: SOLO fabricante del equipo principal en MAYUSCULAS; si no, NA. Ignorar motor/bateria/neumatico salvo unico bien.\n"
+    "Desempate MARCA vs Proveedor: si el texto declara MARCA y el Proveedor indica otro fabricante distinto, prima la MARCA del texto; "
+    "si modelo/serie apunta a un fabricante y el texto declara otra MARCA distinta, prima la MARCA del texto salvo error de digitacion evidente.\n"
+    "Orden de comprobacion (primera regla con confianza): "
+    "(1) MARCA explicita en texto; "
+    "(2) modelo/serie inequivoca — ej. GS-1930,Z-45→GENIE; 1930ES,450AJ→JLG; Compact10,HA16→HAULOTTE; 8FGCU→TOYOTA; EFG216→JUNGHEINRICH; FC5200→CROWN; DP25→CAT (orientativo); "
+    "(3) Proveedor=fabricante sin contradiccion con (1)-(2); "
+    "(4) NO TIENE + proveedor generico + modelo ambiguo → NA.\n"
+    "Precision>cobertura: ante duda, marca NA.\n\n"
 
-    "Estado ∈ {NUEVO,USADO,NA}: NUEVO si nuevo/MERCANCIA NUEVA; USADO si usado/refurbished/reman; NA si no claro.\n\n"
+    "Estado ∈ {NUEVO,USADO,NA}: NUEVO nuevo/MERCANCIA NUEVA; USADO usado/refurbished/reman; NA si no claro.\n\n"
 
-    "Repuesto o parte suelta sin equipo completo: clasificacion NA y marca NA."
+    "Repuesto sin equipo completo: clasificacion NA, marca NA."
 )
 
 
@@ -141,7 +140,7 @@ def _strip_json_fence(text: str) -> str:
 
 def _normalize_result(d: dict) -> tuple[str, str, str]:
     c = str(d.get("clasificacion", "NA")).upper().strip()
-    if c not in ("MEWPS", "FORKLIFT", "NA"):
+    if c not in ("MEWPS", "FORKLIFT", "TELEHANDLER", "NA"):
         c = "NA"
     m = str(d.get("marca", "NA")).strip()
     if not m:
