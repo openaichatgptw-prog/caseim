@@ -52,10 +52,12 @@ _SYSTEM = (
 
     "Marca: SOLO el nombre del fabricante del equipo principal en MAYUSCULAS; si no es identificable con confianza, NA. "
     "Ignorar marca de motor, bateria, neumatico salvo que sea el unico bien declarado.\n"
-    "Pasos en orden de prioridad para fijar marca (1 primero; si ya obtienes marca con confianza, no la cambies salvo contradiccion clara en el texto): "
-    "(1) MARCA en texto (2) modelo/serie inequivoca sector — ej. GS-1930,Z-45→GENIE; 1930ES,450AJ→JLG; "
-    "Compact10,HA16→HAULOTTE; 8FGCU→TOYOTA; EFG216→JUNGHEINRICH; FC5200→CROWN; DP25→CAT (lista orientativa) "
-    "(3) proveedor coincide con fabricante conocido sin contradiccion (4) NO TIENE + proveedor generico + modelo ambiguo → NA.\n"
+    "Orden de comprobacion (prioridad decreciente; usa la primera regla que aplique con confianza): "
+    "(1) texto declara MARCA explicita → esa marca; "
+    "(2) modelo o serie inequivocos de fabricante conocido — ej. GS-1930,Z-45→GENIE; 1930ES,450AJ→JLG; "
+    "Compact10,HA16→HAULOTTE; 8FGCU→TOYOTA; EFG216→JUNGHEINRICH; FC5200→CROWN; DP25→CAT (orientativo); "
+    "(3) Proveedor coincide con fabricante sin contradiccion en el texto; "
+    "(4) si NO TIENE marca, proveedor generico y modelo ambiguo → NA.\n"
     "Precision mayor que cobertura: ante duda, marca NA.\n\n"
 
     "Estado ∈ {NUEVO,USADO,NA}: NUEVO si nuevo/MERCANCIA NUEVA; USADO si usado/refurbished/reman; NA si no claro.\n\n"
