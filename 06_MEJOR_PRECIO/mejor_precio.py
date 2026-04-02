@@ -3,13 +3,18 @@
 Monitor estrategico de costo vs inventario y reposicion (CSV -> CSV).
 Carpeta: 06_MEJOR_PRECIO
 
-Salida base (7 columnas) + CONFIANZA (ALTA|MEDIA|BAJA). Con --auditoria se añade AUDITORIA (traza corta).
+Salida: columnas de decision + LISTA_EN_RANGO (SI|NO|REVISAR|N/A): precio de lista frente al piso
+  de margen vs costo max. de inventario y vs repo mas barato, en una sola señal. CONFIANZA. --auditoria: AUDITORIA.
 
 OK_MARGEN_OBJETIVO usa MARGEN_OBJETIVO_PCT y MARGEN_TOLERANCIA_PCT: SI si el margen alcanza al menos
   objetivo - tolerancia (puntos porcentuales); NO si queda por debajo de esa banda inferior.
 
 Notas: [REVISAR MANUAL] en NO_CALCULABLE (el CODIGO indica la causa). [ATENCION] en calculados con
   riesgo operativo (repos inestables, avisos de revision rapida, o solo inventario sin repos).
+
+Excepcion (sin cambiar reglas de repos): si el spread de inventario seria NC_INV pero USA/BR son
+  estables y el costo max. de bodega esta cerca de los repos (PCT_INV_MAX_ALINEADO_REPO), se calcula
+  usando el costo de reposicion (no se fuerza inventario aunque max > min repo).
 
 Codigos NO_CALCULABLE (ejemplos):
   NC_INV_RANGO_AMPLIO       costo min/max bodegas demasiado lejanos (un solo costo no defendible)
@@ -82,6 +87,11 @@ SPREAD_MAX_POR_CATEGORIA: dict[str, float] = {
     "Lubricantes": 0.15,
 }
 
+# PCT_INV_MAX_ALINEADO_REPO: Si hay dispersion de inventario (posible NC_INV) pero repos USA/BR son
+#   estables, se evita NC cuando el costo max. de bodega dista a lo mas este % del repo mas cercano
+#   (relativo al repo mas caro). Entonces el mejor costo es el de reposicion.
+PCT_INV_MAX_ALINEADO_REPO = 0.20
+
 # RATIO_REPOS_CONFLICTO: Si el costo del origen caro dividido entre el del barato supera
 #   este número (ej. 150/40 = 3.75) y además el barato tiene pocas unidades, hay conflicto
 #   de abastecimiento: no forzamos un costo único automático.
@@ -140,7 +150,7 @@ _COL_REQUERIDAS = (
     "disp_usa", "disp_br", "precio",
 )
 
-# Salida ejecutiva: 7 base + CONFIANZA; + AUDITORIA con --auditoria
+# Salida ejecutiva: columnas base + LISTA_EN_RANGO + CONFIANZA; + AUDITORIA con --auditoria
 OUT_ESTADO = "ESTADO"
 OUT_CODIGO = "CODIGO"
 OUT_MEJOR_COSTO = "MEJOR_COSTO"
@@ -150,6 +160,7 @@ OUT_OK_MARGEN = "OK_MARGEN_OBJETIVO"
 OUT_NOTA = "NOTA_DECISION"
 OUT_CONFIANZA = "CONFIANZA"
 OUT_AUDITORIA = "AUDITORIA"
+OUT_LISTA_EN_RANGO = "LISTA_EN_RANGO"
 
 ORDEN_ENTRADA_KEYS = (
     "inv_min", "disp_inv_min", "inv_max", "disp_inv_max",
@@ -280,6 +291,37 @@ def _umbral_nominal(max_repo: float, rq1: float, rq2: float, rq3: float) -> floa
     return rq3 * f4 + EPS
 
 
+def _repos_estables_pair(
+    repo_usa_raw: float,
+    repo_br_raw: float,
+    rq1: float,
+    rq2: float,
+    rq3: float,
+) -> bool:
+    """Misma logica que 'es_estable' en evaluacion de fila (USA vs BR)."""
+    max_repo = max(repo_usa_raw, repo_br_raw)
+    if max_repo <= 0:
+        return False
+    pct_diff = abs(repo_usa_raw - repo_br_raw) / (max_repo + EPS)
+    abs_diff = abs(repo_usa_raw - repo_br_raw)
+    nom_thresh = _umbral_nominal(max_repo, rq1, rq2, rq3)
+    return (pct_diff < PCT_ESTABILIDAD_REPOS) and (abs_diff <= nom_thresh)
+
+
+def _inv_max_cerca_de_repos(
+    inv_max: float,
+    repo_usa_raw: float,
+    repo_br_raw: float,
+    pct: float,
+) -> bool:
+    """Costo max. de inventario alineado con cotas de repos (distancia relativa al repo mas caro)."""
+    r_lo = min(repo_usa_raw, repo_br_raw)
+    r_hi = max(repo_usa_raw, repo_br_raw)
+    d = min(abs(inv_max - r_lo), abs(inv_max - r_hi))
+    ref = max(r_hi, EPS)
+    return (d / ref) <= pct
+
+
 def _umbral_disp_por_precio(
     precio: float, pq1: float, pq2: float, pq3: float,
     dq1: float, dq2: float, dq3: float,
@@ -306,22 +348,40 @@ def _referencia_no_calculable(
     disp_br: float,
     umbral_disp: float,
     pct_spread_max: float,
-) -> tuple[bool, str, str, str]:
+    rq1: float,
+    rq2: float,
+    rq3: float,
+) -> tuple[bool, str, str, str, bool]:
     """
-    Devuelve (es_nc, codigo, mensaje_para_NOTA, traza_auditoria si nc).
+    Devuelve (es_nc, codigo, mensaje_para_NOTA, traza_auditoria si nc, forzar_costo_repo).
+    forzar_costo_repo=True: se omitio NC_INV por repos estables + inv_max alineado a repos.
     """
+    forzar_costo_repo = False
     if inv_cost > 0 and inv_lo >= 0:
         spread = (inv_cost - inv_lo) / max(inv_cost, EPS)
         if spread > pct_spread_max:
-            return (
-                True,
-                "NC_INV_RANGO_AMPLIO",
-                "Alta dispersion de costo entre tramos de inventario (min vs max en bodegas).",
-                "NC:INV_SPREAD",
-            )
+            if (
+                tiene_usa
+                and tiene_br
+                and repo_usa_raw > 0
+                and repo_br_raw > 0
+                and _repos_estables_pair(repo_usa_raw, repo_br_raw, rq1, rq2, rq3)
+                and _inv_max_cerca_de_repos(
+                    inv_cost, repo_usa_raw, repo_br_raw, PCT_INV_MAX_ALINEADO_REPO
+                )
+            ):
+                forzar_costo_repo = True
+            else:
+                return (
+                    True,
+                    "NC_INV_RANGO_AMPLIO",
+                    "Alta dispersion de costo entre tramos de inventario (min vs max en bodegas).",
+                    "NC:INV_SPREAD",
+                    False,
+                )
 
     if not tiene_usa and not tiene_br and inv_cost <= 0:
-        return True, "NC_SIN_DATOS", "Sin costo de inventario ni de reposicion en el archivo.", "NC:SIN_DATOS"
+        return True, "NC_SIN_DATOS", "Sin costo de inventario ni de reposicion en el archivo.", "NC:SIN_DATOS", False
 
     if tiene_usa and tiene_br and repo_usa_raw > 0 and repo_br_raw > 0:
         r_hi = max(repo_usa_raw, repo_br_raw)
@@ -337,6 +397,7 @@ def _referencia_no_calculable(
                 "NC_CONFLICTO_ABASTECIMIENTO",
                 f"Origen barato ({lab_b}) con stock bajo y origen caro ({lab_c}) con mejor disponibilidad; ratio de precios alto.",
                 "NC:CONFLICTO_AB",
+                False,
             )
         pct_dif = abs(repo_usa_raw - repo_br_raw) / max(r_hi, EPS)
         usa_ok = disp_usa >= umbral_disp
@@ -347,9 +408,10 @@ def _referencia_no_calculable(
                 "NC_REPOS_DISP_INSUFICIENTE",
                 "Repos USA/BR muy distintos y ambos con disponibilidad por debajo del piso del tramo.",
                 "NC:REPOS_DISP",
+                False,
             )
 
-    return False, "OK", "", ""
+    return False, "OK", "", "", forzar_costo_repo
 
 
 def _nota_manual_nc(codigo: str, mensaje: str) -> str:
@@ -366,6 +428,77 @@ def _margen_lista(precio_lista: float, costo: float) -> tuple[float, str]:
     piso = MARGEN_OBJETIVO_PCT - MARGEN_TOLERANCIA_PCT
     ok = "SI" if m >= piso else "NO"
     return m, ok
+
+
+def _margen_pct_raw(precio: float, costo: float) -> float:
+    """Margen bruto (PRECIO - costo) / PRECIO * 100; NaN si no aplica."""
+    pl = _safe(precio, 0.0)
+    if pl <= 0:
+        return np.nan
+    if costo is None or (isinstance(costo, float) and np.isnan(costo)):
+        return np.nan
+    c = float(costo)
+    if c < 0:
+        return np.nan
+    return round((pl - c) / pl * 100.0, 2)
+
+
+def _lista_en_rango_precio(
+    precio: float,
+    inv_lo: float,
+    inv_cost: float,
+    repo_usa_raw: float,
+    repo_br_raw: float,
+    tiene_usa: bool,
+    tiene_br: bool,
+) -> dict[str, str]:
+    """
+    Una columna: lista en buen rango de margen (mismo piso que OK_MARGEN_OBJETIVO).
+    SI = ok vs max inv y vs repo barato; NO = mal en ambos; REVISAR = solo uno ok; N/A = sin datos.
+    """
+    m_imax = _margen_pct_raw(precio, inv_cost) if inv_cost > 0 else np.nan
+
+    m_rmin = np.nan
+    if tiene_usa and tiene_br:
+        m_rmin = _margen_pct_raw(precio, min(repo_usa_raw, repo_br_raw))
+    elif tiene_usa:
+        m_rmin = _margen_pct_raw(precio, repo_usa_raw)
+    elif tiene_br:
+        m_rmin = _margen_pct_raw(precio, repo_br_raw)
+
+    tiene_inv = inv_cost > 0 or inv_lo > 0
+    tiene_repo = tiene_usa or tiene_br
+    piso = MARGEN_OBJETIVO_PCT - MARGEN_TOLERANCIA_PCT
+
+    if not tiene_inv and not tiene_repo:
+        val = "N/A"
+    else:
+        ok_i = m_imax >= piso if pd.notna(m_imax) else None
+        ok_r = m_rmin >= piso if pd.notna(m_rmin) else None
+
+        if tiene_repo and tiene_inv:
+            if ok_i is None or ok_r is None:
+                val = "N/A"
+            elif ok_i and ok_r:
+                val = "SI"
+            elif not ok_i and not ok_r:
+                val = "NO"
+            else:
+                val = "REVISAR"
+        elif tiene_inv and not tiene_repo:
+            if ok_i is None:
+                val = "N/A"
+            else:
+                val = "SI" if ok_i else "NO"
+        elif tiene_repo and not tiene_inv:
+            if ok_r is None:
+                val = "N/A"
+            else:
+                val = "SI" if ok_r else "NO"
+        else:
+            val = "N/A"
+
+    return {OUT_LISTA_EN_RANGO: val}
 
 
 def _nota_revision_rapida(
@@ -437,7 +570,7 @@ def _evaluar_fila(
 
     umbral_disp_pre = _umbral_disp_por_precio(precio, pq1, pq2, pq3, dq1, dq2, dq3)
 
-    nc, codigo, msg_nc, aud_nc = _referencia_no_calculable(
+    nc, codigo, msg_nc, aud_nc, forzar_costo_repo = _referencia_no_calculable(
         tiene_usa=tiene_usa,
         tiene_br=tiene_br,
         inv_lo=inv_lo,
@@ -448,6 +581,9 @@ def _evaluar_fila(
         disp_br=float(disp_br),
         umbral_disp=umbral_disp_pre,
         pct_spread_max=pct_spread_max,
+        rq1=rq1,
+        rq2=rq2,
+        rq3=rq3,
     )
     if nc:
         nota_nc = _nota_manual_nc(codigo, msg_nc)
@@ -463,6 +599,11 @@ def _evaluar_fila(
         }
         if modo_auditoria:
             out[OUT_AUDITORIA] = aud_nc
+        out.update(
+            _lista_en_rango_precio(
+                precio, inv_lo, inv_cost, repo_usa_raw, repo_br_raw, tiene_usa, tiene_br
+            )
+        )
         return out
 
     if not tiene_usa and not tiene_br:
@@ -486,6 +627,11 @@ def _evaluar_fila(
         }
         if modo_auditoria:
             out_si[OUT_AUDITORIA] = "OK:SOLO_INV"
+        out_si.update(
+            _lista_en_rango_precio(
+                precio, inv_lo, inv_cost, repo_usa_raw, repo_br_raw, tiene_usa, tiene_br
+            )
+        )
         return out_si
 
     if not tiene_usa:
@@ -549,7 +695,10 @@ def _evaluar_fila(
     m_ext_disp = max(disp_usa, disp_br)
     m_inv_disp = max(disp_inv_min, disp_inv_max)
 
-    if inv_cost > 0 and not np.isnan(mejor_repo) and inv_cost > mejor_repo:
+    if forzar_costo_repo and not np.isnan(mejor_repo):
+        mejor_costo = mejor_repo
+        origen_final = origen
+    elif inv_cost > 0 and not np.isnan(mejor_repo) and inv_cost > mejor_repo:
         mejor_costo = inv_cost
         origen_final = "INVENTARIO"
     elif np.isnan(mejor_repo):
@@ -577,12 +726,19 @@ def _evaluar_fila(
         f"Costo sugerido {mc_round} desde {origen_final}. Margen sobre lista {m_pct}% "
         f"(objetivo {MARGEN_OBJETIVO_PCT}% ±{MARGEN_TOLERANCIA_PCT} pp, piso {piso_m}%: {ok_m})."
     )
+    if forzar_costo_repo:
+        base = (
+            f"{base} Tramos de inventario muy distintos; repos USA/BR estables y costo max. "
+            f"bodega alineado a repos (<= {PCT_INV_MAX_ALINEADO_REPO * 100:.0f}%): se usa reposicion."
+        )
     cuerpo = f"{base} {extra}".strip() if extra else base
-    necesita_atencion = bool(extra) or etiqueta_estab == "INESTABLE"
+    necesita_atencion = bool(extra) or etiqueta_estab == "INESTABLE" or forzar_costo_repo
     nota = f"[ATENCION] {cuerpo}" if necesita_atencion else cuerpo
 
     costo_tipo = "INV" if origen_final == "INVENTARIO" else "REPO"
     aud = f"OK:{etiqueta_estab}|{origen_final}|{costo_tipo}"
+    if forzar_costo_repo:
+        aud = f"BYPASS:INV_DISP|REPO_ESTABLE|{aud}"
     if len(aud) > 96:
         aud = aud[:93] + "..."
 
@@ -598,6 +754,11 @@ def _evaluar_fila(
     }
     if modo_auditoria:
         out_ok[OUT_AUDITORIA] = aud
+    out_ok.update(
+        _lista_en_rango_precio(
+            precio, inv_lo, inv_cost, repo_usa_raw, repo_br_raw, tiene_usa, tiene_br
+        )
+    )
     return out_ok
 
 
@@ -713,6 +874,10 @@ def imprimir_resumen(df_in: pd.DataFrame, df_out: pd.DataFrame) -> None:
         print("  -- CONFIANZA --")
         for v, cnt in df_out[OUT_CONFIANZA].value_counts().items():
             print(f"    {v}: {cnt} ({cnt / n * 100:.1f}%)")
+    if OUT_LISTA_EN_RANGO in df_out.columns:
+        print("  -- LISTA_EN_RANGO (precio vs piso margen: inv max + repo barato) --")
+        for v, cnt in df_out[OUT_LISTA_EN_RANGO].value_counts().items():
+            print(f"    {v}: {cnt}")
     print("=" * 58)
 
 
@@ -724,6 +889,7 @@ def _columnas_salida_resultado(df_res: pd.DataFrame) -> list[str]:
         OUT_ORIGEN,
         OUT_MARGEN,
         OUT_OK_MARGEN,
+        OUT_LISTA_EN_RANGO,
         OUT_NOTA,
         OUT_CONFIANZA,
     ]
