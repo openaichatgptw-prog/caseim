@@ -3,7 +3,8 @@
 Monitor estrategico de costo vs inventario y reposicion (CSV -> CSV).
 Carpeta: 06_MEJOR_PRECIO
 
-Salida: columnas de decision + LISTA_EN_RANGO (SI|NO|REVISAR|N/A): precio de lista frente al piso
+Salida: columnas de decision + PRECIO_CALCULADO (lista implicita al margen objetivo: MEJOR_COSTO/(1-MARGEN_OBJETIVO))
+  + LISTA_EN_RANGO (SI|NO|REVISAR|N/A): precio de lista frente al piso
   de margen vs costo max. de inventario y vs repo mas barato, en una sola señal. CONFIANZA. --auditoria: AUDITORIA.
 
 OK_MARGEN_OBJETIVO usa MARGEN_OBJETIVO_PCT y MARGEN_TOLERANCIA_PCT: SI si el margen alcanza al menos
@@ -154,6 +155,7 @@ _COL_REQUERIDAS = (
 OUT_ESTADO = "ESTADO"
 OUT_CODIGO = "CODIGO"
 OUT_MEJOR_COSTO = "MEJOR_COSTO"
+OUT_PRECIO_CALCULADO = "PRECIO_CALCULADO"
 OUT_ORIGEN = "ORIGEN"
 OUT_MARGEN = "MARGEN_PCT_LISTA"
 OUT_OK_MARGEN = "OK_MARGEN_OBJETIVO"
@@ -419,6 +421,20 @@ def _nota_manual_nc(codigo: str, mensaje: str) -> str:
     return f"[REVISAR MANUAL] {mensaje} [Codigo: {codigo}]"
 
 
+def _precio_lista_margen_objetivo(costo: float) -> float:
+    """Precio de lista que implica margen bruto = MARGEN_OBJETIVO_PCT sobre este costo: C / (1 - m)."""
+    if costo is None or (isinstance(costo, float) and np.isnan(costo)):
+        return np.nan
+    c = float(costo)
+    if c <= 0:
+        return np.nan
+    m = MARGEN_OBJETIVO_PCT / 100.0
+    den = 1.0 - m
+    if den <= EPS:
+        return np.nan
+    return round(c / den, 4)
+
+
 def _margen_lista(precio_lista: float, costo: float) -> tuple[float, str]:
     pl = _safe(precio_lista, 0.0)
     if pl <= 0 or costo is None or (isinstance(costo, float) and np.isnan(costo)):
@@ -591,6 +607,7 @@ def _evaluar_fila(
             OUT_ESTADO: "NO_CALCULABLE",
             OUT_CODIGO: codigo,
             OUT_MEJOR_COSTO: np.nan,
+            OUT_PRECIO_CALCULADO: np.nan,
             OUT_ORIGEN: "N/A",
             OUT_MARGEN: np.nan,
             OUT_OK_MARGEN: "N/A",
@@ -619,6 +636,7 @@ def _evaluar_fila(
             OUT_ESTADO: "CALCULADO",
             OUT_CODIGO: "OK_SOLO_INV",
             OUT_MEJOR_COSTO: mc,
+            OUT_PRECIO_CALCULADO: _precio_lista_margen_objetivo(mc),
             OUT_ORIGEN: "INVENTARIO" if inv_cost > 0 else "N/A",
             OUT_MARGEN: m_pct,
             OUT_OK_MARGEN: ok_m,
@@ -746,6 +764,7 @@ def _evaluar_fila(
         OUT_ESTADO: "CALCULADO",
         OUT_CODIGO: "OK",
         OUT_MEJOR_COSTO: mc_round,
+        OUT_PRECIO_CALCULADO: _precio_lista_margen_objetivo(mc_round),
         OUT_ORIGEN: origen_final,
         OUT_MARGEN: m_pct,
         OUT_OK_MARGEN: ok_m,
@@ -886,6 +905,7 @@ def _columnas_salida_resultado(df_res: pd.DataFrame) -> list[str]:
         OUT_ESTADO,
         OUT_CODIGO,
         OUT_MEJOR_COSTO,
+        OUT_PRECIO_CALCULADO,
         OUT_ORIGEN,
         OUT_MARGEN,
         OUT_OK_MARGEN,
