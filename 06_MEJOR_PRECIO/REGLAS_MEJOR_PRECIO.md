@@ -10,7 +10,7 @@
 El sistema responde, **por cada referencia de producto**, a tres preguntas de negocio:
 
 1. **¿Con qué costo deberíamos trabajar** para evaluar si el precio de lista es sostenible?
-2. **¿Ese margen cumple la política** que la empresa definió como objetivo?
+2. **¿Ese margen cumple la política** que la empresa definió como objetivo (incluida la variación por **categoría**)?
 3. **¿Podemos confiar en el número automático** o hay situaciones que obligan a **revisión humana**?
 
 No sustituye el criterio comercial: **acota errores** cuando los datos son incoherentes y **documenta el motivo** cuando no se puede calcular un costo único con seguridad.
@@ -28,9 +28,9 @@ Cada línea del archivo representa un producto y aporta, como mínimo:
 | Disponibilidad en USA y Brasil | Unidades o señal de stock disponible en ese proveedor. |
 | Disponibilidad en tramos de inventario (opcional) | Cuánto hay asociado al costo mínimo y al máximo en bodega. |
 | Precio de lista | Precio de venta al público o lista vigente. |
-| Categoría (opcional) | Permite aplicar reglas de dispersión de inventario distintas por tipo de producto. |
+| **Categoría (obligatoria)** | Texto que debe coincidir con la política de margen y, si aplica, con el umbral de dispersión de inventario definidos en el programa (mismo nombre, sin importar mayúsculas). |
 
-Si faltan columnas opcionales, el modelo asume ceros donde corresponde y lo indica en consola al procesar.
+Si faltan columnas opcionales de disponibilidad en inventario, el modelo asume ceros donde corresponde y lo indica en consola al procesar.
 
 ---
 
@@ -42,15 +42,42 @@ El margen que se calcula es el **margen bruto sobre precio de lista**:
 \text{Margen (\%)} = \frac{\text{Precio de lista} - \text{Costo usado}}{\text{Precio de lista}} \times 100
 \]
 
-La política configurable distingue:
+### 3.1 Valores por defecto (cuando la categoría no está en la tabla del programa)
 
-- **Margen objetivo:** referencia deseada (hoy **40 %** en la configuración del sistema).
-- **Tolerancia:** cuántos puntos porcentuales por debajo del objetivo siguen siendo aceptables (hoy **15 puntos**).
-- **Piso efectivo:** objetivo menos tolerancia → hoy **25 %**.  
-  - Si el margen es **≥ 25 %**, la columna **OK_MARGEN_OBJETIVO** indica **SÍ**.  
-  - Si es **< 25 %**, indica **NO**.
+En el código existen **valores globales** de referencia:
 
-Por encima del objetivo (40 %) el resultado sigue siendo favorable; la tolerancia solo define **hasta dónde abajo** aún se considera “dentro de política”.
+- **Margen objetivo por defecto:** **40 %** (`MARGEN_OBJETIVO_PCT`).
+- **Tolerancia por defecto:** **15 puntos porcentuales** debajo del objetivo (`MARGEN_TOLERANCIA_PCT`).
+- **Piso por defecto:** objetivo menos tolerancia → **25 %**.
+
+Si el margen es **≥ piso**, **OK_MARGEN_OBJETIVO** es **SÍ**; si es **< piso**, **NO**.
+
+### 3.2 Márgenes por categoría (parametrización principal)
+
+La política **por categoría** se define en un **solo bloque de texto** en el código (`MARGEN_POLITICA_POR_CATEGORIA_TEXTO`). Ahí se listan líneas del tipo:
+
+- `NombreCategoria: objetivo%, tolerancia_pp` — tolerancia explícita para esa categoría.
+- `NombreCategoria: objetivo%` — si no se indica tolerancia, se usa la **tolerancia global** (`MARGEN_TOLERANCIA_PCT`).
+
+Se pueden separar entradas con **salto de línea**, **punto y coma** o **corchetes**; las líneas que empiezan por `#` son comentarios.
+
+**Ejemplo compacto (ilustrativo):**
+
+`[ GENERAL:40%,15 ; FILTROS:35%,12 ; ACIET:30% ; MANGUERA:35%,10 ]`
+
+Los nombres deben alinearse con lo que viene en la columna **Categoria** del CSV. La coincidencia **no distingue mayúsculas**.
+
+**Valores de referencia en el repositorio** (sujetos a cambio en código): por ejemplo General 40 % / 15 pp, Filtros 35 % / 12 pp, Lubricantes 45 % / 10 pp. El **piso** de cada fila es siempre **objetivo − tolerancia** de esa categoría (o de los globales si la categoría no figura en la tabla).
+
+### 3.3 Columna PRECIO_CALCULADO
+
+Para las filas con **MEJOR_COSTO** calculado, se añade **PRECIO_CALCULADO**: precio de lista **teórico** que implicaría un margen bruto **igual al objetivo de esa categoría** sobre ese costo:
+
+\[
+\text{PRECIO\_CALCULADO} = \frac{\text{MEJOR\_COSTO}}{1 - \text{objetivo}_{\text{categoría}}/100}
+\]
+
+Si no hay costo válido (por ejemplo fila **NO_CALCULABLE**), esta columna queda vacía.
 
 ---
 
@@ -92,8 +119,8 @@ Así se evita basar la decisión en un precio teórico de un origen **sin stock 
 
 Se mide qué tan “abierto” está el rango de costos en bodega: comparación entre el **máximo** y el **mínimo** respecto al máximo.
 
-- Hay un **umbral por defecto** para considerar que la dispersión es demasiado alta (hoy **45 %** del máximo).
-- Si existe la columna **Categoría** y coincide con nombres configurados, se pueden usar **umbrales distintos** por categoría (por ejemplo, productos más homogéneos permiten más dispersión o menos, según lo definido en política).
+- Hay un **umbral por defecto** para considerar que la dispersión es demasiado alta (hoy **45 %** del máximo en configuración típica).
+- En el código existe un diccionario **SPREAD_MAX_POR_CATEGORIA** (umbrales distintos por categoría). Si el nombre de **Categoria** coincide, se usa ese umbral; si no, el global.
 
 Si la dispersión supera el umbral **y** no aplica la excepción de “repos estables + costo máximo alineado”, el resultado es **no calculable** (código **NC_INV_RANGO_AMPLIO**): un solo número automático **no defendería** el precio frente a la realidad de bodegas.
 
@@ -116,6 +143,7 @@ En estas situaciones el sistema **prefiere no inventar** un costo único. La col
 
 Es una **lectura única** para dirección: ¿el **precio de lista** está en un rango coherente con el **piso de margen** frente a dos referencias?
 
+- El **piso** es el de la **categoría de esa fila** (objetivo − tolerancia según la tabla de márgenes o los globales).
 - Compara el margen usando el **costo máximo de inventario** (si existe).
 - Compara el margen usando el **repos más barato** disponible (si hay datos de reposición).
 
@@ -147,36 +175,39 @@ Resumen ejecutivo de qué tan “limpia” es la fila para decidir sin mirar el 
 - **[REVISAR MANUAL]** aparece solo en filas **NO_CALCULABLE**, con el código entre corchetes al final.
 - **[ATENCION]** aparece cuando hay riesgo operativo: repos inestables, excepción de usar reposición pese a dispersión de inventario, o patrones como **mucho stock en el tramo de costo mínimo** mientras el costo efectivo analizado es mayor, **repos externos con poca disponibilidad e inventario alto**, o **USA/BR muy divergentes** cuando la pareja se clasifica como inestable.
 
+En filas calculadas, la nota indica el **objetivo y tolerancia** aplicados a esa fila (según categoría).
+
 Estos textos están pensados para **priorizar** qué líneas lleva compras o pricing a una mesa de revisión.
 
 ---
 
-## 11. Parámetros de política (valores actuales de referencia)
+## 11. Parámetros de política (referencia)
 
-Los números siguientes están centralizados en la configuración del programa y pueden ajustarse; aquí figuran **solo como referencia** a la fecha de redacción del documento:
+Los números están en el código (`mejor_precio.py`, sección de hiperparámetros). Aquí solo una **guía**; si cambian en el programa, prevalece el código.
 
-| Tema | Valor de referencia | Idea |
-|------|---------------------|------|
-| Margen objetivo | 40 % | Meta de margen bruto sobre lista. |
-| Tolerancia | 15 puntos | Banda por debajo del objetivo aún aceptable. |
-| Piso de margen | 25 % | Objetivo menos tolerancia. |
-| Estabilidad USA/BR (relativa) | 20 % | Por debajo de esta brecha relativa, los repos se tratan como estables (junto con tope en dinero). |
-| Umbral dispersión inventario (defecto) | 45 % | Máxima dispersión aceptable entre min y max de inventario. |
-| Alineación inventario–repos (excepción) | 20 % | Si el máximo de bodega está cerca de los repos, puede usarse reposición pese a dispersión. |
-| Ratio de conflicto de precios | 2× | Si el caro cuesta el doble o más que el barato y el barato tiene poca disponibilidad, se bloquea. |
-| Disponibilidad mínima en origen barato (conflicto) | 5 unidades | Por debajo, con ratio alto, entra conflicto. |
-| Divergencia extrema repos + disponibilidad baja | 55 % | Si ambos repos están muy lejos y ninguno cumple disponibilidad mínima del tramo. |
-| Divergencia que sugiere revisión (inestable) | 35 % | Aviso en nota si los repos están muy separados. |
-| “Mucho stock” en tramo mínimo | ≥ 50 unidades | Dispara aviso en contexto de tramos distintos de costo. |
-| Inventario alto con repos externos flojos | inventario > 30 unidades | Combinado con disponibilidad externa bajo umbral. |
+| Tema | Dónde se define | Idea |
+|------|-----------------|------|
+| Márgenes por categoría | Bloque **MARGEN_POLITICA_POR_CATEGORIA_TEXTO** | Objetivo y tolerancia por nombre de categoría. |
+| Margen / tolerancia por defecto | **MARGEN_OBJETIVO_PCT**, **MARGEN_TOLERANCIA_PCT** | Si la categoría no está en la tabla de texto. |
+| Dispersión inventario por categoría | **SPREAD_MAX_POR_CATEGORIA** + **PCT_SPREAD_MAX_COSTO_INV** | Umbral de dispersión (max−min)/max. |
+| Estabilidad USA/BR (relativa) | **PCT_ESTABILIDAD_REPOS** (ej. 20 %) | Por debajo de esta brecha relativa, repos “estables” (junto con tope en dinero). |
+| Alineación inventario–repos (excepción) | **PCT_INV_MAX_ALINEADO_REPO** | Si el máximo de bodega está cerca de los repos, puede usarse reposición pese a dispersión. |
+| Ratio de conflicto de precios | **RATIO_REPOS_CONFLICTO** | Si el caro cuesta el doble o más que el barato y el barato tiene poca disponibilidad, se bloquea. |
+| Disponibilidad mínima en origen barato | **DISP_MIN_ORIGEN_BARATO** | Unidades mínimas en el origen más barato para evitar conflicto artificial. |
+| Divergencia extrema repos + disponibilidad baja | **PCT_DIF_REPOS_EXTREMA_NC** | Si ambos repos están muy lejos y ninguno cumple disponibilidad mínima del tramo. |
+| Divergencia que sugiere revisión (inestable) | **PCT_DIF_REPOS_REVISION** | Aviso en nota si los repos están muy separados. |
+| “Mucho stock” en tramo mínimo | **UMBRAL_DISPINV_TRAMO_MIN** | Dispara aviso en contexto de tramos distintos de costo. |
+| Inventario alto con repos externos flojos | **UMBRAL_INV_UNIDAD_EXT_DISP** | Combinado con disponibilidad externa bajo umbral. |
 
-Los **pisos de disponibilidad** por tramo de precio de lista combinan valores fijos (por ejemplo **5, 8, 10 y 15** unidades según cuartil de precio) con información del propio archivo (distribución de disponibilidades), de modo que el umbral **se adapta al lote** sin dejar de tener mínimos claros.
+Los **pisos de disponibilidad** por tramo de precio de lista combinan valores fijos (cuartiles de precio en el lote) con la distribución de disponibilidades del archivo.
 
 ---
 
 ## 12. Salida y modo auditoría
 
-El archivo de salida **conserva las columnas de entrada** (en un orden fijado por la herramienta) y **añade** columnas de resultado: estado, código, mejor costo, origen, margen, cumplimiento de política, lista en rango, nota y confianza.
+El archivo de salida **repite las columnas de entrada** en un orden fijado por la herramienta (incluida **Categoria**) y **añade** columnas de resultado, entre otras:
+
+- **ESTADO**, **CODIGO**, **MEJOR_COSTO**, **PRECIO_CALCULADO**, **ORIGEN**, **MARGEN_PCT_LISTA**, **OK_MARGEN_OBJETIVO**, **LISTA_EN_RANGO**, **NOTA_DECISION**, **CONFIANZA**.
 
 Si se activa el modo **auditoría**, se añade una columna breve con **trazas internas** para quien deba contrastar la decisión sin releer toda la lógica.
 
@@ -184,10 +215,10 @@ Si se activa el modo **auditoría**, se añade una columna breve con **trazas in
 
 ## 13. Limitaciones que conviene tener presentes
 
-- Los resultados dependen de la **calidad y consistencia** de los datos de entrada (costos, disponibilidades y precio de lista).
+- Los resultados dependen de la **calidad y consistencia** de los datos de entrada (costos, disponibilidades, precio de lista y **categoría**).
 - Los umbrales son **políticos y configurables**: deben alinearse con la estrategia comercial y de abastecimiento de la empresa.
 - Un resultado **calculado** no implica que el precio sea el óptimo de mercado; solo indica coherencia interna frente a los costos y reglas cargadas.
 
 ---
 
-*Documento alineado con la lógica del monitor en la carpeta `06_MEJOR_PRECIO`. Si se cambian parámetros en el código, conviene actualizar la sección 11.*
+*Documento alineado con la lógica del monitor en la carpeta `06_MEJOR_PRECIO`. Si cambian **MARGEN_POLITICA_POR_CATEGORIA_TEXTO**, **SPREAD_MAX_POR_CATEGORIA** u otros hiperparámetros en `mejor_precio.py`, conviene actualizar las secciones 3, 6 y 11 de este archivo.*
