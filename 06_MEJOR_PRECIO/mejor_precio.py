@@ -3,8 +3,13 @@
 Monitor estrategico de costo vs inventario y reposicion (CSV -> CSV).
 Carpeta: 06_MEJOR_PRECIO
 
-Que queda en salida (7 columnas):
-  ESTADO, CODIGO, MEJOR_COSTO, ORIGEN, MARGEN_PCT_LISTA, OK_MARGEN_OBJETIVO, NOTA_DECISION
+Salida base (7 columnas) + CONFIANZA (ALTA|MEDIA|BAJA). Con --auditoria se añade AUDITORIA (traza corta).
+
+OK_MARGEN_OBJETIVO usa MARGEN_OBJETIVO_PCT y MARGEN_TOLERANCIA_PCT: SI si el margen alcanza al menos
+  objetivo - tolerancia (puntos porcentuales); NO si queda por debajo de esa banda inferior.
+
+Notas: [REVISAR MANUAL] en NO_CALCULABLE (el CODIGO indica la causa). [ATENCION] en calculados con
+  riesgo operativo (repos inestables, avisos de revision rapida, o solo inventario sin repos).
 
 Codigos NO_CALCULABLE (ejemplos):
   NC_INV_RANGO_AMPLIO       costo min/max bodegas demasiado lejanos (un solo costo no defendible)
@@ -19,7 +24,11 @@ Que se elimino respecto a versiones anteriores:
 
 Uso:
   python mejor_precio.py [entrada.csv] [salida.csv]
+  python mejor_precio.py --auditoria
   python mejor_precio.py --excel libro.xlsx
+
+Columna opcional de entrada: Categoria (nombre alineado con SPREAD_MAX_POR_CATEGORIA) para el umbral
+  de dispersion de inventario; si falta o el nombre no coincide, se usa PCT_SPREAD_MAX_COSTO_INV.
 
 Hiperparametros: solo en HIPERPARAMETROS (arriba).
 """
@@ -39,10 +48,11 @@ import pandas as pd
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # -- Margen sobre lista (decisión comercial simple) --
-# MARGEN_OBJETIVO_PCT: Margen bruto mínimo que consideras “sano” sobre el precio de
-#   lista actual. Se compara con (PRECIO - costo sugerido) / PRECIO * 100.
-#   Si el margen real es mayor o igual → OK_MARGEN_OBJETIVO = SI.
+# MARGEN_OBJETIVO_PCT: Margen bruto de referencia sobre lista (PRECIO - costo) / PRECIO * 100.
+# MARGEN_TOLERANCIA_PCT: Puntos porcentuales por debajo del objetivo que aún cuentan como “en margen”
+#   (ej. objetivo 40 y tolerancia 15 → cumple desde 25% hacia arriba). Por encima del objetivo sigue SI.
 MARGEN_OBJETIVO_PCT = 40.0
+MARGEN_TOLERANCIA_PCT = 15.0
 
 # -- Cuándo dos repos (USA/BR) se consideran “parecidos” (se elige el más barato sin drama) --
 # PCT_ESTABILIDAD_REPOS: Si la diferencia entre costo USA y BR, dividida por el mayor,
@@ -60,9 +70,17 @@ FACTOR_NOMINAL_CUARTILES = (0.30, 0.25, 0.20, 0.15)
 DISP_MIN_POR_TRANO_PRECIO = (5.0, 8.0, 10.0, 15.0)
 
 # -- Cuándo NO calcular costo automático (evitar decisiones falsas) --
-# PCT_SPREAD_MAX_COSTO_INV: Si el costo máximo en bodegas y el mínimo están tan lejos
-#   en relación al máximo (ej. min 40 y max 120), no hay “un solo costo” representativo → no calculable.
+# PCT_SPREAD_MAX_COSTO_INV: Umbral por defecto de dispersion (max-min)/max en inventario.
+#   Filas con columna opcional Categoria usan SPREAD_MAX_POR_CATEGORIA si el nombre coincide.
 PCT_SPREAD_MAX_COSTO_INV = 0.45
+
+# SPREAD_MAX_POR_CATEGORIA: nombre de categoria (cualquier mayusculas) -> fraccion 0..1
+#   (ej. 0.30 = 30%). Valores > 1 se interpretan como porcentaje / 100.
+SPREAD_MAX_POR_CATEGORIA: dict[str, float] = {
+    "General": 0.40,
+    "Filtros": 0.30,
+    "Lubricantes": 0.15,
+}
 
 # RATIO_REPOS_CONFLICTO: Si el costo del origen caro dividido entre el del barato supera
 #   este número (ej. 150/40 = 3.75) y además el barato tiene pocas unidades, hay conflicto
@@ -114,6 +132,7 @@ COL = {
     "disp_inv_min": "DISPINVmin",
     "disp_inv_max": "DISPINVmax",
     "precio": "PRECIO",
+    "categoria": "Categoria",
 }
 
 _COL_REQUERIDAS = (
@@ -121,7 +140,7 @@ _COL_REQUERIDAS = (
     "disp_usa", "disp_br", "precio",
 )
 
-# Salida ejecutiva (7 columnas)
+# Salida ejecutiva: 7 base + CONFIANZA; + AUDITORIA con --auditoria
 OUT_ESTADO = "ESTADO"
 OUT_CODIGO = "CODIGO"
 OUT_MEJOR_COSTO = "MEJOR_COSTO"
@@ -129,13 +148,20 @@ OUT_ORIGEN = "ORIGEN"
 OUT_MARGEN = "MARGEN_PCT_LISTA"
 OUT_OK_MARGEN = "OK_MARGEN_OBJETIVO"
 OUT_NOTA = "NOTA_DECISION"
+OUT_CONFIANZA = "CONFIANZA"
+OUT_AUDITORIA = "AUDITORIA"
 
 ORDEN_ENTRADA_KEYS = (
     "inv_min", "disp_inv_min", "inv_max", "disp_inv_max",
-    "repo_usa", "disp_usa", "repo_br", "disp_br", "precio",
+    "repo_usa", "disp_usa", "repo_br", "disp_br", "precio", "categoria",
 )
 
-ALIASES_COLUMNA_ENTRADA = {"COSTOREPOl": "COSTOREPOBR", "costorepol": "COSTOREPOBR"}
+ALIASES_COLUMNA_ENTRADA = {
+    "COSTOREPOl": "COSTOREPOBR",
+    "costorepol": "COSTOREPOBR",
+    "CATEGORIA": "Categoria",
+    "categoria": "Categoria",
+}
 
 
 def _aplicar_alias_columnas_entrada(df: pd.DataFrame) -> pd.DataFrame:
@@ -168,6 +194,72 @@ def _valor_fila_opcional(row, cols_present, c, key, default=0.0):
     if not name or name not in cols_present:
         return default
     return _safe(row[name], default)
+
+
+def _valor_categoria(row, cols_present, c) -> str | None:
+    name = c.get("categoria")
+    if not name or name not in cols_present:
+        return None
+    v = row[name]
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return None
+    s = str(v).strip()
+    return s if s else None
+
+
+def _spread_max_para_categoria(val: str | None) -> float:
+    """Fraccion maxima de dispersion de inventario para la fila; desconocido -> PCT_SPREAD_MAX_COSTO_INV."""
+    default = PCT_SPREAD_MAX_COSTO_INV
+    if not val:
+        return default
+    cf = val.strip().casefold()
+    for nombre, raw in SPREAD_MAX_POR_CATEGORIA.items():
+        if nombre.strip().casefold() == cf:
+            v = float(raw)
+            if v > 1.0:
+                v = v / 100.0
+            return max(0.0, min(1.0, v))
+    return default
+
+
+def _confianza(nota: str, estado: str, codigo: str, ok_margen: str) -> str:
+    if estado == "NO_CALCULABLE":
+        return "BAJA"
+    if ok_margen == "NO":
+        return "BAJA"
+    if codigo == "OK_SOLO_INV" or "[ATENCION]" in (nota or ""):
+        return "MEDIA"
+    return "ALTA"
+
+
+def _validar_entrada(df: pd.DataFrame, c: dict) -> int:
+    """Avisos rapidos de calidad de datos (consola). No altera el calculo."""
+    avisos = 0
+    nombres = {k: c[k] for k in ("precio", "inv_min", "inv_max", "repo_usa", "repo_br") if c.get(k) in df.columns}
+    for pos, (_, row) in enumerate(df.iterrows(), start=2):
+        if "precio" in nombres:
+            pr = pd.to_numeric(row[nombres["precio"]], errors="coerce")
+            if pd.notna(pr) and pr <= 0:
+                print(f"  [QA entrada] fila {pos}: PRECIO <= 0")
+                avisos += 1
+        if "inv_min" in nombres and "inv_max" in nombres:
+            imin = pd.to_numeric(row[nombres["inv_min"]], errors="coerce")
+            imax = pd.to_numeric(row[nombres["inv_max"]], errors="coerce")
+            if pd.notna(imin) and pd.notna(imax) and imin > imax:
+                print(f"  [QA entrada] fila {pos}: CostoINVmin > costoINVmax")
+                avisos += 1
+        for rk in ("repo_usa", "repo_br"):
+            if rk not in nombres:
+                continue
+            v = pd.to_numeric(row[nombres[rk]], errors="coerce")
+            if pd.notna(v) and v < 0:
+                print(f"  [QA entrada] fila {pos}: {nombres[rk]} negativo")
+                avisos += 1
+    if avisos:
+        print(f"  Total avisos QA entrada: {avisos}")
+    else:
+        print("  (sin avisos)")
+    return avisos
 
 
 def _calcular_cuartiles(serie: pd.Series) -> tuple[float, float, float]:
@@ -213,21 +305,23 @@ def _referencia_no_calculable(
     disp_usa: float,
     disp_br: float,
     umbral_disp: float,
-) -> tuple[bool, str, str]:
+    pct_spread_max: float,
+) -> tuple[bool, str, str, str]:
     """
-    Devuelve (es_nc, codigo, mensaje_para_NOTA).
+    Devuelve (es_nc, codigo, mensaje_para_NOTA, traza_auditoria si nc).
     """
     if inv_cost > 0 and inv_lo >= 0:
         spread = (inv_cost - inv_lo) / max(inv_cost, EPS)
-        if spread > PCT_SPREAD_MAX_COSTO_INV:
+        if spread > pct_spread_max:
             return (
                 True,
                 "NC_INV_RANGO_AMPLIO",
-                "Costo min/max en bodegas demasiado lejanos; no hay un costo unico defendible automaticamente.",
+                "Alta dispersion de costo entre tramos de inventario (min vs max en bodegas).",
+                "NC:INV_SPREAD",
             )
 
     if not tiene_usa and not tiene_br and inv_cost <= 0:
-        return True, "NC_SIN_DATOS", "Sin costo de inventario ni de reposicion."
+        return True, "NC_SIN_DATOS", "Sin costo de inventario ni de reposicion en el archivo.", "NC:SIN_DATOS"
 
     if tiene_usa and tiene_br and repo_usa_raw > 0 and repo_br_raw > 0:
         r_hi = max(repo_usa_raw, repo_br_raw)
@@ -241,7 +335,8 @@ def _referencia_no_calculable(
             return (
                 True,
                 "NC_CONFLICTO_ABASTECIMIENTO",
-                f"Origen barato ({lab_b}) con muy poco stock frente a origen caro ({lab_c}); no se puede fijar un costo unico automatico.",
+                f"Origen barato ({lab_b}) con stock bajo y origen caro ({lab_c}) con mejor disponibilidad; ratio de precios alto.",
+                "NC:CONFLICTO_AB",
             )
         pct_dif = abs(repo_usa_raw - repo_br_raw) / max(r_hi, EPS)
         usa_ok = disp_usa >= umbral_disp
@@ -250,10 +345,16 @@ def _referencia_no_calculable(
             return (
                 True,
                 "NC_REPOS_DISP_INSUFICIENTE",
-                "Repos USA/BR muy distintos y ninguno con disponibilidad suficiente; revisar manualmente.",
+                "Repos USA/BR muy distintos y ambos con disponibilidad por debajo del piso del tramo.",
+                "NC:REPOS_DISP",
             )
 
-    return False, "OK", ""
+    return False, "OK", "", ""
+
+
+def _nota_manual_nc(codigo: str, mensaje: str) -> str:
+    """Prefijo unico para NO_CALCULABLE: el codigo resume la causa para lectura rapida."""
+    return f"[REVISAR MANUAL] {mensaje} [Codigo: {codigo}]"
 
 
 def _margen_lista(precio_lista: float, costo: float) -> tuple[float, str]:
@@ -261,8 +362,10 @@ def _margen_lista(precio_lista: float, costo: float) -> tuple[float, str]:
     if pl <= 0 or costo is None or (isinstance(costo, float) and np.isnan(costo)):
         return np.nan, "N/A"
     m = (pl - float(costo)) / pl * 100.0
-    ok = "SI" if m >= MARGEN_OBJETIVO_PCT else "NO"
-    return round(m, 2), ok
+    m = round(m, 2)
+    piso = MARGEN_OBJETIVO_PCT - MARGEN_TOLERANCIA_PCT
+    ok = "SI" if m >= piso else "NO"
+    return m, ok
 
 
 def _nota_revision_rapida(
@@ -310,6 +413,9 @@ def _evaluar_fila(
     pq1: float,
     pq2: float,
     pq3: float,
+    *,
+    pct_spread_max: float,
+    modo_auditoria: bool,
 ) -> dict:
     repo_usa = _safe(repo_usa, np.nan)
     repo_br = _safe(repo_br, np.nan)
@@ -331,7 +437,7 @@ def _evaluar_fila(
 
     umbral_disp_pre = _umbral_disp_por_precio(precio, pq1, pq2, pq3, dq1, dq2, dq3)
 
-    nc, codigo, msg_nc = _referencia_no_calculable(
+    nc, codigo, msg_nc, aud_nc = _referencia_no_calculable(
         tiene_usa=tiene_usa,
         tiene_br=tiene_br,
         inv_lo=inv_lo,
@@ -341,23 +447,34 @@ def _evaluar_fila(
         disp_usa=float(disp_usa),
         disp_br=float(disp_br),
         umbral_disp=umbral_disp_pre,
+        pct_spread_max=pct_spread_max,
     )
     if nc:
-        return {
+        nota_nc = _nota_manual_nc(codigo, msg_nc)
+        out: dict = {
             OUT_ESTADO: "NO_CALCULABLE",
             OUT_CODIGO: codigo,
             OUT_MEJOR_COSTO: np.nan,
             OUT_ORIGEN: "N/A",
             OUT_MARGEN: np.nan,
             OUT_OK_MARGEN: "N/A",
-            OUT_NOTA: msg_nc,
+            OUT_NOTA: nota_nc,
+            OUT_CONFIANZA: _confianza(nota_nc, "NO_CALCULABLE", codigo, "N/A"),
         }
+        if modo_auditoria:
+            out[OUT_AUDITORIA] = aud_nc
+        return out
 
     if not tiene_usa and not tiene_br:
         mc = round(inv_cost, 4) if inv_cost > 0 else np.nan
         m_pct, ok_m = _margen_lista(precio, mc)
-        nota = "Solo inventario; sin reposicion en datos."
-        return {
+        piso_m = MARGEN_OBJETIVO_PCT - MARGEN_TOLERANCIA_PCT
+        nota = (
+            f"[ATENCION] Costo desde INVENTARIO {mc}. Margen lista {m_pct}% "
+            f"(objetivo {MARGEN_OBJETIVO_PCT}% ±{MARGEN_TOLERANCIA_PCT} pp, piso {piso_m}%: {ok_m}). "
+            "Sin reposicion en datos; validar abastecimiento."
+        )
+        out_si = {
             OUT_ESTADO: "CALCULADO",
             OUT_CODIGO: "OK_SOLO_INV",
             OUT_MEJOR_COSTO: mc,
@@ -365,7 +482,11 @@ def _evaluar_fila(
             OUT_MARGEN: m_pct,
             OUT_OK_MARGEN: ok_m,
             OUT_NOTA: nota,
+            OUT_CONFIANZA: _confianza(nota, "CALCULADO", "OK_SOLO_INV", ok_m),
         }
+        if modo_auditoria:
+            out_si[OUT_AUDITORIA] = "OK:SOLO_INV"
+        return out_si
 
     if not tiene_usa:
         repo_usa = np.inf
@@ -440,6 +561,7 @@ def _evaluar_fila(
 
     mc_round = round(mejor_costo, 4) if pd.notna(mejor_costo) else np.nan
     m_pct, ok_m = _margen_lista(precio, mc_round)
+    piso_m = MARGEN_OBJETIVO_PCT - MARGEN_TOLERANCIA_PCT
 
     extra = _nota_revision_rapida(
         disp_inv_min=disp_inv_min,
@@ -453,11 +575,18 @@ def _evaluar_fila(
     )
     base = (
         f"Costo sugerido {mc_round} desde {origen_final}. Margen sobre lista {m_pct}% "
-        f"(objetivo {MARGEN_OBJETIVO_PCT}%: {ok_m})."
+        f"(objetivo {MARGEN_OBJETIVO_PCT}% ±{MARGEN_TOLERANCIA_PCT} pp, piso {piso_m}%: {ok_m})."
     )
-    nota = f"{base} {extra}".strip() if extra else base
+    cuerpo = f"{base} {extra}".strip() if extra else base
+    necesita_atencion = bool(extra) or etiqueta_estab == "INESTABLE"
+    nota = f"[ATENCION] {cuerpo}" if necesita_atencion else cuerpo
 
-    return {
+    costo_tipo = "INV" if origen_final == "INVENTARIO" else "REPO"
+    aud = f"OK:{etiqueta_estab}|{origen_final}|{costo_tipo}"
+    if len(aud) > 96:
+        aud = aud[:93] + "..."
+
+    out_ok = {
         OUT_ESTADO: "CALCULADO",
         OUT_CODIGO: "OK",
         OUT_MEJOR_COSTO: mc_round,
@@ -465,7 +594,11 @@ def _evaluar_fila(
         OUT_MARGEN: m_pct,
         OUT_OK_MARGEN: ok_m,
         OUT_NOTA: nota,
+        OUT_CONFIANZA: _confianza(nota, "CALCULADO", "OK", ok_m),
     }
+    if modo_auditoria:
+        out_ok[OUT_AUDITORIA] = aud
+    return out_ok
 
 
 def _orden_entrada(df: pd.DataFrame, c: dict) -> list[str]:
@@ -480,7 +613,12 @@ def _orden_entrada(df: pd.DataFrame, c: dict) -> list[str]:
     return orden
 
 
-def _calcular_resultados(df: pd.DataFrame, col_map: dict | None = None) -> pd.DataFrame:
+def _calcular_resultados(
+    df: pd.DataFrame,
+    col_map: dict | None = None,
+    *,
+    modo_auditoria: bool = False,
+) -> pd.DataFrame:
     c = {**COL, **(col_map or {})}
     for key in _COL_REQUERIDAS:
         if c[key] not in df.columns:
@@ -489,6 +627,8 @@ def _calcular_resultados(df: pd.DataFrame, col_map: dict | None = None) -> pd.Da
     cols_present = set(df.columns)
     if any(c[k] not in cols_present for k in ("disp_inv_min", "disp_inv_max")):
         print("  Aviso: DISPINV opcional ausente; se usa 0.")
+    if c.get("categoria") and c["categoria"] in cols_present:
+        print(f"  Categoria: columna '{c['categoria']}' detectada (SPREAD_MAX_POR_CATEGORIA).")
 
     rq1, rq2, rq3 = _calcular_cuartiles(
         pd.concat([pd.to_numeric(df[c["repo_usa"]], errors="coerce"),
@@ -512,6 +652,7 @@ def _calcular_resultados(df: pd.DataFrame, col_map: dict | None = None) -> pd.Da
 
     filas = []
     for _, row in df.iterrows():
+        pct_sm = _spread_max_para_categoria(_valor_categoria(row, cols_present, c))
         filas.append(
             _evaluar_fila(
                 repo_usa=row[c["repo_usa"]],
@@ -532,6 +673,8 @@ def _calcular_resultados(df: pd.DataFrame, col_map: dict | None = None) -> pd.Da
                 pq1=pq1,
                 pq2=pq2,
                 pq3=pq3,
+                pct_spread_max=pct_sm,
+                modo_auditoria=modo_auditoria,
             )
         )
     return pd.DataFrame(filas, index=df.index)
@@ -553,13 +696,45 @@ def imprimir_resumen(df_in: pd.DataFrame, df_out: pd.DataFrame) -> None:
     calc = df_out[df_out[OUT_ESTADO] == "CALCULADO"]
     if len(calc) and OUT_OK_MARGEN in calc.columns:
         okn = (calc[OUT_OK_MARGEN] == "SI").sum()
-        print(f"  Con margen >= objetivo ({MARGEN_OBJETIVO_PCT}%): {okn} / {len(calc)}")
+        piso = MARGEN_OBJETIVO_PCT - MARGEN_TOLERANCIA_PCT
+        print(
+            f"  En margen (>= piso {piso}% = objetivo {MARGEN_OBJETIVO_PCT}% "
+            f"- {MARGEN_TOLERANCIA_PCT} pp): {okn} / {len(calc)}"
+        )
+    nc_blk = df_out[df_out[OUT_ESTADO] == "NO_CALCULABLE"]
+    if len(nc_blk) and OUT_CODIGO in nc_blk.columns:
+        print("  -- Top 3 motivos NO_CALCULABLE (CODIGO) --")
+        for v, cnt in nc_blk[OUT_CODIGO].value_counts().head(3).items():
+            print(f"    {v}: {cnt}")
+    if len(calc) and OUT_NOTA in calc.columns:
+        atn = calc[OUT_NOTA].astype(str).str.contains("[ATENCION]", regex=False).sum()
+        print(f"  Calculados con [ATENCION] en nota: {atn} / {len(calc)} ({atn / len(calc) * 100:.1f}%)")
+    if OUT_CONFIANZA in df_out.columns:
+        print("  -- CONFIANZA --")
+        for v, cnt in df_out[OUT_CONFIANZA].value_counts().items():
+            print(f"    {v}: {cnt} ({cnt / n * 100:.1f}%)")
     print("=" * 58)
+
+
+def _columnas_salida_resultado(df_res: pd.DataFrame) -> list[str]:
+    base = [
+        OUT_ESTADO,
+        OUT_CODIGO,
+        OUT_MEJOR_COSTO,
+        OUT_ORIGEN,
+        OUT_MARGEN,
+        OUT_OK_MARGEN,
+        OUT_NOTA,
+        OUT_CONFIANZA,
+    ]
+    if OUT_AUDITORIA in df_res.columns:
+        base.append(OUT_AUDITORIA)
+    return [x for x in base if x in df_res.columns]
 
 
 def _concat_salida(df_in: pd.DataFrame, df_res: pd.DataFrame, c: dict) -> pd.DataFrame:
     orden_in = _orden_entrada(df_in, c)
-    cols_res = [OUT_ESTADO, OUT_CODIGO, OUT_MEJOR_COSTO, OUT_ORIGEN, OUT_MARGEN, OUT_OK_MARGEN, OUT_NOTA]
+    cols_res = _columnas_salida_resultado(df_res)
     return pd.concat([df_in[orden_in], df_res[cols_res]], axis=1)
 
 
@@ -575,6 +750,11 @@ def main() -> None:
     parser.add_argument("--excel", type=Path, default=None)
     parser.add_argument("--sheet", default=0)
     parser.add_argument("--excel-header", type=int, default=0)
+    parser.add_argument(
+        "--auditoria",
+        action="store_true",
+        help="Incluye columna AUDITORIA (traza corta) en la salida.",
+    )
     args = parser.parse_args()
 
     sep = CSV_SEP if args.sep is None else args.sep
@@ -591,7 +771,9 @@ def main() -> None:
         df = pd.read_excel(p, sheet_name=sh, header=args.excel_header, engine="openpyxl")
         df = _aplicar_alias_columnas_entrada(df)
         _enterizar_disponibilidades(df, COL)
-        out = _calcular_resultados(df)
+        print("  QA entrada (pre-calculo):")
+        _validar_entrada(df, COL)
+        out = _calcular_resultados(df, modo_auditoria=args.auditoria)
         imprimir_resumen(df, out)
         dest = args.salida or args.output or p.with_name(p.stem + "_monitor" + p.suffix)
         try:
@@ -611,7 +793,9 @@ def main() -> None:
     print(f"  {len(df)} filas\n")
     df = _aplicar_alias_columnas_entrada(df)
     _enterizar_disponibilidades(df, COL)
-    out = _calcular_resultados(df)
+    print("  QA entrada (pre-calculo):")
+    _validar_entrada(df, COL)
+    out = _calcular_resultados(df, modo_auditoria=args.auditoria)
     imprimir_resumen(df, out)
     final = _concat_salida(df, out, COL)
     pout.parent.mkdir(parents=True, exist_ok=True)
