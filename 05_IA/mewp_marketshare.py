@@ -20,6 +20,9 @@ opcional: BATCH_IDS_FILE, por defecto "batch_ids.txt"). Si la entrada no es una 
 interactiva, las preguntas usan el valor por defecto indicado y USE_BATCH_API para el modo.
 
 Requiere: pip install openai pandas openpyxl
+
+Lectura del Excel MARKETSHARE: todas las columnas se leen como texto para no convertir
+llaves/IDs largos a número (notación científica o pérdida de ceros a la izquierda).
 """
 from __future__ import annotations
 
@@ -65,6 +68,22 @@ _SYSTEM = (
 
     "Repuesto sin equipo completo: clasificacion NA, marca NA."
 )
+
+
+def _read_excel_marketshare(path: Path, sheet_name: str, header_row: int) -> pd.DataFrame:
+    """
+    Lee la hoja sin inferir números: columnas tipo texto en Excel (p. ej. llave de
+    declaración con ceros a la izquierda) deben seguir siendo texto; la inferencia
+    por defecto las pasa a float y al guardar aparecen como notación científica o
+    se pierde precisión.
+    """
+    return pd.read_excel(
+        path,
+        sheet_name=sheet_name,
+        header=header_row,
+        engine="openpyxl",
+        dtype=str,
+    )
 
 
 # --- Entrada interactiva / entorno ---
@@ -581,7 +600,7 @@ def _fusionar_recuperar(
         )
     combined = {**existente, **merged}
 
-    df = pd.read_excel(path_xlsx, sheet_name=sheet, header=header_row, engine="openpyxl")
+    df = _read_excel_marketshare(path_xlsx, sheet, header_row)
     n = len(df)
 
     _save_checkpoint(checkpoint_path, combined)
@@ -626,35 +645,12 @@ def _aplicar_por_orden(df: pd.DataFrame, res: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _restaurar_dtypes_columnas_originales(
-    ref: pd.DataFrame,
-    out: pd.DataFrame,
-    cols_clasif: list[str],
-) -> None:
-    """
-    Restaura los dtypes del libro de referencia en las columnas que no son de clasificación,
-    para que al exportar el xlsx no se alteren tipos (enteros, fechas, etc.) frente al MARKETSHARE.
-    No modifica cols_clasif (texto añadido/actualizado por el proceso).
-    """
-    for col in ref.columns:
-        if col in cols_clasif:
-            continue
-        if col not in out.columns:
-            continue
-        dt = ref[col].dtype
-        if out[col].dtype == dt:
-            continue
-        try:
-            out[col] = out[col].astype(dt)
-        except (ValueError, TypeError):
-            pass
-
-
 def escribir_xlsx_clasificado(base: Path, cfg: dict) -> Path:
     """
     Une INPUT_XLSX con checkpoint (preferido) o OUTPUT_CSV y escribe OUTPUT_XLSX_CRUZ.
     Elimina columnas clasificacion/marca/Estado previas del Excel y las vuelve a añadir.
-    Restaura los dtypes del Excel de entrada en el resto de columnas (no en las de clasificación).
+    La lectura del Excel de entrada usa texto para todas las columnas y no se re-castéan
+    tipos al escribir, para no alterar llaves/IDs ni otros campos formato texto.
     """
     excel_rel = cfg.get("INPUT_XLSX", "MARKETSHARE.xlsx")
     path_xlsx = (base / excel_rel).resolve()
@@ -671,12 +667,7 @@ def escribir_xlsx_clasificado(base: Path, cfg: dict) -> Path:
     cp = base / str(cfg.get("CHECKPOINT_CSV", "Mepwpsforklif_checkpoint.csv"))
     csv_alt = base / str(cfg.get("OUTPUT_CSV", "Mepwpsforklif.csv"))
 
-    df_completo = pd.read_excel(
-        path_xlsx,
-        sheet_name=sheet,
-        header=header_row,
-        engine="openpyxl",
-    )
+    df_completo = _read_excel_marketshare(path_xlsx, sheet, header_row)
 
     df = df_completo.drop(columns=[c for c in _COLS_CRUZ if c in df_completo.columns], errors="ignore")
 
@@ -712,8 +703,6 @@ def escribir_xlsx_clasificado(base: Path, cfg: dict) -> Path:
 
     if salida.resolve() == path_xlsx.resolve():
         raise SystemExit("El archivo de salida no puede ser el mismo que el Excel de entrada.")
-
-    _restaurar_dtypes_columnas_originales(df_completo, out, _COLS_CRUZ)
 
     out.to_excel(salida, sheet_name=str(sheet)[:31], index=False, engine="openpyxl")
 
@@ -843,7 +832,7 @@ def main() -> None:
     sync_save_every = int(cfg.get("SYNC_SAVE_EVERY", 25))
 
     try:
-        df = pd.read_excel(path_excel, sheet_name=sheet, header=header_row, engine="openpyxl")
+        df = _read_excel_marketshare(path_excel, sheet, header_row)
     except ValueError as e:
         raise SystemExit(
             f"No se pudo leer la hoja '{sheet}'. Revise SHEET_NAME en el JSON. Error: {e}"
