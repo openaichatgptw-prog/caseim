@@ -5,7 +5,7 @@ Clasificación MEWP / Forklift sobre MARKETSHARE (OpenAI + Excel).
 Ejecución: python mewp_marketshare.py
 
 Flujo interactivo paso a paso (sin subcomandos): comprueba archivos, opción de
-recuperar batches desde OpenAI (batch_ids.txt), clasificación por Batch API o
+recuperar batches desde OpenAI (BATCH_IDS_FILE), clasificación por Batch API o
 uno a uno, checkpoint cada N filas, y genera un .xlsx nuevo con las columnas
 clasificacion (MEWPS|FORKLIFT|TELEHANDLER|NA), marca, Estado.
 
@@ -39,7 +39,6 @@ from openai import OpenAI
 
 _CONFIG_NAME = "ConfigClasificadorMewp.json"
 _COLS_CRUZ = ["clasificacion", "marca", "Estado"]
-_DEFAULT_BATCH_IDS = "batch_ids.txt"
 
 # Defaults de configuración (sobrescritos por ConfigClasificadorMewp.json)
 _CONFIG_DEFAULTS: dict = {
@@ -182,6 +181,7 @@ def _contexto_tres_campos(
 
 def _series_contexto_modelo(df: pd.DataFrame, cfg: dict) -> tuple[pd.Series, list[str]]:
     """Serie (una cadena por fila) lista para el chat; etiquetas para consola."""
+    cfg = _merge_config_defaults(cfg)
     d_s, d_lab = _serie_por_nombre_o_letra(
         df, cfg, "COLUMN_NAME_DESC", "COLUMN_LETTERS_DESC", "AI"
     )
@@ -195,15 +195,10 @@ def _series_contexto_modelo(df: pd.DataFrame, cfg: dict) -> tuple[pd.Series, lis
         "COLUMN_LETTERS_RAZON_IMPORTADOR",
         "AA",
     )
-    max_d = int(cfg.get("MAX_DESC_CHARS", _CONFIG_DEFAULTS["MAX_DESC_CHARS"]))
-    max_p = int(cfg.get("MAX_PROVEEDOR_CHARS", _CONFIG_DEFAULTS["MAX_PROVEEDOR_CHARS"]))
-    max_r = int(
-        cfg.get(
-            "MAX_RAZON_IMPORTADOR_CHARS",
-            _CONFIG_DEFAULTS["MAX_RAZON_IMPORTADOR_CHARS"],
-        )
-    )
-    max_tot = int(cfg.get("MAX_CONTEXTO_CHARS", _CONFIG_DEFAULTS["MAX_CONTEXTO_CHARS"]))
+    max_d = int(cfg["MAX_DESC_CHARS"])
+    max_p = int(cfg["MAX_PROVEEDOR_CHARS"])
+    max_r = int(cfg["MAX_RAZON_IMPORTADOR_CHARS"])
+    max_tot = int(cfg["MAX_CONTEXTO_CHARS"])
     n = len(df)
     rows: list[str] = []
     for i in range(n):
@@ -253,9 +248,10 @@ def _ask_line(prompt: str, default: str = "") -> str:
 
 def _ask_choice_batch_or_sync(cfg: dict) -> bool:
     """True = Batch API, False = síncrono."""
+    cfg = _merge_config_defaults(cfg)
     if not _is_tty():
-        return bool(cfg.get("USE_BATCH_API", True))
-    default = "1" if cfg.get("USE_BATCH_API", True) else "2"
+        return bool(cfg["USE_BATCH_API"])
+    default = "1" if cfg["USE_BATCH_API"] else "2"
     print()
     print("  Modo de ejecución:")
     print("    1 = Batch API (asíncrono, guarda tras cada lote de BATCH_CHUNK_ROWS)")
@@ -435,7 +431,10 @@ def _parse_batch_output_lines(out_text: str) -> dict[int, tuple[str, str, str]]:
         line = line.strip()
         if not line:
             continue
-        obj = json.loads(line)
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
         m = re.match(r"^row-(\d+)$", str(obj.get("custom_id", "")))
         if not m:
             continue
@@ -582,7 +581,7 @@ def _run_batch(
     completed: dict[int, tuple[str, str, str]],
 ) -> dict[int, tuple[str, str, str]]:
     if chunk_rows < 1:
-        chunk_rows = 300
+        chunk_rows = int(_CONFIG_DEFAULTS["BATCH_CHUNK_ROWS"])
     total_chunks = (n + chunk_rows - 1) // chunk_rows
     for c in range(total_chunks):
         start = c * chunk_rows
@@ -701,10 +700,10 @@ def _fusionar_recuperar(
     if not path_xlsx.exists():
         raise SystemExit(f"No se encontró el Excel: {path_xlsx}")
 
-    sheet = cfg.get("SHEET_NAME", "MEWPS_FORKLIFT")
-    header_row = int(cfg.get("HEADER_ROW", 2))
-    out_csv = str(cfg.get("OUTPUT_CSV", "Mepwpsforklif.csv"))
-    checkpoint_name = str(cfg.get("CHECKPOINT_CSV", "Mepwpsforklif_checkpoint.csv"))
+    sheet = cfg["SHEET_NAME"]
+    header_row = int(cfg["HEADER_ROW"])
+    out_csv = str(cfg["OUTPUT_CSV"])
+    checkpoint_name = str(cfg["CHECKPOINT_CSV"])
     checkpoint_path = base / checkpoint_name
 
     if not merged:
@@ -774,20 +773,20 @@ def escribir_xlsx_clasificado(base: Path, cfg: dict) -> Path:
     tipos al escribir, para no alterar llaves/IDs ni otros campos formato texto.
     """
     cfg = _merge_config_defaults(cfg)
-    excel_rel = cfg.get("INPUT_XLSX", "MARKETSHARE.xlsx")
+    excel_rel = cfg["INPUT_XLSX"]
     path_xlsx = (base / excel_rel).resolve()
     if not path_xlsx.exists():
         raise SystemExit(f"No se encontró el Excel: {path_xlsx}")
 
-    sheet = cfg.get("SHEET_NAME", "MEWPS_FORKLIFT")
-    header_row = int(cfg.get("HEADER_ROW", 2))
-    salida_nom = str(cfg.get("OUTPUT_XLSX_CRUZ", "MARKETSHARE_MEWP_clasificado.xlsx"))
+    sheet = cfg["SHEET_NAME"]
+    header_row = int(cfg["HEADER_ROW"])
+    salida_nom = str(cfg["OUTPUT_XLSX_CRUZ"])
     salida = base / salida_nom
     if not salida.is_absolute():
         salida = salida.resolve()
 
-    cp = base / str(cfg.get("CHECKPOINT_CSV", "Mepwpsforklif_checkpoint.csv"))
-    csv_alt = base / str(cfg.get("OUTPUT_CSV", "Mepwpsforklif.csv"))
+    cp = base / str(cfg["CHECKPOINT_CSV"])
+    csv_alt = base / str(cfg["OUTPUT_CSV"])
 
     df_completo = _read_excel_marketshare(path_xlsx, sheet, header_row)
 
@@ -838,7 +837,7 @@ def escribir_xlsx_clasificado(base: Path, cfg: dict) -> Path:
 
 def _listar_estado_batches(client: OpenAI, batch_ids: list[str]) -> None:
     print()
-    print("  Estado en OpenAI de los IDs en batch_ids.txt:")
+    print("  Estado en OpenAI de los IDs listados en el archivo de batch:")
     for bid in batch_ids:
         j = client.batches.retrieve(bid)
         rc = j.request_counts
@@ -849,7 +848,8 @@ def _listar_estado_batches(client: OpenAI, batch_ids: list[str]) -> None:
 
 
 def _paso_recuperar_batches(base: Path, cfg: dict, client: OpenAI) -> None:
-    ids_nom = str(cfg.get("BATCH_IDS_FILE", _DEFAULT_BATCH_IDS))
+    cfg = _merge_config_defaults(cfg)
+    ids_nom = str(cfg["BATCH_IDS_FILE"])
     ids_path = base / ids_nom
     batch_ids = _leer_batch_ids(ids_path)
     if not batch_ids:
@@ -879,13 +879,13 @@ def main() -> None:
     base = Path(__file__).resolve().parent
     cfg = _merge_config_defaults(_load_config(base))
 
-    excel_rel = cfg.get("INPUT_XLSX", "MARKETSHARE.xlsx")
+    excel_rel = cfg["INPUT_XLSX"]
     path_excel = (base / excel_rel).resolve()
-    out_xlsx_nom = str(cfg.get("OUTPUT_XLSX_CRUZ", "MARKETSHARE_MEWP_clasificado.xlsx"))
+    out_xlsx_nom = str(cfg["OUTPUT_XLSX_CRUZ"])
     path_out_xlsx = (base / out_xlsx_nom).resolve()
-    checkpoint_name = str(cfg.get("CHECKPOINT_CSV", "Mepwpsforklif_checkpoint.csv"))
+    checkpoint_name = str(cfg["CHECKPOINT_CSV"])
     checkpoint_path = base / checkpoint_name
-    out_csv = str(cfg.get("OUTPUT_CSV", "Mepwpsforklif.csv"))
+    out_csv = str(cfg["OUTPUT_CSV"])
 
     print()
     print("=== Clasificación MEWP / Forklift (MARKETSHARE) ===")
@@ -929,8 +929,8 @@ def main() -> None:
 
     client = OpenAI(api_key=_api_key(cfg))
 
-    # 4) Recuperar desde OpenAI (batch_ids.txt)
-    ids_nom = str(cfg.get("BATCH_IDS_FILE", _DEFAULT_BATCH_IDS))
+    # 4) Recuperar desde OpenAI (BATCH_IDS_FILE)
+    ids_nom = str(cfg["BATCH_IDS_FILE"])
     ids_path = base / ids_nom
     raw_ids = _leer_batch_ids(ids_path)
     if raw_ids:
@@ -942,15 +942,16 @@ def main() -> None:
             if chk_after:
                 completed = dict(chk_after)
 
-    sheet = cfg.get("SHEET_NAME", "MEWPS_FORKLIFT")
-    header_row = int(cfg.get("HEADER_ROW", 2))
-    model = cfg.get("MODEL", "gpt-4o-mini")
-    sleep_s = float(cfg.get("SLEEP_SECONDS", 0.0))
-    max_contexto_chars = int(cfg.get("MAX_CONTEXTO_CHARS", _CONFIG_DEFAULTS["MAX_CONTEXTO_CHARS"]))
-    temperature = float(cfg.get("TEMPERATURE", 0.0))
-    batch_poll = float(cfg.get("BATCH_POLL_SECONDS", 30.0))
-    batch_chunk_rows = int(cfg.get("BATCH_CHUNK_ROWS", 300))
-    sync_save_every = int(cfg.get("SYNC_SAVE_EVERY", 25))
+    # cfg ya incluye _CONFIG_DEFAULTS; no hace falta .get(..., default) otra vez.
+    sheet = cfg["SHEET_NAME"]
+    header_row = int(cfg["HEADER_ROW"])
+    model = cfg["MODEL"]
+    sleep_s = float(cfg["SLEEP_SECONDS"])
+    max_contexto_chars = int(cfg["MAX_CONTEXTO_CHARS"])
+    temperature = float(cfg["TEMPERATURE"])
+    batch_poll = float(cfg["BATCH_POLL_SECONDS"])
+    batch_chunk_rows = int(cfg["BATCH_CHUNK_ROWS"])
+    sync_save_every = int(cfg["SYNC_SAVE_EVERY"])
 
     try:
         df = _read_excel_marketshare(path_excel, sheet, header_row)
@@ -958,6 +959,14 @@ def main() -> None:
         raise SystemExit(
             f"No se pudo leer la hoja '{sheet}'. Revise SHEET_NAME en el JSON. Error: {e}"
         ) from e
+
+    if len(df) == 0:
+        print()
+        print(
+            "  Hoja vacía: no hay filas de datos bajo HEADER_ROW. "
+            "Revise la hoja o HEADER_ROW en el JSON. No hay nada que clasificar."
+        )
+        return
 
     try:
         contexto_series, col_labels = _series_contexto_modelo(df, cfg)
