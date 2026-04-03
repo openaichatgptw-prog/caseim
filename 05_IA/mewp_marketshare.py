@@ -15,9 +15,9 @@ batches usan custom_id row-{idx}. No usar columnas del libro tipo "Id fila" /
 "id" para unir resultados: en MARKETSHARE pueden repetirse; solo **idx** es
 estable para join con el Excel de salida.
 
-Config: ConfigClasificadorMewp.json en esta carpeta (mantener las claves existentes;
-opcional: BATCH_IDS_FILE, por defecto "batch_ids.txt"). Si la entrada no es una consola
-interactiva, las preguntas usan el valor por defecto indicado y USE_BATCH_API para el modo.
+Config: ConfigClasificadorMewp.json (valores por defecto se completan en código si faltan).
+Columnas de entrada al modelo: descripción (AI), proveedor (BD), razón social del importador (AA),
+configurables con COLUMN_LETTERS_* o COLUMN_NAME_*. Opcional: BATCH_IDS_FILE, etc.
 
 Requiere: pip install openai pandas openpyxl
 
@@ -41,28 +41,54 @@ _CONFIG_NAME = "ConfigClasificadorMewp.json"
 _COLS_CRUZ = ["clasificacion", "marca", "Estado"]
 _DEFAULT_BATCH_IDS = "batch_ids.txt"
 
+# Defaults de configuración (sobrescritos por ConfigClasificadorMewp.json)
+_CONFIG_DEFAULTS: dict = {
+    "COLUMN_LETTERS_DESC": "AI",
+    "COLUMN_LETTERS_PROVEEDOR": "BD",
+    "COLUMN_LETTERS_RAZON_IMPORTADOR": "AA",
+    "COLUMN_NAME_DESC": "",
+    "COLUMN_NAME_PROVEEDOR": "",
+    "COLUMN_NAME_RAZON_IMPORTADOR": "",
+    "MAX_DESC_CHARS": 8000,
+    "MAX_PROVEEDOR_CHARS": 2000,
+    "MAX_RAZON_IMPORTADOR_CHARS": 1500,
+    "MAX_CONTEXTO_CHARS": 12000,
+    "MODEL": "gpt-4o-mini",
+    "TEMPERATURE": 0,
+    "HEADER_ROW": 2,
+    "BATCH_POLL_SECONDS": 30,
+    "BATCH_CHUNK_ROWS": 300,
+    "SLEEP_SECONDS": 0,
+    "SYNC_SAVE_EVERY": 25,
+    "SHEET_NAME": "MEWPS_FORKLIFT",
+    "INPUT_XLSX": "MARKETSHARE.xlsx",
+    "OUTPUT_CSV": "Mepwpsforklif.csv",
+    "OUTPUT_XLSX_CRUZ": "MARKETSHARE_MEWP_clasificado.xlsx",
+    "CHECKPOINT_CSV": "Mepwpsforklif_checkpoint.csv",
+    "USE_BATCH_API": True,
+    "BATCH_IDS_FILE": "batch_ids.txt",
+}
+
 _SYSTEM = (
-    "Clasificador MEWP/forklift: Descripcion mercancia + Proveedor (MARKETSHARE). MERCANCIA NUEVA/USADA, MARCA/MODELO; a veces NO TIENE.\n"
+    "Clasificador MEWP/forklift (gpt-4o-mini). La entrada del usuario trae SOLO tres bloques en este orden: "
+    "Descripcion de la mercancia, Proveedor, Razon social del importador. Usa los tres para clasificar y para MARCA.\n"
+    "Mercancia NUEVA/USADA; a veces NO TIENE. Si mezcla capitulo/titulo arancelario generico con la descripcion concreta del bien, prima la linea concreta (p. ej. carretilla, plataforma).\n"
     "Salida: solo JSON valido sin markdown. Claves: clasificacion, marca, Estado.\n\n"
 
     "clasificacion ∈ {MEWPS,FORKLIFT,TELEHANDLER,NA}:\n"
     "MEWPS — plataforma: tijera, boom/articulada, telescopica, man lift, AWP, spider, mastil vertical; brazo articulado electrico como plataforma de trabajo.\n"
-    "FORKLIFT — montacargas, reach truck, order picker con mastil, transpaleta/apilador motorizado; carretilla telescopica si no cumple el criterio estricto de TELEHANDLER abajo.\n"
-    "TELEHANDLER — SOLO si el texto nombra explicitamente telehandler, telescopic handler, manipulador telescopico tipo telehandler (o sinonimo inequivoco), "
-    "o describe el equipo sin ambiguedad como tal; ante la menor duda frente a montacargas o plataforma, NO uses TELEHANDLER (elige MEWPS, FORKLIFT o NA).\n"
-    "NA — repuesto/parte sin equipo; ascensor/escalera pasajeros; otro bien; duda entre clases.\n\n"
+    "FORKLIFT — montacargas, reach truck, order picker con mastil, transpaleta/apilador motorizado, carretillas autopropulsadas electricas o con motor; carretilla telescopica si no cumple TELEHANDLER abajo.\n"
+    "TELEHANDLER — SOLO si nombra explicitamente telehandler/telescopic handler/manipulador telescopico tipo telehandler (o sinonimo inequivoco) o el equipo sin ambiguedad; "
+    "ante duda frente a montacargas o plataforma, NO TELEHANDLER (MEWPS, FORKLIFT o NA).\n"
+    "NA — repuesto sin equipo completo; ascensor/escalera pasajeros; otro bien; duda fuerte entre clases.\n\n"
 
-    "Marca: SOLO fabricante del equipo principal en MAYUSCULAS; si no, NA. Ignorar motor/bateria/neumatico salvo unico bien.\n"
-    "Campo marca = solo el nombre del fabricante (oficial, una o mas palabras); nunca modelo, serie, codigos alfanumericos ni separadores que los concatenen. "
-    "Modelo/serie en el texto es pista solo para la regla (2); el JSON no debe incluir codigos ni el formato de entrada, solo el nombre (p. ej. TOYOTA).\n"
-    "Desempate MARCA vs Proveedor: si el texto declara MARCA y el Proveedor indica otro fabricante distinto, prima la MARCA del texto; "
-    "si modelo/serie apunta a un fabricante y el texto declara otra MARCA distinta, prima la MARCA del texto salvo error de digitacion evidente.\n"
-    "Orden de comprobacion (primera regla con confianza): "
-    "(1) MARCA explicita en texto; "
-    "(2) modelo/serie inequivoca para inferir fabricante — ej. GS-1930,Z-45→GENIE; 1930ES,450AJ→JLG; Compact10,HA16→HAULOTTE; 8FGCU→TOYOTA; EFG216→JUNGHEINRICH; FC5200→CROWN; DP25→CAT (orientativo); "
-    "(3) Proveedor=fabricante sin contradiccion con (1)-(2); "
-    "(4) NO TIENE + proveedor generico + modelo ambiguo → NA.\n"
-    "Precision>cobertura: ante duda, marca NA.\n\n"
+    "Marca (MAYUSCULAS): fabricante del equipo principal; si no hay fabricante identificable, NA. Ignorar motor/bateria/neumatico salvo unico bien.\n"
+    "Inferencia CO: importadores/distribuidores suelen llevar la marca OEM en razon social o nombre (ej. CASA TORO->JOHN DEERE; IMECOL->CASE; DINISSAN/NISSAN en nombre->NISSAN; "
+    "DISTRIBUIDORA TOYOTA / TOYOTA COLOMBIA / TOYOTA MATERIAL HANDLING->TOYOTA o TOYOTA MATERIAL HANDLING segun nombre oficial; ZOOMLION COLOMBIA->ZOOMLION).\n"
+    "Valor marca = solo nombre del fabricante (una o mas palabras oficiales); nunca modelo, serie, codigos alfanumericos ni separadores (|, -) que los concatenen al fabricante.\n"
+    "Orden: (1) MARCA en cualquier bloque; (2) modelo/serie inequivoco (ej. 8FGCU->TOYOTA; GS-1930->GENIE; orientativo); "
+    "(3) proveedor/importador con marca en nombre; (4) sin pista clara en los tres bloques -> NA.\n"
+    "Si descripcion declara MARCA y importador sugiere otro fabricante, prima la descripcion salvo error evidente.\n\n"
 
     "Estado ∈ {NUEVO,USADO,NA}: NUEVO nuevo/MERCANCIA NUEVA; USADO usado/refurbished/reman; NA si no claro.\n\n"
 
@@ -84,6 +110,115 @@ def _read_excel_marketshare(path: Path, sheet_name: str, header_row: int) -> pd.
         engine="openpyxl",
         dtype=str,
     )
+
+
+def _excel_col_to_index(letters: str) -> int:
+    """Convierte letra(s) de columna Excel (A, Z, AA, AI, BD, …) en índice 0-based."""
+    s = letters.strip().upper()
+    if not s or not s.isalpha():
+        raise ValueError(f"Columna Excel inválida: {letters!r}")
+    n = 0
+    for ch in s:
+        n = n * 26 + (ord(ch) - ord("A") + 1)
+    return n - 1
+
+
+def _serie_por_nombre_o_letra(
+    df: pd.DataFrame,
+    cfg: dict,
+    name_key: str,
+    letters_key: str,
+    default_letters: str,
+) -> tuple[pd.Series, str]:
+    """
+    Serie de texto para un campo MARKETSHARE: prioridad COLUMN_NAME_* (encabezado exacto)
+    si está en cfg y existe en df; si no, COLUMN_LETTERS_* o default (ej. AI, BD, AA).
+    """
+    nombre = (cfg.get(name_key) or "").strip()
+    if nombre:
+        if nombre not in df.columns:
+            raise SystemExit(
+                f"{name_key}={nombre!r} no está en el Excel. Revise el encabezado o use {letters_key}."
+            )
+        return df[nombre].fillna("").astype(str), f"{nombre} ({name_key})"
+    letters = (cfg.get(letters_key) or default_letters).strip().upper()
+    try:
+        idx = _excel_col_to_index(letters)
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
+    if idx < 0 or idx >= len(df.columns):
+        raise SystemExit(
+            f"{letters_key}={letters!r} → índice {idx}; la hoja tiene {len(df.columns)} columnas."
+        )
+    header = df.columns[idx]
+    return df.iloc[:, idx].fillna("").astype(str), f"{letters} → {header!r}"
+
+
+def _contexto_tres_campos(
+    desc: str,
+    prov: str,
+    razon: str,
+    max_d: int,
+    max_p: int,
+    max_r: int,
+    max_total: int,
+) -> str:
+    """Un único texto usuario: solo descripción + proveedor + razón importador (orden fijo)."""
+    d = (desc or "")[:max_d]
+    p = (prov or "")[:max_p]
+    r = (razon or "")[:max_r]
+    text = (
+        "Descripción de la mercancía:\n"
+        f"{d}\n\n"
+        "Proveedor:\n"
+        f"{p}\n\n"
+        "Razón social del importador:\n"
+        f"{r}"
+    )
+    if len(text) > max_total:
+        text = text[:max_total]
+    return text
+
+
+def _series_contexto_modelo(df: pd.DataFrame, cfg: dict) -> tuple[pd.Series, list[str]]:
+    """Serie (una cadena por fila) lista para el chat; etiquetas para consola."""
+    d_s, d_lab = _serie_por_nombre_o_letra(
+        df, cfg, "COLUMN_NAME_DESC", "COLUMN_LETTERS_DESC", "AI"
+    )
+    p_s, p_lab = _serie_por_nombre_o_letra(
+        df, cfg, "COLUMN_NAME_PROVEEDOR", "COLUMN_LETTERS_PROVEEDOR", "BD"
+    )
+    r_s, r_lab = _serie_por_nombre_o_letra(
+        df,
+        cfg,
+        "COLUMN_NAME_RAZON_IMPORTADOR",
+        "COLUMN_LETTERS_RAZON_IMPORTADOR",
+        "AA",
+    )
+    max_d = int(cfg.get("MAX_DESC_CHARS", _CONFIG_DEFAULTS["MAX_DESC_CHARS"]))
+    max_p = int(cfg.get("MAX_PROVEEDOR_CHARS", _CONFIG_DEFAULTS["MAX_PROVEEDOR_CHARS"]))
+    max_r = int(
+        cfg.get(
+            "MAX_RAZON_IMPORTADOR_CHARS",
+            _CONFIG_DEFAULTS["MAX_RAZON_IMPORTADOR_CHARS"],
+        )
+    )
+    max_tot = int(cfg.get("MAX_CONTEXTO_CHARS", _CONFIG_DEFAULTS["MAX_CONTEXTO_CHARS"]))
+    n = len(df)
+    rows: list[str] = []
+    for i in range(n):
+        rows.append(
+            _contexto_tres_campos(
+                d_s.iloc[i],
+                p_s.iloc[i],
+                r_s.iloc[i],
+                max_d,
+                max_p,
+                max_r,
+                max_tot,
+            )
+        )
+    return pd.Series(rows, dtype=object), [d_lab, p_lab, r_lab]
 
 
 # --- Entrada interactiva / entorno ---
@@ -138,6 +273,13 @@ def _load_config(base: Path) -> dict:
         raise SystemExit(f"No se encontró {path}")
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+def _merge_config_defaults(cfg: dict) -> dict:
+    """Une ConfigClasificadorMewp.json con _CONFIG_DEFAULTS (el JSON pisa defaults)."""
+    out = dict(_CONFIG_DEFAULTS)
+    out.update(cfg)
+    return out
 
 
 def _api_key(cfg: dict) -> str:
@@ -243,30 +385,20 @@ def _guardar_csv_resultados(
     return out
 
 
-def _user_payload(descripcion: str, proveedor: str) -> str:
-    return (
-        f"Descripción:\n{descripcion}\n\n"
-        f"Proveedor:\n{proveedor}"
-    )
-
-
 def _completion_body(
-    descripcion: str,
-    proveedor: str,
+    contexto: str,
     model: str,
     temperature: float,
-    max_chars: int,
-    max_prov_chars: int,
+    max_contexto_chars: int,
 ) -> dict:
-    desc = (descripcion or "")[:max_chars]
-    prov = (proveedor or "")[:max_prov_chars]
+    ctx = (contexto or "")[:max_contexto_chars]
     return {
         "model": model,
         "temperature": temperature,
         "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": _user_payload(desc, prov)},
+            {"role": "user", "content": ctx},
         ],
     }
 
@@ -283,15 +415,11 @@ def _parse_message_to_tuple(content: str) -> tuple[str, str, str]:
 def clasificar_fila_sync(
     client: OpenAI,
     model: str,
-    descripcion: str,
-    proveedor: str,
-    max_chars: int,
-    max_prov_chars: int,
+    contexto: str,
+    max_contexto_chars: int,
     temperature: float,
 ) -> tuple[str, str, str]:
-    body = _completion_body(
-        descripcion, proveedor, model, temperature, max_chars, max_prov_chars
-    )
+    body = _completion_body(contexto, model, temperature, max_contexto_chars)
     try:
         resp = client.chat.completions.create(**body)
         text = (resp.choices[0].message.content or "").strip()
@@ -365,11 +493,9 @@ def _wait_batch_job(client: OpenAI, bid: str, poll_s: float):
 def _run_one_batch_chunk(
     client: OpenAI,
     model: str,
-    desc_series: pd.Series,
-    prov_series: pd.Series,
+    contexto_series: pd.Series,
     indices: list[int],
-    max_chars: int,
-    max_prov: int,
+    max_contexto_chars: int,
     temperature: float,
     poll_s: float,
     chunk_label: str,
@@ -382,9 +508,8 @@ def _run_one_batch_chunk(
     tmp_path = Path(tmp_in.name)
     try:
         for i in indices:
-            desc = desc_series.iloc[i]
-            prov = prov_series.iloc[i]
-            body = _completion_body(desc, prov, model, temperature, max_chars, max_prov)
+            ctx = contexto_series.iloc[i]
+            body = _completion_body(ctx, model, temperature, max_contexto_chars)
             req = {
                 "custom_id": f"row-{i}",
                 "method": "POST",
@@ -447,10 +572,8 @@ def _run_one_batch_chunk(
 def _run_batch(
     client: OpenAI,
     model: str,
-    desc_series: pd.Series,
-    prov_series: pd.Series,
-    max_chars: int,
-    max_prov: int,
+    contexto_series: pd.Series,
+    max_contexto_chars: int,
     temperature: float,
     poll_s: float,
     chunk_rows: int,
@@ -472,11 +595,9 @@ def _run_batch(
         part = _run_one_batch_chunk(
             client,
             model,
-            desc_series,
-            prov_series,
+            contexto_series,
             pending,
-            max_chars,
-            max_prov,
+            max_contexto_chars,
             temperature,
             poll_s,
             label,
@@ -493,10 +614,8 @@ def _run_batch(
 def _run_sync(
     client: OpenAI,
     model: str,
-    desc_series: pd.Series,
-    prov_series: pd.Series,
-    max_chars: int,
-    max_prov: int,
+    contexto_series: pd.Series,
+    max_contexto_chars: int,
     temperature: float,
     sleep_s: float,
     n: int,
@@ -505,11 +624,12 @@ def _run_sync(
     save_every: int,
 ) -> dict[int, tuple[str, str, str]]:
     log_every = max(1, save_every)
-    for i, (desc, prov) in enumerate(zip(desc_series, prov_series)):
+    for i in range(n):
         if i in completed:
             continue
+        ctx = contexto_series.iloc[i]
         c, m, e = clasificar_fila_sync(
-            client, model, desc, prov, max_chars, max_prov, temperature
+            client, model, ctx, max_contexto_chars, temperature
         )
         completed[i] = (c, m, e)
         if (i + 1) % log_every == 0 or i == 0:
@@ -575,12 +695,13 @@ def _fusionar_recuperar(
     cfg: dict,
     merged: dict[int, tuple[str, str, str]],
 ) -> None:
+    cfg = _merge_config_defaults(cfg)
     excel_rel = cfg["INPUT_XLSX"]
     path_xlsx = (base / excel_rel).resolve()
     if not path_xlsx.exists():
         raise SystemExit(f"No se encontró el Excel: {path_xlsx}")
 
-    sheet = cfg["SHEET_NAME"]
+    sheet = cfg.get("SHEET_NAME", "MEWPS_FORKLIFT")
     header_row = int(cfg.get("HEADER_ROW", 2))
     out_csv = str(cfg.get("OUTPUT_CSV", "Mepwpsforklif.csv"))
     checkpoint_name = str(cfg.get("CHECKPOINT_CSV", "Mepwpsforklif_checkpoint.csv"))
@@ -652,6 +773,7 @@ def escribir_xlsx_clasificado(base: Path, cfg: dict) -> Path:
     La lectura del Excel de entrada usa texto para todas las columnas y no se re-castéan
     tipos al escribir, para no alterar llaves/IDs ni otros campos formato texto.
     """
+    cfg = _merge_config_defaults(cfg)
     excel_rel = cfg.get("INPUT_XLSX", "MARKETSHARE.xlsx")
     path_xlsx = (base / excel_rel).resolve()
     if not path_xlsx.exists():
@@ -755,7 +877,7 @@ def _paso_recuperar_batches(base: Path, cfg: dict, client: OpenAI) -> None:
 
 def main() -> None:
     base = Path(__file__).resolve().parent
-    cfg = _load_config(base)
+    cfg = _merge_config_defaults(_load_config(base))
 
     excel_rel = cfg.get("INPUT_XLSX", "MARKETSHARE.xlsx")
     path_excel = (base / excel_rel).resolve()
@@ -820,12 +942,11 @@ def main() -> None:
             if chk_after:
                 completed = dict(chk_after)
 
-    sheet = cfg["SHEET_NAME"]
+    sheet = cfg.get("SHEET_NAME", "MEWPS_FORKLIFT")
     header_row = int(cfg.get("HEADER_ROW", 2))
     model = cfg.get("MODEL", "gpt-4o-mini")
     sleep_s = float(cfg.get("SLEEP_SECONDS", 0.0))
-    max_chars = int(cfg.get("MAX_DESC_CHARS", 8000))
-    max_prov = int(cfg.get("MAX_PROVEEDOR_CHARS", 400))
+    max_contexto_chars = int(cfg.get("MAX_CONTEXTO_CHARS", _CONFIG_DEFAULTS["MAX_CONTEXTO_CHARS"]))
     temperature = float(cfg.get("TEMPERATURE", 0.0))
     batch_poll = float(cfg.get("BATCH_POLL_SECONDS", 30.0))
     batch_chunk_rows = int(cfg.get("BATCH_CHUNK_ROWS", 300))
@@ -838,20 +959,18 @@ def main() -> None:
             f"No se pudo leer la hoja '{sheet}'. Revise SHEET_NAME en el JSON. Error: {e}"
         ) from e
 
-    desc_col = next(
-        (c for c in df.columns if "mercanc" in str(c).lower()),
-        None,
-    )
-    if desc_col is None:
-        raise SystemExit("No se encontró columna de descripción de mercancía")
+    try:
+        contexto_series, col_labels = _series_contexto_modelo(df, cfg)
+    except SystemExit:
+        raise
+    except Exception as e:
+        raise SystemExit(f"Error al resolver columnas AI/BD/AA: {e}") from e
 
-    prov_col = "Proveedor" if "Proveedor" in df.columns else None
     n = len(df)
-
-    desc_series = df[desc_col].fillna("").astype(str)
-    prov_series = (
-        df[prov_col].fillna("").astype(str) if prov_col else pd.Series([""] * n)
-    )
+    print()
+    print("  Entrada al modelo (tres campos, orden fijo):")
+    for lab in col_labels:
+        print(f"    · {lab}")
 
     pendientes = sum(1 for i in range(n) if i not in completed)
     print()
@@ -871,10 +990,8 @@ def main() -> None:
                 completed = _run_batch(
                     client,
                     model,
-                    desc_series,
-                    prov_series,
-                    max_chars,
-                    max_prov,
+                    contexto_series,
+                    max_contexto_chars,
                     temperature,
                     batch_poll,
                     batch_chunk_rows,
@@ -886,10 +1003,8 @@ def main() -> None:
                 completed = _run_sync(
                     client,
                     model,
-                    desc_series,
-                    prov_series,
-                    max_chars,
-                    max_prov,
+                    contexto_series,
+                    max_contexto_chars,
                     temperature,
                     sleep_s,
                     n,
